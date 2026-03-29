@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   startRecording: (title: string) => ipcRenderer.invoke('recording:start', title),
   stopRecording: () => ipcRenderer.invoke('recording:stop'),
 
+  // Shell
+  openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+
   // Events from main → renderer
   on: (channel: string, cb: (...args: any[]) => void) => {
     const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide'];

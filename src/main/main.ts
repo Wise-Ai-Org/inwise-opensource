@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -30,6 +30,7 @@ function createMainWindow(): void {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#f8fafc',
+    icon: path.join(__dirname, '../../assets/inwise_logo.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -124,6 +125,7 @@ function getAudioDuration(filePath: string): number {
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 
+ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url));
 ipcMain.handle('config:get', () => getConfig());
 ipcMain.handle('config:set', (_e, updates) => { setConfig(updates); return true; });
 
