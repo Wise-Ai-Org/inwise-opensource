@@ -16,6 +16,7 @@
     "@anthropic-ai/sdk": "^0.30.0",
     "@azure/msal-node": "^2.16.2",
     "electron-store": "^8.2.0",
+    "node-ical": "^0.25.6",
     "node-sqlite3-wasm": "^0.8.55",
     "nodejs-whisper": "^0.1.18",
     "openai": "^4.67.0",

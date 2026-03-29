@@ -4,7 +4,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 
 import { getConfig, setConfig, isOnboardingComplete } from './config';
-import { loginWithGoogle, loginWithMicrosoft } from './auth';
 import { CalendarWatcher } from './calendar-watcher';
 import { transcribeAudio } from './transcriber';
 import { extractInsights } from './extractor';
@@ -129,22 +128,7 @@ ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url
 ipcMain.handle('config:get', () => getConfig());
 ipcMain.handle('config:set', (_e, updates) => { setConfig(updates); return true; });
 
-ipcMain.handle('auth:google', async () => {
-  const result = await loginWithGoogle();
-  calendarWatcher.setTokens('google', result.accessToken);
-  return result;
-});
-
-ipcMain.handle('auth:microsoft', async () => {
-  const result = await loginWithMicrosoft();
-  calendarWatcher.setTokens('microsoft', result.accessToken);
-  return result;
-});
-
-ipcMain.handle('auth:logout', (_e, provider) => {
-  // clear stored token
-  return true;
-});
+ipcMain.handle('calendar:testUrl', (_e, url: string) => calendarWatcher.testUrl(url));
 
 ipcMain.handle('db:getMeetings', () => getMeetings());
 ipcMain.handle('db:getMeeting', (_e, id) => getMeeting(id));

@@ -4,9 +4,8 @@ interface Config {
   apiProvider: 'anthropic' | 'openai';
   apiKey: string;
   whisperModel: 'tiny' | 'base' | 'small' | 'medium';
-  googleClientId: string;
-  googleClientSecret: string;
-  microsoftClientId: string;
+  googleIcsUrl: string;
+  outlookIcsUrl: string;
   onboardingComplete: boolean;
 }
 
@@ -15,9 +14,8 @@ const store = new Store<Config>({
     apiProvider: 'anthropic',
     apiKey: '',
     whisperModel: 'base',
-    googleClientId: '',
-    googleClientSecret: '',
-    microsoftClientId: '',
+    googleIcsUrl: '',
+    outlookIcsUrl: '',
     onboardingComplete: false,
   },
 });

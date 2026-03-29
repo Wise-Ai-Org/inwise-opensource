@@ -5,10 +5,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   getConfig: () => ipcRenderer.invoke('config:get'),
   setConfig: (updates: Record<string, any>) => ipcRenderer.invoke('config:set', updates),
 
-  // Auth
-  loginGoogle: () => ipcRenderer.invoke('auth:google'),
-  loginMicrosoft: () => ipcRenderer.invoke('auth:microsoft'),
-  logout: (provider: string) => ipcRenderer.invoke('auth:logout', provider),
+  // Calendar
+  testCalendarUrl: (url: string) => ipcRenderer.invoke('calendar:testUrl', url),
 
   // Meetings
   getMeetings: () => ipcRenderer.invoke('db:getMeetings'),
