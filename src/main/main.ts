@@ -10,6 +10,7 @@ import { extractInsights } from './extractor';
 import {
   createMeeting, updateMeetingTranscript, saveInsights,
   getMeetings, getMeeting, deleteMeeting, getPeople,
+  getTasks, createTask, updateTask, deleteTask,
 } from './database';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
 
@@ -129,6 +130,18 @@ ipcMain.handle('config:get', () => getConfig());
 ipcMain.handle('config:set', (_e, updates) => { setConfig(updates); return true; });
 
 ipcMain.handle('calendar:testUrl', (_e, url: string) => calendarWatcher.testUrl(url));
+ipcMain.handle('calendar:getEvents', () => {
+  return calendarWatcher.getUpcomingEvents().map(e => ({
+    ...e,
+    startTime: e.startTime.toISOString(),
+    endTime: e.endTime.toISOString(),
+  }));
+});
+
+ipcMain.handle('db:getTasks', () => getTasks());
+ipcMain.handle('db:createTask', (_e, data) => createTask(data));
+ipcMain.handle('db:updateTask', (_e, id, updates) => updateTask(id, updates));
+ipcMain.handle('db:deleteTask', (_e, id) => { deleteTask(id); return true; });
 
 ipcMain.handle('db:getMeetings', () => getMeetings());
 ipcMain.handle('db:getMeeting', (_e, id) => getMeeting(id));
@@ -154,6 +167,14 @@ ipcMain.on('recording:audio-data', async (_e, { buffer, title, calendarEventId }
 });
 
 // ── Calendar watcher ──────────────────────────────────────────────────────────
+
+calendarWatcher.on('events-updated', (events: any[]) => {
+  mainWindow?.webContents.send('calendar:events', events.map(e => ({
+    ...e,
+    startTime: e.startTime instanceof Date ? e.startTime.toISOString() : e.startTime,
+    endTime: e.endTime instanceof Date ? e.endTime.toISOString() : e.endTime,
+  })));
+});
 
 calendarWatcher.on('meeting-starting', (event: any) => {
   createOverlayWindow(event.title);

@@ -12,11 +12,13 @@ interface CalendarEvent {
 
 const MEETING_LINK_RE = /zoom\.us|teams\.microsoft|meet\.google|webex\.com|whereby\.com/i;
 const POLL_INTERVAL_MS = 10 * 60_000; // 10 minutes
-const START_WINDOW_MS = 2 * 60_000;   // notify when within 2 minutes of start
+const START_WINDOW_MS  = 2 * 60_000;  // trigger recording within 2 min of start
+const LOOKAHEAD_DAYS   = 28;
 
 export class CalendarWatcher extends EventEmitter {
   private timer: NodeJS.Timeout | null = null;
   private notifiedIds = new Set<string>();
+  private cachedEvents: CalendarEvent[] = [];
 
   start(): void {
     this.poll();
@@ -27,7 +29,10 @@ export class CalendarWatcher extends EventEmitter {
     if (this.timer) clearInterval(this.timer);
   }
 
-  // Called from Settings to test a URL immediately
+  getUpcomingEvents(): CalendarEvent[] {
+    return this.cachedEvents;
+  }
+
   async testUrl(url: string): Promise<{ ok: boolean; eventCount: number; error?: string }> {
     try {
       const events = await fetchIcsEvents(url);
@@ -43,10 +48,12 @@ export class CalendarWatcher extends EventEmitter {
     if (urls.length === 0) return;
 
     const now = Date.now();
+    const allEvents: CalendarEvent[] = [];
 
     for (const url of urls) {
       try {
         const events = await fetchIcsEvents(url);
+        allEvents.push(...events);
         for (const event of events) {
           const msUntilStart = event.startTime.getTime() - now;
           if (
@@ -60,16 +67,24 @@ export class CalendarWatcher extends EventEmitter {
           }
         }
       } catch {
-        // URL might be temporarily unreachable — try next poll
+        // URL temporarily unreachable — retry next poll
       }
     }
+
+    // Deduplicate by id and sort by start time
+    const seen = new Set<string>();
+    this.cachedEvents = allEvents
+      .filter(e => { if (seen.has(e.id)) return false; seen.add(e.id); return true; })
+      .sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+
+    this.emit('events-updated', this.cachedEvents);
   }
 }
 
 async function fetchIcsEvents(url: string): Promise<CalendarEvent[]> {
   const data = await ical.async.fromURL(url);
   const now = new Date();
-  const lookahead = new Date(now.getTime() + 60 * 60_000); // next 60 minutes
+  const lookahead = new Date(now.getTime() + LOOKAHEAD_DAYS * 24 * 60 * 60_000);
 
   const events: CalendarEvent[] = [];
 

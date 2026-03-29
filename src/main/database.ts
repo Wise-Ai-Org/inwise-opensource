@@ -71,6 +71,18 @@ function migrate(db: Database): void {
       person_id TEXT REFERENCES people(id) ON DELETE CASCADE,
       PRIMARY KEY (meeting_id, person_id)
     );
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      text TEXT NOT NULL,
+      owner TEXT,
+      due_date TEXT,
+      status TEXT DEFAULT 'todo',
+      priority TEXT DEFAULT 'medium',
+      meeting_id TEXT REFERENCES meetings(id) ON DELETE SET NULL,
+      source TEXT DEFAULT 'manual',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 }
 
@@ -163,8 +175,12 @@ export function saveInsights(meetingId: string, insights: {
   updateMeetingInsights(meetingId, insights.summary);
 
   for (const item of insights.actionItems) {
+    const taskId = uuidv4();
     run(`INSERT INTO action_items (id, meeting_id, text, owner, due_date, priority) VALUES (?,?,?,?,?,?)`,
-      [uuidv4(), meetingId, item.text, item.owner || null, item.dueDate || null, item.priority || 'medium']);
+      [taskId, meetingId, item.text, item.owner || null, item.dueDate || null, item.priority || 'medium']);
+    // Also insert into tasks table so it appears in My Tasks
+    run(`INSERT INTO tasks (id, text, owner, due_date, priority, meeting_id, source, status) VALUES (?,?,?,?,?,?,'ai','todo')`,
+      [uuidv4(), item.text, item.owner || null, item.dueDate || null, item.priority || 'medium', meetingId]);
   }
 
   for (const d of insights.decisions) {
@@ -191,6 +207,55 @@ export function saveInsights(meetingId: string, insights: {
     run(`INSERT OR IGNORE INTO meeting_people (meeting_id, person_id) VALUES (?,?)`,
       [meetingId, personId]);
   }
+}
+
+// ── Tasks ─────────────────────────────────────────────────────────────────────
+
+export function getTasks(): any[] {
+  return all(`
+    SELECT t.*, m.title as meeting_title
+    FROM tasks t
+    LEFT JOIN meetings m ON t.meeting_id = m.id
+    ORDER BY
+      CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+      t.created_at DESC
+  `);
+}
+
+export function createTask(data: {
+  text: string;
+  owner?: string;
+  dueDate?: string;
+  priority?: string;
+}): any {
+  const id = uuidv4();
+  run(`INSERT INTO tasks (id, text, owner, due_date, priority, source, status) VALUES (?,?,?,?,?,'manual','todo')`,
+    [id, data.text, data.owner || null, data.dueDate || null, data.priority || 'medium']);
+  return get('SELECT * FROM tasks WHERE id = ?', [id]);
+}
+
+export function updateTask(id: string, updates: {
+  text?: string;
+  status?: string;
+  priority?: string;
+  owner?: string;
+  dueDate?: string;
+}): any {
+  const fields: string[] = [];
+  const vals: any[] = [];
+  if (updates.text !== undefined)     { fields.push('text = ?');     vals.push(updates.text); }
+  if (updates.status !== undefined)   { fields.push('status = ?');   vals.push(updates.status); }
+  if (updates.priority !== undefined) { fields.push('priority = ?'); vals.push(updates.priority); }
+  if (updates.owner !== undefined)    { fields.push('owner = ?');    vals.push(updates.owner); }
+  if (updates.dueDate !== undefined)  { fields.push('due_date = ?'); vals.push(updates.dueDate); }
+  if (fields.length === 0) return get('SELECT * FROM tasks WHERE id = ?', [id]);
+  vals.push(id);
+  run(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ?`, vals);
+  return get('SELECT t.*, m.title as meeting_title FROM tasks t LEFT JOIN meetings m ON t.meeting_id = m.id WHERE t.id = ?', [id]);
+}
+
+export function deleteTask(id: string): void {
+  run('DELETE FROM tasks WHERE id = ?', [id]);
 }
 
 // ── People ───────────────────────────────────────────────────────────────────
