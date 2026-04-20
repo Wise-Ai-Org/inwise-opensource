@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+// @ts-ignore — webpack asset/resource import
+import inwiseLogo from '../../assets/inwise_logo.png';
 
 type View = 'communications' | 'tasks' | 'people' | 'settings';
 
@@ -45,16 +47,119 @@ function openEnterprise() {
 }
 
 export default function Sidebar({ activeView, onNavigate }: Props) {
+  const [recording, setRecording] = useState(false);
+  const [received, setReceived] = useState(false);
+  const [showTitleInput, setShowTitleInput] = useState(false);
+  const [title, setTitle] = useState('');
+
+  const [showSearchInput, setShowSearchInput] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResult, setSearchResult] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleSearch = async () => {
+    const q = searchQuery.trim();
+    if (!q) return;
+    setSearchLoading(true);
+    setSearchError(null);
+    try {
+      const res = await (window as any).inwiseAPI?.searchMeetings(q);
+      if (res?.ok) {
+        setSearchResult(res.answer);
+        setShowSearchInput(false);
+        setSearchQuery('');
+      } else {
+        setSearchError(res?.error || 'Something went wrong');
+      }
+    } catch (e: any) {
+      setSearchError(e.message || 'Something went wrong');
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  const handleCopy = () => {
+    if (searchResult) {
+      navigator.clipboard.writeText(searchResult);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  useEffect(() => {
+    const handler = ({ status }: { status: string }) => {
+      if (status === 'done' || status === 'error') {
+        setRecording(false);
+        setReceived(true);
+        setTimeout(() => setReceived(false), 4000);
+      }
+    };
+    (window as any).inwiseAPI?.on('recording:status', handler);
+    return () => (window as any).inwiseAPI?.off('recording:status', handler);
+  }, []);
+
+  const startRecording = async () => {
+    const t = title.trim() || 'Meeting';
+    setShowTitleInput(false);
+    setTitle('');
+    setReceived(false);
+    setRecording(true);
+    await (window as any).inwiseAPI?.startRecording(t);
+  };
+
+  const stopRecording = async () => {
+    setRecording(false);
+    setReceived(true);
+    await (window as any).inwiseAPI?.stopRecording();
+    setTimeout(() => setReceived(false), 4000);
+  };
+
   return (
     <aside className="sidebar">
+      {searchResult && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)' }}
+          onClick={() => setSearchResult(null)}
+        >
+          <div
+            style={{ background: '#fff', borderRadius: 12, padding: 24, maxWidth: 540, width: 'calc(100% - 48px)', maxHeight: '70vh', display: 'flex', flexDirection: 'column', gap: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>Meeting search</span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={handleCopy}
+                  style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', color: copied ? '#16a34a' : '#334155' }}
+                >
+                  {copied ? 'Copied!' : 'Copy'}
+                </button>
+                <button
+                  onClick={() => setSearchResult(null)}
+                  style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', color: '#334155' }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div style={{ overflowY: 'auto', fontSize: 13, lineHeight: 1.65, color: '#334155', whiteSpace: 'pre-wrap' }}>
+              {searchResult}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="sidebar-logo">
-        <img src="../../assets/inwise_logo.png" alt="inWise" />
+        <img src={inwiseLogo} alt="Inwise" />
       </div>
 
       <nav className="sidebar-nav">
         {NAV_TOP.map((item) => (
           <button
             key={item.id}
+            data-nav={item.id}
             className={`nav-item${activeView === item.id ? ' active' : ''}`}
             onClick={() => onNavigate(item.id)}
           >
@@ -63,6 +168,71 @@ export default function Sidebar({ activeView, onNavigate }: Props) {
           </button>
         ))}
       </nav>
+
+      <div className="sidebar-record">
+        {showSearchInput ? (
+          <div className="record-title-input">
+            <input
+              autoFocus
+              className="form-input"
+              placeholder="Ask about your meetings…"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleSearch();
+                if (e.key === 'Escape') { setShowSearchInput(false); setSearchQuery(''); setSearchError(null); }
+              }}
+              disabled={searchLoading}
+            />
+            <button className="btn btn-primary btn-sm" onClick={handleSearch} disabled={searchLoading || !searchQuery.trim()}>
+              {searchLoading ? '…' : 'Ask'}
+            </button>
+          </div>
+        ) : (
+          <button className="record-btn" style={{ background: 'transparent', opacity: 0.7 }} onClick={() => { setShowSearchInput(true); setSearchError(null); }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+            </svg>
+            Search meetings
+          </button>
+        )}
+        {searchError && (
+          <div style={{ fontSize: 11, color: '#ef4444', padding: '4px 8px' }}>{searchError}</div>
+        )}
+      </div>
+
+      <div className="sidebar-record">
+        {showTitleInput && !recording && (
+          <div className="record-title-input">
+            <input
+              autoFocus
+              className="form-input"
+              placeholder="Meeting title…"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') startRecording(); if (e.key === 'Escape') setShowTitleInput(false); }}
+            />
+            <button className="btn btn-primary btn-sm" onClick={startRecording}>Start</button>
+          </div>
+        )}
+        {received ? (
+          <div className="record-received">
+            ✓ Recording received — check Inwise for insights
+          </div>
+        ) : recording ? (
+          <button className="record-btn recording" onClick={stopRecording}>
+            <span className="record-dot" />
+            Stop Recording
+          </button>
+        ) : (
+          <button className="record-btn" onClick={() => setShowTitleInput(v => !v)}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="12" r="8" />
+            </svg>
+            Record Meeting
+          </button>
+        )}
+      </div>
 
       <div className="sidebar-bottom">
         <button className="enterprise-cta" onClick={openEnterprise}>
@@ -77,6 +247,7 @@ export default function Sidebar({ activeView, onNavigate }: Props) {
         </button>
 
         <button
+          data-nav="settings"
           className={`nav-item${activeView === 'settings' ? ' active' : ''}`}
           onClick={() => onNavigate('settings')}
         >

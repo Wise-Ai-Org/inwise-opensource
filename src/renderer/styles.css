@@ -86,6 +86,73 @@ body {
 .nav-item.active { background: #f0fdfa; color: var(--teal); }
 .nav-item svg { flex-shrink: 0; }
 
+.sidebar-record {
+  padding: 8px 8px 4px;
+}
+
+.record-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: none;
+  background: var(--slate-100);
+  color: var(--slate-700);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.record-btn:hover { background: var(--slate-200); }
+
+.record-btn.recording {
+  background: #fee2e2;
+  color: #dc2626;
+  animation: pulse-bg 1.5s ease-in-out infinite;
+}
+
+.record-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #dc2626;
+  flex-shrink: 0;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes pulse-bg {
+  0%, 100% { background: #fee2e2; }
+  50% { background: #fecaca; }
+}
+
+.record-received {
+  font-size: 12px;
+  color: #0d9488;
+  padding: 8px 12px;
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.record-title-input {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.record-title-input .form-input {
+  flex: 1;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
 .sidebar-bottom {
   padding: 8px 8px 12px;
   border-top: 1px solid var(--slate-200);
@@ -138,6 +205,7 @@ body {
   overflow: auto;
   display: flex;
   flex-direction: column;
+  padding: 0 20px;
 }
 
 .page-header {
@@ -741,3 +809,5 @@ body {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--slate-300); border-radius: 3px; }
+
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }

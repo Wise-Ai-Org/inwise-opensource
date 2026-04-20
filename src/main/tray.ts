@@ -4,11 +4,11 @@ import * as path from 'path';
 let tray: Tray | null = null;
 
 export function createTray(mainWindow: BrowserWindow): void {
-  const iconPath = path.join(__dirname, '../../assets/tray-icon.png');
+  const iconPath = path.join(__dirname, '../../assets/favicon.png');
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
 
   tray = new Tray(icon);
-  tray.setToolTip('inWise');
+  tray.setToolTip('Inwise');
 
   updateTrayMenu(mainWindow, false);
 
@@ -23,12 +23,12 @@ export function updateTrayMenu(mainWindow: BrowserWindow, isRecording: boolean):
 
   const menu = Menu.buildFromTemplate([
     {
-      label: isRecording ? '● Recording…' : 'inWise',
+      label: isRecording ? '● Recording…' : 'Inwise',
       enabled: false,
     },
     { type: 'separator' },
     {
-      label: 'Open inWise',
+      label: 'Open Inwise',
       click: () => { mainWindow.show(); mainWindow.focus(); },
     },
     { type: 'separator' },

@@ -1,6 +1,6 @@
 {
   "name": "inwise-opensource",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "Open-source AI meeting recorder — local transcription, local storage, your own API key",
   "main": "dist/main/main.js",
   "scripts": {
@@ -10,33 +10,73 @@
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "webpack --config webpack.renderer.config.js",
     "watch:main": "tsc -p tsconfig.main.json --watch",
-    "watch:renderer": "webpack --config webpack.renderer.config.js --watch"
+    "watch:renderer": "webpack --config webpack.renderer.config.js --watch",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.inwise.desktop",
+    "productName": "Inwise",
+    "directories": {
+      "output": "release-v2"
+    },
+    "files": [
+      "dist/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "forceCodeSigning": false,
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "asar": true
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
-    "@azure/msal-node": "^2.16.2",
+    "@chakra-ui/icons": "^2.1.1",
+    "@chakra-ui/react": "^2.8.2",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@emotion/react": "^11.11.4",
+    "@emotion/styled": "^11.11.5",
+    "@seald-io/nedb": "^4.0.4",
     "electron-store": "^8.2.0",
+    "framer-motion": "^10.18.0",
     "node-ical": "^0.25.6",
-    "node-sqlite3-wasm": "^0.8.55",
-    "nodejs-whisper": "^0.1.18",
     "openai": "^4.67.0",
-    "react-router-dom": "^6.26.0",
+    "react-icons": "^5.0.0",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
-    "@types/react-router-dom": "^5.3.3",
     "@types/uuid": "^9.0.0",
     "concurrently": "^8.2.0",
     "css-loader": "^6.8.1",
     "electron": "^31.0.0",
+    "electron-builder": "^26.8.1",
+    "png-to-ico": "^3.0.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "sharp": "^0.34.5",
     "style-loader": "^3.3.3",
     "ts-loader": "^9.5.1",
     "typescript": "^5.3.0",

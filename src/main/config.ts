@@ -6,7 +6,15 @@ interface Config {
   whisperModel: 'tiny' | 'base' | 'small' | 'medium';
   googleIcsUrl: string;
   outlookIcsUrl: string;
+  micDeviceId: string;
+  userName: string;
   onboardingComplete: boolean;
+  firstTimeFlowCount: number;
+  jiraClientId: string;
+  jiraClientSecret: string;
+  jiraTokens: any | null;
+  jiraAutoPush: boolean;
+  jiraDefaultProject: string;
 }
 
 const store = new Store<Config>({
@@ -16,7 +24,15 @@ const store = new Store<Config>({
     whisperModel: 'base',
     googleIcsUrl: '',
     outlookIcsUrl: '',
+    micDeviceId: 'default',
+    userName: '',
     onboardingComplete: false,
+    firstTimeFlowCount: 0,
+    jiraClientId: '',
+    jiraClientSecret: '',
+    jiraTokens: null,
+    jiraAutoPush: false,
+    jiraDefaultProject: '',
   },
 });
 

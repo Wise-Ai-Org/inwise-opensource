@@ -1,0 +1,113 @@
+{
+  "project": "inwise-opensource",
+  "branchName": "ralph/voice-enrollment-fixes",
+  "description": "Five-story batch fixing voice enrollment misses, silent audio-stack failures, and noisy calendar-sync errors uncovered during the 2026-04-17 Anu meeting post-mortem. Restores named voiceprints on scheduled meetings, makes audio health visible before recording, and eliminates silent-swallow paths.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Fix calendar-sync $setOnInsert error spam",
+      "description": "As a developer, I want calendar polling to persist events to the local NeDB without throwing every 5 minutes so app.log is clean and events are actually available in the DB for downstream features.",
+      "acceptanceCriteria": [
+        "Locate the syncCalendarEventsToDb call path (likely src/main/database.ts and/or src/main/calendar-watcher.ts) where $setOnInsert is used with updateAsync+upsert",
+        "Replace the $setOnInsert upsert with a find-then-insert-or-update pattern: findOneAsync by id; if present updateAsync({_id}, {$set: doc}); if absent insertAsync(doc)",
+        "After 3 consecutive polls with the same event set, the calendar events collection count stays stable (idempotent)",
+        "No lines matching 'ERROR calendar-sync' or '$setOnInsert' appear in app.log during a 10-minute run",
+        "Existing in-memory getUpcomingEvents() behavior is unchanged",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Fix voiceprint playback silent failure in Settings",
+      "description": "As a user, when I click Play on a voiceprint row in Settings I want to hear the clip or see a visible error, not silently nothing.",
+      "acceptanceCriteria": [
+        "Edit src/renderer/Settings.tsx playAudio (around line 625-649): chain .catch() on audio.play() and surface the rejection reason in the row's UI state",
+        "Restructure so audio creation and audio.play() happen without an await in between (to preserve the Chromium user-gesture chain): set audio.src after creation, call audio.play() synchronously inside the click handler, then let oncanplay trigger playback if needed — OR pre-fetch the blob once on mount of the voiceprint list",
+        "Clicking Play on Shravani Vatti or Zee (existing rows in voiceprints.db) produces audible playback",
+        "If the IPC returns an object with no audioClip, the Play button is disabled or labeled '(no audio)' rather than silently doing nothing",
+        "If audio.play() rejects, the row shows an inline error containing the rejection name or message for at least 3 seconds",
+        "Clicking Play on the currently-playing row stops it (existing toggle behavior preserved)",
+        "No changes to the IPC handler at src/main/main.ts:1033-1051 (it already handles the three NeDB audioClip shapes correctly)",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill: open Settings, click Play on Shravani Vatti, confirm audio plays"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Add calendar:active-event IPC and auto-attach calendarEventId when starting manual recordings",
+      "description": "As a user, when I click Record Meeting during a scheduled calendar event, I want that recording to be linked to the event so attendees drive speaker labeling and voice enrollment.",
+      "acceptanceCriteria": [
+        "Add IPC handler 'calendar:active-event' in src/main/main.ts that returns the single event from calendarWatcher.getUpcomingEvents() whose startTime <= now() AND (endTime || startTime + 90min) >= now()",
+        "Expose it on the preload bridge (src/main/preload.ts) as inwiseAPI.getActiveCalendarEvent()",
+        "In src/renderer/Sidebar.tsx Record Meeting button handler: call getActiveCalendarEvent() before emitting recording:audio-data; if a non-null event is returned, include its id as calendarEventId in the IPC payload",
+        "If the user hasn't typed a title and an active event is found, default the meeting title to the event's title",
+        "With a synthetic active calendar event (attendees = [user, other]), recording end-to-end produces a voice-enroll:auto log line and voiceprints.db gains a row named for the other attendee",
+        "With no active event, recording still works as ad-hoc (no regression)",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill: simulate an in-progress calendar event, click Record Meeting, stop after a few seconds, confirm the title auto-filled and app.log shows calendarEventId was passed"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Emit audio-health events from Badge and render indicator on Record Meeting pill",
+      "description": "As a user, I want to see at a glance whether my mic and system audio are being captured correctly, without opening the Badge overlay.",
+      "acceptanceCriteria": [
+        "Add a shared audio-health channel: Badge.tsx sends IPC 'audio:health' with payload { micOk: boolean, systemAudioOk: boolean, message?: string } on every getUserMedia/desktopCapturer success or failure",
+        "Main process forwards the latest health state to all renderer windows (or exposes a pull IPC inwiseAPI.getAudioHealth())",
+        "Sidebar.tsx subscribes and renders a small amber dot on the Record Meeting pill when micOk=false or systemAudioOk=false",
+        "Hovering the dot shows a tooltip with the message (e.g. 'System audio unavailable — only your voice will be recorded')",
+        "Pill shows the same indicator during recording (Stop Recording state)",
+        "No visual change when both are ok",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill: open app with mic blocked at OS level, confirm amber indicator and tooltip on Record Meeting pill"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Fire desktop Notification on audio capture failure",
+      "description": "As a user, if my mic or system audio fails during recording, I want a desktop notification so I find out immediately — not after the meeting.",
+      "acceptanceCriteria": [
+        "In src/main/main.ts, subscribe to the audio:health channel from US-004",
+        "When micOk transitions from true->false or systemAudioOk transitions from true->false during an active recording, fire new Notification({title, body}).show() if Notification.isSupported()",
+        "Debounce: do not fire more than once per 60 seconds for the same failure type",
+        "Notification body clearly describes the failure and the consequence (e.g. 'System audio lost — only your mic will be transcribed for the rest of this meeting')",
+        "No notification fires outside of an active recording",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Add global unhandled-rejection handler and audit .play() call sites",
+      "description": "As a developer, I want every audio playback call site to either catch its rejection or be covered by a global handler so future silent-swallow bugs can't hide.",
+      "acceptanceCriteria": [
+        "Register window.addEventListener('unhandledrejection', ...) in the renderer entry (src/renderer/App.tsx or equivalent) that forwards the reason to main via IPC 'renderer:unhandled-rejection'",
+        "Main-process handler logs via the existing logger at error level with the reason.name and reason.message",
+        "Audit every .play() call in src/renderer/ (grep for '\\.play\\(' and 'new Audio'): each must be chained with .catch() OR wrapped in try/catch inside an async function",
+        "Settings.tsx, Badge.tsx, Onboarding.tsx, and TranscriptReviewModal.tsx play() sites are all verified safe",
+        "Manually point one play() at an invalid data URL temporarily, run the app, confirm app.log captures the rejection — then revert",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
