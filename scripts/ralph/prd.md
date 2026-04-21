@@ -1,159 +1,227 @@
-# inwise-opensource — Multi-Calendar & Multi-Account Support
+# inwise-opensource — Welcome-Back Screen & Task Lifecycle
 
 ## Context
 
-Today the OSS app supports exactly **one** Google calendar URL and **one** Outlook calendar URL (two fixed string fields in `src/main/config.ts:7-8`). Users with multiple accounts (work + personal) or multiple calendars within one account (work + shared team + family) can't subscribe to all of them. Since the app uses ICS (not OAuth), "multiple accounts" and "multiple calendars in one account" are the same problem: let the user add N labeled ICS URLs.
+Users come back to the app after gaps (days, weeks, months). Today they return to a static pile of whatever state they left — no signal of what the app did on their behalf, no reconciliation of tasks that went stale, no re-orientation. The pile feels like homework.
 
-A secondary issue surfaces once multiple calendars are supported: attendee self-filtering for speaker labels and voice enrollment currently relies on `config.userName` substring-matching (`src/main/main.ts:162, 210-218`; `src/main/database.ts:395, 554, 565`). If the user has multiple calendars with different email aliases (e.g. `shrav@work.com` vs `shravani.vatti@gmail.com`), the current filter misses one — the user ends up listed as an attendee of their own meetings and voice enrollment gets confused. Fix: a list of self-emails.
+This PRD reframes the return experience around a single principle: **lead with what the app did for the user, not what the user didn't do.** Returning users should feel helped, not nagged. A user on the edge of churning does not need more homework.
+
+Scope: **desktop (inwise-opensource) only.** Web-app counterpart is out of scope for this round.
 
 ## Goals
 
-- Let the user configure any number of calendars from any provider (Google, Outlook, any ICS-exposing service).
-- Each calendar has a user-editable label, provider hint, URL, and enabled toggle.
-- Existing single-URL config migrates cleanly on first upgrade — no user action required.
-- `calendar-watcher` polls all enabled calendars and merges events, de-duplicating across calendars.
-- Users can list multiple of their own email addresses for accurate self-filtering across accounts.
+- Surface a ranked, compact "welcome back" view on re-open after a meaningful gap (default: 2+ days since `lastOpenedAt`).
+- Lead with wins (what the app did), surface at most **one** ask per return, treat "nothing urgent" as a valid, trust-building outcome.
+- Auto-snooze stale tasks (no touch in 30d, no recent mentions) with one-click reversibility; nothing is deleted, nothing is irreversible.
+- Flag tasks as *likely-done* when transcripts imply completion, but never auto-complete without user confirmation.
+- Suppress the welcome-back screen when context overrides ceremony — e.g., the user is currently in a calendar-scheduled meeting.
 
 ## Non-goals
 
-- OAuth-based calendar enumeration (stays ICS; future work if needed).
-- Parallel recording of simultaneous meetings (separate concern — still one overlay at a time).
-- Per-calendar event filters or colors.
+- Web-app welcome-back (tracked separately).
+- Adaptive learning of snooze thresholds from user overrides (post-v1).
+- A "full activity timeline" view (the chips/escape hatches point at existing views instead).
+- Any change to the post-meeting transcription / insights pipeline beyond a single additional inference pass.
+
+## Success signal
+
+- After 3 weeks away with 40 active tasks, the user sees one screen in under 10 seconds: "Cleared N tasks, M Jira stories progressed, K calendar events this week" + at most one ask. Not a scroll.
+- After 9 days away with zero meaningful change, the user sees "Nothing urgent while you were out — everything's where you left it." and one click gets them back to Home.
+- Auto-snoozed tasks are one click to restore, visible in a Tasks filter, and never silently dropped.
+- During an in-progress calendar meeting, the welcome-back screen does NOT appear — a small "start recording?" banner is offered instead.
 
 ---
 
 ## User Stories
 
-### US-001 — Config schema: calendars array + selfEmails, with migration
+### US-001 — Persist lastOpenedAt and welcomeBackLastSeenAt
 
-**As a developer**, I need the config to hold an arbitrary list of calendar subscriptions and a list of self-email aliases, migrating from the existing single-URL fields without data loss.
+**As a developer**, I need two timestamps tracked in config so the rest of the welcome-back logic has a reliable "gap since last open" and "last time we showed the banner" signal.
 
 **Acceptance criteria:**
-- In `src/main/config.ts`, extend the `Config` interface with:
-  - `calendars: Array<{ id: string; label: string; provider: 'google' | 'outlook' | 'ics'; url: string; enabled: boolean }>`
-  - `selfEmails: string[]`
-- Defaults: `calendars: []`, `selfEmails: []`.
-- Add a migration helper (call it on app start in `src/main/main.ts`) that runs once:
-  - If `config.calendars` is empty AND either `config.googleIcsUrl` or `config.outlookIcsUrl` is non-empty, insert a row for each non-empty URL (generate `id` via `crypto.randomUUID()`, `label` = `'Google'` / `'Outlook'`, `provider` set appropriately, `enabled: true`).
-  - Keep the old fields in the schema (do NOT delete) — treat them as deprecated; only the migration reads them. This keeps downgrades safe.
-  - Migration is idempotent: running it twice doesn't duplicate rows.
-- Add helpers to `src/main/database.ts` or a new config-helpers module:
-  - `addCalendar(row: Omit<Calendar, 'id'>): Calendar` — assigns UUID, appends, persists.
-  - `updateCalendar(id: string, patch: Partial<Calendar>): void`
-  - `removeCalendar(id: string): void`
-  - `listCalendars(): Calendar[]`
-- Typecheck passes
-- Tests pass
+- Extend `Config` in `src/main/config.ts` with `lastOpenedAt: string | null` and `welcomeBackLastSeenAt: string | null`; defaults null.
+- Update `lastOpenedAt` to `new Date().toISOString()` in both: (a) `mainWindow.on('ready-to-show')` (first open) and (b) `mainWindow.on('show')` (tray → show re-open).
+- Export helper `getDaysSinceLastOpen(): number | null` that returns the gap in days (or null if `lastOpenedAt` is null, i.e., first ever launch).
+- Export helper `markWelcomeBackSeen(): void` that writes `welcomeBackLastSeenAt = now`.
+- On fresh install (no prior `lastOpenedAt`), welcome-back logic treats this as first-ever open (handled in US-004 by returning null).
+- Typecheck passes.
 
 ---
 
-### US-002 — calendar-watcher polls all enabled calendars and merges events
+### US-002 — Task snooze schema and helpers
 
-**As a user**, when I have multiple calendars enabled, I want events from all of them to appear in my upcoming meeting list, de-duplicated.
-
-**Why broken today:**
-`src/main/calendar-watcher.ts:75` reads `config.googleIcsUrl` directly. Single URL, single feed.
+**As a developer**, I need task records to support a soft "snoozed" state with full reversibility, so the staleness sweep in US-003 and the filter UI in US-006 have a stable substrate.
 
 **Acceptance criteria:**
-- In `src/main/calendar-watcher.ts`, replace the direct `config.googleIcsUrl` / `config.outlookIcsUrl` reads with an iteration over `getConfig().calendars.filter(c => c.enabled)`.
-- For each calendar, fetch and parse its ICS feed in parallel (`Promise.allSettled`) — one failed calendar must not block the others.
-- Merge all events into a single list. De-duplicate by a composite key of `(event.id, event.startTime.toISOString())`. Ties: prefer the entry with more attendees; if tied, first-fetched wins.
-- Tag each merged event with a new field `sourceCalendarId: string` (the id of the calendar it came from) for future UI use.
-- Existing public API of `calendar-watcher` (getUpcomingEvents, on('meeting-starting'), on('meeting-reminder')) keeps the same shape; only the internal polling path changes.
-- Log line format: `calendar-watcher:fetch | calendarId=X label="Y" got=N events` per calendar per poll, plus `calendar-watcher:poll | Done — total=M unique events across K calendars`.
-- If `calendars` is empty, skip polling with a debug log; don't error.
-- Typecheck passes
-- Tests pass
+- Extend task records in `src/main/database.ts` with three new fields: `snoozedAt: string | null`, `snoozedReason: string | null` (e.g., `'stale-30d'`, `'user-manual'`), `lastMentionedAt: string | null`.
+- Add helpers: `snoozeTask(taskId: string, reason: string): Promise<void>`, `bringBackTask(taskId: string): Promise<void>` (clears snoozedAt + snoozedReason and bumps updatedAt), `getSnoozedTasks(): Promise<Task[]>`, `touchLastMentioned(taskId: string, when: string): Promise<void>`.
+- Modify existing `getTasks()` to filter out snoozed tasks by default. Add an optional `getTasks({ includeSnoozed: true })` overload.
+- Add `isSnoozed(t: Task): boolean` utility.
+- Typecheck passes.
+- Tests pass: unit tests for snooze → getTasks excludes it; bringBack → reappears; touchLastMentioned updates the field; getSnoozedTasks returns only snoozed.
 
 ---
 
-### US-003 — Use selfEmails for attendee self-filtering
+### US-003 — Staleness sweep service
 
-**As a user with multiple email addresses**, I want the app to recognize all my aliases so I'm not listed as an attendee of my own meetings and voice enrollment filters me out correctly regardless of which calendar the event came from.
-
-**Why broken today:**
-- `src/main/main.ts:162` and `:210-218` filter attendees by `userName.toLowerCase()` substring — misses aliases that don't share characters with userName.
-- `src/main/database.ts:395, 554, 565` does the same.
+**As a user**, when I come back after a long gap, I want the app to have quietly cleared tasks that clearly aren't relevant anymore (no activity, no one mentioning them), so my active list isn't cluttered with ghosts.
 
 **Acceptance criteria:**
-- Add a helper `isSelf(attendee: string): boolean` in a shared module (e.g. `src/main/self-identity.ts`) that:
-  - Reads `getConfig().selfEmails` and `getConfig().userName`.
-  - Normalizes attendee to lowercase.
-  - Returns true if attendee contains any entry from `selfEmails` (email match), OR if `userName` is non-empty AND attendee includes `userName.toLowerCase()` (display-name fallback).
-  - Handles attendee strings that are email, display name, or `"Name <email>"` formats.
-- Replace the inline attendee filtering at the four cited call sites with `isSelf(a)`.
-- When `selfEmails` is empty and `userName` is empty, `isSelf` returns false (no filtering) — preserves current behavior for fresh installs.
-- Typecheck passes
-- Tests pass: add a unit test for `isSelf` covering email match, display-name fallback, mixed-case, and empty-config cases.
+- New module `src/main/staleness-sweep.ts` exporting `sweepStaleTasks(): Promise<{ snoozed: Task[] }>`.
+- Sweep criteria: task is eligible for auto-snooze if ALL of:
+  - `status === 'active'`
+  - `!isSnoozed(t)` (don't re-snooze)
+  - `updatedAt < now - 30 days`
+  - `!lastMentionedAt || lastMentionedAt < now - 14 days`
+  - `priority !== 'high'` (never auto-snooze high-priority tasks)
+- For each eligible task, call `snoozeTask(t.id, 'stale-30d')`.
+- Return `{ snoozed: [...the just-snoozed tasks...] }`.
+- Called from `app.whenReady()` AFTER calendar sync completes; non-blocking (no await inside whenReady).
+- Result stashed on a module-local variable `lastSweepResult` with timestamp so US-004 can read it without re-running the sweep on every welcome-back compute.
+- Log line: `staleness-sweep | snoozed=N eligible=E of total active tasks=T`.
+- Typecheck passes.
+- Tests pass: unit tests for each criterion (age gate, mention gate, priority gate, already-snoozed gate).
 
 ---
 
-### US-004 — Settings UI: calendar list with add / edit / remove / test / toggle
+### US-004 — Welcome-back compute backend
 
-**As a user**, I want a Settings page section where I can add, rename, disable, test, and remove calendar subscriptions.
-
-**Why broken today:**
-`src/renderer/Settings.tsx` has two fixed `IcsField` components (Google + Outlook), one URL each.
+**As a developer**, I need one IPC that returns the entire ranked bucket list for the welcome-back screen in one shot, so the UI component is presentation-only and testable against fixtures.
 
 **Acceptance criteria:**
-- Replace the two fixed IcsFields with a `CalendarList` component.
-- Each row renders: label input, provider dropdown (Google / Outlook / Other), URL input, enabled toggle, `Test` button, `Delete` button.
-- `Test` button hits the existing IPC `testCalendarUrl(url)` and shows the result inline (same style as current IcsField).
-- `+ Add calendar` button at the bottom appends an empty row (auto-focused label field).
-- Changes persist on blur (or debounced on-change) via new IPC methods: `inwiseAPI.addCalendar`, `updateCalendar`, `removeCalendar`.
-- Migration from US-001 is visible: on upgrade, the user sees their existing Google/Outlook URLs as rows labeled `Google` and `Outlook`.
-- Empty state: if no calendars configured, show "Add your first calendar to get started — paste a secret ICS link from Google/Outlook calendar settings."
-- CalendarStatus component at the top continues to work; it now aggregates health across all enabled calendars (total event count + any-failing flag).
-- Typecheck passes
-- Verify in browser using dev-browser skill: open Settings, add a calendar, test an invalid URL, confirm error inline; test a valid URL, confirm event count; toggle enabled off, confirm events from that calendar disappear from upcoming list after next poll.
+- New IPC `welcomeBack:compute` in `src/main/main.ts` returns either `null` (when welcome-back should not show) or an object:
+```
+{
+  gapDays: number,
+  wins: {
+    cleared?: { count: number, sampleTitles: string[] },
+    jiraProgress?: { count: number, doneCount: number },
+    meetingsMatched?: { count: number },
+    calendarHealthy?: { upcomingCount: number }
+  },
+  ask?: {
+    kind: 'contradiction' | 'overdueWithSignal' | 'launchAtStartupOffer',
+    payload: <kind-specific>
+  }
+}
+```
+- Returns `null` if `getDaysSinceLastOpen() < 2` OR `welcomeBackLastSeenAt >= lastOpenedAt` (already dismissed since last open).
+- `wins.cleared` draws from `lastSweepResult` (US-003).
+- `wins.jiraProgress` counts Jira stories whose `status` changed to `Done` or forward in the gap window (use existing jira-client state cache).
+- `wins.meetingsMatched` counts meetings that got automatically linked to Jira issues in the gap (from the existing pipeline:jira-auto-push logs or the task records).
+- `wins.calendarHealthy` — upcoming event count for the next 7 days from `calendarWatcher.getUpcomingEvents()`.
+- `ask` is chosen as the single most important item, in this priority order:
+  1. An unresolved contradiction surfaced by `detectContradictions` where `createdAt > lastOpenedAt` → `kind: 'contradiction'`.
+  2. An overdue task that was mentioned in a meeting within the last 14 days → `kind: 'overdueWithSignal'`, payload includes the task.
+  3. Missed meetings + `openAtLogin` is false + gap >= 3 days + missedCount >= 3 → `kind: 'launchAtStartupOffer'`, payload includes `missedCount`.
+- If no ask qualifies, `ask` is omitted (scenario 5: "nothing urgent").
+- Expose `markWelcomeBackSeen` via IPC `welcomeBack:dismiss` for the UI to call on close.
+- Typecheck passes.
+- Tests pass: unit tests for the four ask-selection branches + the null-return conditions.
 
 ---
 
-### US-005 — Settings UI: selfEmails editor
+### US-005 — Welcome-back UI component
 
-**As a user**, I want to list all the email addresses I use (work, personal, alias) so the app knows not to treat me as an attendee of my own meetings.
+**As a user**, after returning from a gap, I want one scannable screen that shows what the app did for me, with at most one thing I need to act on, phrased as help rather than homework.
 
 **Acceptance criteria:**
-- Add a "Your email addresses" section in Settings, near the existing `userName` field.
-- Field is a chip-input (or a comma-separated text field with visible chips rendered below) — user types an email, presses Enter or comma, a chip is added.
-- Each chip has a small `×` to remove it.
-- Validate on add: must match a basic email regex; invalid entries show a short inline error and are not added.
-- Persists via IPC `inwiseAPI.setSelfEmails(list)`; reads initial via `inwiseAPI.getConfig()` (existing).
-- Helper text below: "Separate from userName. Used to identify you in multi-calendar attendee lists so you're not labeled as an attendee of your own meetings."
-- Typecheck passes
-- Verify in browser using dev-browser skill: add an email, reload the Settings page, confirm chip persists; add an invalid entry, confirm rejection; remove a chip, confirm removal persists.
+- New component `src/renderer/WelcomeBack.tsx` rendered conditionally from `App.tsx` on app start.
+- On mount: call `inwiseAPI.welcomeBackCompute()`. If it returns non-null, render; else null.
+- Copy rules — helper voice, count-not-list:
+  - `wins.cleared` → "Cleared **N tasks** you hadn't touched recently (bring any back anytime)"
+  - `wins.jiraProgress` → "**N Jira stories** moved forward while you were out — M are now Done"
+  - `wins.meetingsMatched` → "Matched N new meetings to Jira issues automatically"
+  - `wins.calendarHealthy` → "Calendar in sync; N upcoming this week"
+- `ask.contradiction` → renders a one-line call-out: "One thing worth a look. [brief contradiction summary]. `[Review]` `[Dismiss]`"
+- `ask.overdueWithSignal` → "One task is past due and you've mentioned it recently: `{title}`. `[Snooze to next week]` `[Mark done]` `[Keep as-is]`"
+- `ask.launchAtStartupOffer` → "Want Inwise to start automatically when you log in? You missed a few meetings while it was closed. `[Turn on]` `[Not now]`"
+- If `ask` is absent: render a single line "Nothing urgent while you were out — everything's where you left it."
+- Chip row at bottom: `Tasks` `Meetings` `Jira` `Calendar` — each navigates to the respective view.
+- `[Done]` button top-right → calls `inwiseAPI.welcomeBackDismiss()` and removes the component from the DOM.
+- Never show more than ONE ask. Never show a list of titles (count is the message).
+- Typecheck passes.
+- Verify in browser using dev-browser skill: launch app with a synthetic `welcomeBack:compute` response covering wins-only; verify copy; trigger a version with `ask.contradiction`; trigger an empty-state; confirm dismiss persists across reopens of main window.
 
 ---
 
-### US-006 — Handle simultaneous meeting starts
+### US-006 — Snoozed tasks filter + bring-back UI in Tasks view
 
-**As a user with two meetings starting at the same moment**, I want the app to tell me about the conflict and let me pick which one to record, instead of silently dropping one.
-
-**Why broken today:**
-`src/main/main.ts` keeps a single `overlayWindow` global and a single `currentMeeting` slot. The `meeting-starting` handler creates the overlay only if `!overlayWindow`. If two events fire within a narrow window, the second is silently dropped.
+**As a user**, when I want to review what the app auto-snoozed, I can see those tasks in a filter and bring any back with one click.
 
 **Acceptance criteria:**
-- Detect conflict at `meeting-starting` handler: if a recording is already active (or another meeting-starting fired within the last 90 seconds), treat as a conflict.
-- On conflict, show a modal in the main window (or a desktop Notification with buttons if the main window isn't visible) listing both meetings with title + start time + attendee count, letting the user pick which to record.
-- If the user doesn't respond within 30 seconds, auto-select using: prefer the meeting where more attendees match `selfEmails`/`userName`; tiebreaker = earlier startTime; final tiebreaker = first-fired wins.
-- Log the decision: `calendar-watcher:conflict | recording="X" passed-over="Y" reason=auto-selected|user-selected`.
-- The meeting that wasn't recorded still appears in the upcoming list (no silent drop from calendar).
-- If only one meeting starts (no conflict), current single-overlay behavior is preserved — no modal, no delay.
-- Typecheck passes
-- Verify in browser using dev-browser skill: inject two synthetic events with the same start time via the calendar-watcher test hook; confirm modal appears, pick one, confirm only that one gets recorded and the log shows the decision.
+- In the Tasks / MyTasks view (`src/renderer/MyTasks.tsx` or equivalent), add a filter tab/pill labeled `Snoozed` next to existing filters.
+- Selecting Snoozed calls `inwiseAPI.getSnoozedTasks()` (new IPC wrapper around `getSnoozedTasks()`) and renders those tasks with:
+  - Title, original due date (if any), `snoozedAt`, `snoozedReason` in human form (e.g., "auto-snoozed — no activity for 30+ days")
+  - `[Bring back]` button per row
+- `[Bring back all]` button at the top of the list when on the Snoozed filter.
+- Clicking Bring Back calls `inwiseAPI.bringBackTask(id)` → task flips to active and disappears from the Snoozed filter; active-list re-renders.
+- After bringing back a task, show a subtle inline confirmation for 3s: "Brought back — back in your active list."
+- Badge on the Snoozed filter pill shows the count when > 0.
+- Typecheck passes.
+- Verify in browser using dev-browser skill: with seeded snoozed tasks, navigate to Snoozed filter; bring one back, confirm it disappears from filter and appears in Active; bring back all; confirm count-zero state.
+
+---
+
+### US-007 — Task completion inference from transcripts
+
+**As a user**, after a meeting is transcribed, I want the app to flag tasks it thinks I completed (based on what I said), so I can confirm with one click — but it never auto-closes a task.
+
+**Acceptance criteria:**
+- In the post-meeting pipeline (inside `runRecordingPipeline` in `src/main/main.ts`, after `saveInsights` and before `pipeline:done`), add a new step `inferCompletedTasks(transcript, openTasks)`.
+- The step takes (a) the meeting transcript and (b) the user's currently-active, non-snoozed tasks, and makes one LLM call (using the configured `apiProvider`) that returns the list of task IDs whose completion the transcript strongly implies.
+- Model prompt should require high confidence — prefer false negatives over false positives.
+- For each returned task ID, set `likelyDone: true` on the task (new field; extend schema).
+- Do NOT set `status: 'done'` automatically.
+- Log: `pipeline:likely-done | flagged=N tasks`.
+- In the Tasks view, tasks with `likelyDone === true` render a small "Done?" pill next to the title with `[Yes]` `[No]` inline actions. `Yes` → `status: 'done'`, clears `likelyDone`. `No` → clears `likelyDone`, `updatedAt` ticks forward.
+- Only evaluate transcripts within 24h of their creation (don't retroactively re-infer on old ones).
+- Typecheck passes.
+- Tests pass: unit test for the inference call with mocked LLM responses covering (a) empty list (no matches), (b) single match, (c) multiple matches. Plus a UI test that renders the pill when `likelyDone === true`.
+
+---
+
+### US-008 — Live-meeting suppression + "start recording?" banner
+
+**As a user**, if I open the app while I'm currently in a scheduled meeting, I want the app to offer to start recording instead of dumping me into a retrospective welcome screen.
+
+**Acceptance criteria:**
+- On app show, BEFORE rendering `WelcomeBack`, check `calendarWatcher.getUpcomingEvents()` for an event where `startTime <= now <= (endTime || startTime + 90min)` AND no recording is currently active (`!isRecordingActive` and no `overlayWindow`).
+- If such an event exists, suppress `WelcomeBack` for this session AND render a compact banner at the top of Home (`src/renderer/App.tsx` or a new `LiveMeetingBanner.tsx`):
+  - "This looks like your meeting with **{attendee or title}** — want me to start recording? `[Start recording]` `[Not now]`"
+- `[Start recording]` triggers the existing `recording:start` flow with the event's calendarEventId and title.
+- `[Not now]` dismisses the banner for this specific event (store event id in a session-local dismissed set); if the user reopens later in the same event window, don't re-prompt.
+- After the banner dismisses or the event ends, `WelcomeBack` becomes eligible again on the NEXT app open (not this one — that would be jarring).
+- Typecheck passes.
+- Verify in browser using dev-browser skill: inject a synthetic in-progress calendar event via test IPC, confirm banner appears and WelcomeBack is suppressed; click Start, confirm overlay opens; dismiss, confirm banner goes away and doesn't re-appear for that event.
+
+---
+
+### US-009 — Launch-at-startup offer (wired to ask.launchAtStartupOffer)
+
+**As a user**, if I've missed meetings because the app wasn't running, I want a one-tap way to have it launch at login so I don't miss them next time.
+
+**Acceptance criteria:**
+- In `WelcomeBack.tsx` (from US-005), the `ask.launchAtStartupOffer` branch renders the offer card described above.
+- `[Turn on]` invokes a new IPC `app:setLoginItemOpenAtLogin(true)` which calls Electron's `app.setLoginItemSettings({ openAtLogin: true })`.
+- After success, the card morphs to confirm: "Done. Inwise will start automatically next time you log in."
+- `[Not now]` dismisses the card only (doesn't mark welcomeBack itself as seen). If the user later hits `[Done]` at top of screen, the whole welcome-back is dismissed; otherwise it stays until they act or dismiss.
+- Missed-meeting detection for the compute: calendar events with `startTime > lastOpenedAt && startTime < now` that have no corresponding row in `meetings.db` with status !== 'calendar_sync' (i.e., nothing was actually recorded for them).
+- Guard: don't show the offer if `app.getLoginItemSettings().openAtLogin` is already true, regardless of missed-meeting count.
+- Typecheck passes.
+- Verify in browser using dev-browser skill: with openAtLogin=false and 3+ simulated missed events, confirm offer renders; click Turn on, confirm success state; restart app and confirm openAtLogin=true.
 
 ---
 
 ## Rollout
 
-- One branch: `ralph/multi-calendar-accounts`.
-- Migration runs exactly once on first app start post-upgrade; idempotent on repeated runs.
-- No breaking schema changes — old `googleIcsUrl`/`outlookIcsUrl` fields kept in Config interface but unused post-migration.
+- One branch: `ralph/welcome-back-task-lifecycle`.
+- All changes local to `inwise-opensource`. No schema migrations beyond additive fields on the Task and Config records.
+- Staleness sweep is opt-out-safe: if a user disagrees with auto-snoozes, every one is restorable in one click (US-006).
+- No breaking changes to existing IPC or DB collections.
 
-## Success signal
+## Open design questions (out-of-scope for this round)
 
-After the fix:
-- A user with two Google calendars and one Outlook calendar sees events from all three in the upcoming meeting list, with no duplicates for cross-invited events.
-- Disabling a calendar in Settings → events from that calendar disappear after the next poll.
-- Adding a second email to selfEmails → the user's own email stops appearing in attendee lists for meetings from that account.
-- Upgrading from a version with just `googleIcsUrl` set → after first launch, Settings shows one migrated "Google" calendar row with the same URL, marked enabled.
+- Adaptive snooze thresholds (learn from "bring back" overrides).
+- Welcome-back equivalent for the web app.
+- Settings toggle "Always show full activity on return" for power users who want the chore list on purpose.
