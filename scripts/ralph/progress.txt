@@ -1,0 +1,22 @@
+# Ralph Progress Log
+Started: Mon Apr 20 19:57:07 PDT 2026
+---
+
+## Codebase Patterns
+- NeDB (`@seald-io/nedb`) does NOT support `$setOnInsert` — use `findOneAsync` then `insertAsync`/`updateAsync` for idempotent upsert semantics.
+- Collections live under `app.getPath('userData')`: `meetings.db`, `tasks.db`, `people.db`, `voiceprints.db`. Calendar events are persisted into the `meetings` collection with `source: 'calendar'` and `calendarEventId` as the external key.
+- Build/quality checks: `npx tsc -p tsconfig.main.json --noEmit` for main process, `npm run build` for full build. No test runner is configured in package.json.
+- Main-process module layout: `src/main/` (main.ts wires IPC, database.ts owns NeDB, calendar-watcher.ts owns ICS polling/in-memory cache, preload.ts exposes `inwiseAPI`).
+- Renderer layout: `src/renderer/` (App.tsx root, Sidebar.tsx records, Settings.tsx manages voiceprints, Badge.tsx captures audio).
+
+## 2026-04-20 20:00 PDT - US-001
+- Fixed `$setOnInsert` error spam in `syncCalendarEventsToDb`.
+- Files changed:
+  - `src/main/database.ts` — replaced the `updateAsync({calendarEventId}, {$set, $setOnInsert}, {upsert:true})` call at lines 214-233 with a `findOneAsync` → `updateAsync({_id}, {$set})` on hit / `insertAsync(fullDoc)` on miss pattern. Counters (`created`/`updated`) now derive from the branch taken instead of the returned `upsert` flag.
+- Quality checks: `npx tsc -p tsconfig.main.json --noEmit` → exit 0.
+- **Learnings for future iterations:**
+  - NeDB rejects any `$setOnInsert` modifier even with `{upsert:true}`; always use find-then-branch pattern for idempotent upserts.
+  - The sync path only persists events whose `startTime <= now` and with at least one attendee — do not change this invariant when touching the loop.
+  - `meetingsDb` is the single collection for both recorded meetings and calendar-sourced rows; rows from calendar have `source: 'calendar'` and `status: 'calendar_sync'`.
+  - `calendar-watcher.ts:getUpcomingEvents()` is pure in-memory (ICS cache) and unrelated to DB writes — keep it untouched.
+---

@@ -211,26 +211,31 @@ export async function syncCalendarEventsToDb(events: {
     const date = event.startTime.toISOString();
     const duration = Math.max(0, Math.round((event.endTime.getTime() - event.startTime.getTime()) / 1000));
 
-    // Atomic upsert by calendarEventId — prevents duplicates from concurrent syncs
-    const result = await meetingsDb.updateAsync(
-      { calendarEventId: event.id },
-      {
-        $set: { title: event.title, attendees: event.attendees, date, duration },
-        $setOnInsert: {
-          _id: uuidv4(),
-          transcript: null,
-          status: 'calendar_sync',
-          source: 'calendar',
-          calendarEventId: event.id,
-          insights: null,
-          createdAt: new Date().toISOString(),
-        },
-      },
-      { upsert: true, returnUpdatedDocs: true } as any
-    );
-    // result shape: { numAffected, affectedDocuments, upsert }
-    if ((result as any)?.upsert) created++;
-    else updated++;
+    // NeDB doesn't support $setOnInsert — find then insert-or-update to stay idempotent.
+    const existing = await meetingsDb.findOneAsync({ calendarEventId: event.id });
+    if (existing) {
+      await meetingsDb.updateAsync(
+        { _id: (existing as any)._id },
+        { $set: { title: event.title, attendees: event.attendees, date, duration } },
+        {}
+      );
+      updated++;
+    } else {
+      await meetingsDb.insertAsync({
+        _id: uuidv4(),
+        title: event.title,
+        date,
+        duration,
+        attendees: event.attendees,
+        transcript: null,
+        status: 'calendar_sync',
+        source: 'calendar',
+        calendarEventId: event.id,
+        insights: null,
+        createdAt: new Date().toISOString(),
+      });
+      created++;
+    }
   }
 
   return { created, updated };
