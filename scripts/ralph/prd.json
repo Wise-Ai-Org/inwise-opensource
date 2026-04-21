@@ -39,8 +39,8 @@
         "Tests pass"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Replaced googleIcsUrl/outlookIcsUrl reads in calendar-watcher.ts with iteration over getConfig().calendars filtered by enabled+non-empty URL. Fetches use Promise.allSettled so one failing calendar doesn't block the others. Each event is tagged with sourceCalendarId. Dedup uses composite key id+startTime.toISOString() and prefers the entry with more attendees (first-fetched wins on tie). Per-calendar log: 'calendar-watcher:fetch | calendarId=X label=\"Y\" got=N events'. Aggregate poll log: 'calendar-watcher:poll | Done — total=M unique events across K calendars'. Empty-enabled-list path skips with an info log (logger.ts has no 'debug' level). CalendarHealth keeps googleConfigured/outlookConfigured (now derived from calendars[]) so the existing Settings.tsx still compiles — US-004 will redesign that surface. Notifications fire from the deduped list to avoid double-notifying when the same event is on two synced calendars. Both tsc --noEmit passes (main + renderer). No test runner configured."
     },
     {
       "id": "US-003",

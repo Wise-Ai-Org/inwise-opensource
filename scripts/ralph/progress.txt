@@ -6,7 +6,7 @@ Started: Tue Apr 21 11:44:25 PDT 2026
 - Config is a single electron-store instance in `src/main/config.ts`. `Config` interface doubles as the schema; `defaults` must list every field (electron-store will not materialize missing fields).
 - `getConfig()` returns the whole store snapshot; `setConfig(partial)` writes per-key. Prefer narrow, named helpers (e.g. `addCalendar`, `setSelfEmails`) over dumping partials through `setConfig` so call sites stay readable.
 - App start is a single `app.whenReady().then(() => { initDatabase(); ...; calendarWatcher.start(); })` block in `src/main/main.ts`. One-time migrations belong immediately after `initDatabase()` and before any consumer (watcher, windows) reads the migrated fields.
-- Logging in main uses the local `log(level, message, detail?)` helper from `src/main/logger.ts` — don't introduce `console.*` in main.
+- Logging in main uses the local `log(level, message, detail?)` helper from `src/main/logger.ts` — don't introduce `console.*` in main. Levels are limited to `'info' | 'warn' | 'error'` (no `'debug'`).
 - Main typecheck: `npx tsc -p tsconfig.main.json --noEmit`. Renderer typecheck: `npx tsc -p tsconfig.renderer.json --noEmit`. Project has no configured test runner, so "tests pass" means the typechecks stay green.
 - Deprecated-but-kept fields: annotate with `/** @deprecated */` on the interface and leave the default in place so existing stores still load; only the migration path should read them.
 
@@ -23,4 +23,25 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - Consumers reading calendar URLs (currently `src/main/calendar-watcher.ts`) still need to be migrated to iterate `getConfig().calendars` — that is the work US-002 picks up. Until then, calendars[] is written but nothing reads it at runtime.
   - `randomUUID` lives in Node's `crypto` module in this Electron main process — no extra dep needed.
   - The PRD phrased the helpers module as "new `src/main/calendar-config.ts` (or extend config.ts)". I chose to extend `config.ts` because the surface is small (four helpers) and splitting would fragment the single `Store<Config>` instance across files.
+---
+
+## 2026-04-21 11:55 PDT - US-002
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Rewrote `CalendarWatcher.poll()` in `src/main/calendar-watcher.ts` to iterate `listCalendars().filter(c => c.enabled && c.url.trim())` instead of reading the deprecated `googleIcsUrl`/`outlookIcsUrl` directly.
+- Switched from sequential `for...of` fetch to `Promise.allSettled` so one slow/failed calendar can't stall the others.
+- Added `sourceCalendarId: string` to the `CalendarEvent` shape; every event coming out of `fetchIcsEvents()` carries the calendar it came from (test path passes `'__test__'`).
+- Replaced the simple `id`-only dedup with a composite key `${id}|${startTime.toISOString()}` Map. On collision, the entry with more attendees wins; ties keep the first-fetched (Map insertion order).
+- Per-calendar log line on each fetch: `calendar-watcher:fetch | calendarId=X label="Y" got=N events`.
+- Aggregate poll line: `calendar-watcher:poll | Done — total=M unique events across K calendars`.
+- Empty-enabled-list short-circuits with an `info` log (logger.ts only knows info/warn/error, not debug — see Codebase Patterns).
+- Health rollup now: status=`ok` when at least one calendar succeeded, `error` only when every calendar failed; `lastError` populated whenever any failure happens. `googleConfigured`/`outlookConfigured` are derived from `calendars[]` rather than legacy fields, so the existing `Settings.tsx` health card keeps compiling until US-004 swaps it out.
+- Notifications (`meeting-starting`/`meeting-reminder`) now fire from the *deduped* list, not the raw merged list — otherwise a meeting present on two synced calendars would notify twice.
+- Files changed: `src/main/calendar-watcher.ts`.
+- Quality: both `tsc --noEmit` targets pass. No test runner.
+- **Learnings for future iterations:**
+  - `logger.ts` only accepts `'info' | 'warn' | 'error'` — there is no `'debug'` level. The PRD's "skip polling with a debug log" got translated to `info` to keep typecheck green; if a debug level is wanted, add it to `logger.ts` first.
+  - `CalendarHealth.googleConfigured`/`outlookConfigured` are now derived, not authoritative. `Settings.tsx` still consumes them; US-004 should remove both fields and the consumer in the same commit so the deprecation window is short.
+  - Composite-key dedup matters: the previous `id`-only dedup would have silently dropped one calendar's copy of a cross-shared event without preserving attendee context. The Map-based "prefer more attendees" rule only kicks in when the same event lands twice — no behavior change for single-calendar users.
+  - `Promise.allSettled` returns results in input order, so we can pair `results[i]` with `enabled[i]` for per-calendar error attribution without threading the calendar id through the rejection.
+  - `fetchIcsEvents()` now requires a `calendarId` argument; `testUrl()` passes the sentinel `'__test__'` because Settings → Test isn't tied to a saved row yet (US-004 will change that).
 ---
