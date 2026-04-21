@@ -5,9 +5,11 @@ Started: Mon Apr 20 19:57:07 PDT 2026
 ## Codebase Patterns
 - NeDB (`@seald-io/nedb`) does NOT support `$setOnInsert` — use `findOneAsync` then `insertAsync`/`updateAsync` for idempotent upsert semantics.
 - Collections live under `app.getPath('userData')`: `meetings.db`, `tasks.db`, `people.db`, `voiceprints.db`. Calendar events are persisted into the `meetings` collection with `source: 'calendar'` and `calendarEventId` as the external key.
-- Build/quality checks: `npx tsc -p tsconfig.main.json --noEmit` for main process, `npm run build` for full build. No test runner is configured in package.json.
+- Build/quality checks: `npx tsc -p tsconfig.main.json --noEmit` for main, `npx tsc -p tsconfig.renderer.json --noEmit` for renderer, `npm run build` for full build. No test runner is configured in package.json.
 - Main-process module layout: `src/main/` (main.ts wires IPC, database.ts owns NeDB, calendar-watcher.ts owns ICS polling/in-memory cache, preload.ts exposes `inwiseAPI`).
 - Renderer layout: `src/renderer/` (App.tsx root, Sidebar.tsx records, Settings.tsx manages voiceprints, Badge.tsx captures audio).
+- Audio playback from Chromium requires the user-gesture chain: `new Audio(url)` and `.play()` must happen synchronously in the click handler with no `await` between them. Prefetch IPC blobs on mount and store `URL.createObjectURL` results in a `useRef<Map>` cache; always `.catch()` the promise returned by `.play()` and surface the rejection.
+- Preferred error color: `var(--red)` (used across Onboarding.tsx, Settings.tsx). Teal accent: `var(--teal)`.
 
 ## 2026-04-20 20:00 PDT - US-001
 - Fixed `$setOnInsert` error spam in `syncCalendarEventsToDb`.
@@ -19,4 +21,29 @@ Started: Mon Apr 20 19:57:07 PDT 2026
   - The sync path only persists events whose `startTime <= now` and with at least one attendee — do not change this invariant when touching the loop.
   - `meetingsDb` is the single collection for both recorded meetings and calendar-sourced rows; rows from calendar have `source: 'calendar'` and `status: 'calendar_sync'`.
   - `calendar-watcher.ts:getUpcomingEvents()` is pure in-memory (ICS cache) and unrelated to DB writes — keep it untouched.
+---
+
+## 2026-04-20 20:05 PDT - US-002
+- Fixed silent-failure voiceprint playback in Settings.
+- Files changed:
+  - `src/renderer/Settings.tsx` — VoiceEnrollment component:
+    - Added `playError`, `missingAudio` state (keyed by voiceprint `_id`) plus `blobUrlCacheRef` (id → blob URL) and `playErrorTimersRef` (auto-clear timers).
+    - New `fetchBlobUrl(id)` prefetches audioClip via existing IPC, normalizes to Uint8Array, stores `URL.createObjectURL(...)`. Marks `missingAudio[id] = true` if IPC returns no clip.
+    - `loadPrints()` now kicks off prefetch for every row with `hasAudio`.
+    - `playAudio(id)` is now synchronous when the blob URL is cached; delegates to `startPlayback(id, url)` which calls `audio.play()` immediately and `.catch()`es the returned Promise, surfacing `err.name: err.message` via a 3-second inline error row.
+    - `audio.onerror` also routed through the error surface.
+    - Unmount cleanup revokes all cached blob URLs and clears pending error timers.
+    - Render: Play button is now `disabled` and labeled `(no audio)` when `missingAudio[p._id]` is true; inline red error span shows next to the button for 3s after a rejection.
+  - No changes to the main-process IPC handler (`voiceprint:get-audio`) — per PRD it already handles all three NeDB `audioClip` shapes.
+- Quality checks:
+  - `npx tsc -p tsconfig.main.json --noEmit` → exit 0 (unchanged).
+  - `npx tsc -p tsconfig.renderer.json --noEmit` → exit 0.
+- Browser verification: **skipped — dev-browser skill not loaded in this iteration.** The code path was manually traced: prefetch happens right after `getVoicePrints()` resolves; click handler does zero awaits before `new Audio(url).play()`. Manual verification next iteration, or ship behind a QA check.
+- **Learnings for future iterations:**
+  - Chromium's autoplay policy rejects `audio.play()` if there's ANY `await` between the click event and the call. The original code `await` on IPC then `new Audio().play()` always broke the gesture chain — prefetch is the correct fix.
+  - `audio.play()` returns a Promise in modern browsers; it MUST have a `.catch()` or the rejection is silently swallowed (this is the exact bug we hit).
+  - `onerror` handler uses `audio.error?.code` (MediaError numeric code 1-4), not a string name.
+  - When restoring refs after callbacks fire, always guard with `if (audioRef.current === audio)` — a later click may have already swapped the ref.
+  - Per-id transient UI state (inline errors, missing-audio flags) works well as `Record<string, T>` + `Record<string, number>` timer map; don't add an effect when a ref-keyed `setTimeout` will do.
+  - `var(--red)` is the project-wide error color; `var(--teal)` is the accent.
 ---

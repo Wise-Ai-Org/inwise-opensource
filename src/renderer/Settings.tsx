@@ -618,11 +618,78 @@ function VoiceEnrollment() {
   const [countdown, setCountdown] = useState(10);
   const [errMsg, setErrMsg] = useState('');
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [playError, setPlayError] = useState<Record<string, string>>({});
+  const [missingAudio, setMissingAudio] = useState<Record<string, boolean>>({});
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number>(0);
+  const blobUrlCacheRef = useRef<Map<string, string>>(new Map());
+  const playErrorTimersRef = useRef<Map<string, number>>(new Map());
 
-  const playAudio = async (id: string) => {
+  const showPlayError = (id: string, message: string) => {
+    setPlayError(prev => ({ ...prev, [id]: message }));
+    const existing = playErrorTimersRef.current.get(id);
+    if (existing) window.clearTimeout(existing);
+    const timer = window.setTimeout(() => {
+      setPlayError(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      playErrorTimersRef.current.delete(id);
+    }, 3000);
+    playErrorTimersRef.current.set(id, timer);
+  };
+
+  const fetchBlobUrl = async (id: string): Promise<string | null> => {
+    const cache = blobUrlCacheRef.current;
+    const cached = cache.get(id);
+    if (cached) return cached;
+    try {
+      const result = await (window as any).inwiseAPI.getVoicePrintAudio(id);
+      if (!result?.audioClip) {
+        setMissingAudio(prev => ({ ...prev, [id]: true }));
+        return null;
+      }
+      // IPC may deliver Uint8Array as a plain object — normalize
+      const raw = result.audioClip;
+      const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(Object.values(raw) as number[]);
+      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      cache.set(id, url);
+      return url;
+    } catch (err: any) {
+      showPlayError(id, err?.message || 'Failed to load audio.');
+      return null;
+    }
+  };
+
+  const startPlayback = (id: string, url: string) => {
+    const audio = new Audio(url);
+    audioRef.current = audio;
+    setPlayingId(id);
+    const clearIfMine = () => {
+      if (audioRef.current === audio) audioRef.current = null;
+      setPlayingId(curr => (curr === id ? null : curr));
+    };
+    audio.onended = clearIfMine;
+    audio.onerror = () => {
+      clearIfMine();
+      showPlayError(id, `MediaError: ${audio.error?.code ?? 'unknown'}`);
+    };
+    const playPromise = audio.play();
+    if (playPromise && typeof (playPromise as Promise<void>).catch === 'function') {
+      (playPromise as Promise<void>).catch((err: any) => {
+        clearIfMine();
+        const label = err?.name
+          ? `${err.name}: ${err.message || 'playback rejected'}`
+          : (err?.message || 'Playback failed.');
+        showPlayError(id, label);
+      });
+    }
+  };
+
+  const playAudio = (id: string) => {
     // Stop current playback if any
     if (audioRef.current) {
       audioRef.current.pause();
@@ -632,27 +699,24 @@ function VoiceEnrollment() {
       setPlayingId(null);
       return;
     }
-    try {
-      const result = await (window as any).inwiseAPI.getVoicePrintAudio(id);
-      if (!result?.audioClip) return;
-      // IPC may deliver Uint8Array as a plain object — normalize
-      const raw = result.audioClip;
-      const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(Object.values(raw) as number[]);
-      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'audio/wav' });
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      setPlayingId(id);
-      audio.onended = () => { setPlayingId(null); URL.revokeObjectURL(url); audioRef.current = null; };
-      audio.play();
-    } catch {
-      setPlayingId(null);
+    if (missingAudio[id]) return;
+    // Use cached blob URL to keep audio.play() synchronous on the user-gesture chain.
+    const cachedUrl = blobUrlCacheRef.current.get(id);
+    if (cachedUrl) {
+      startPlayback(id, cachedUrl);
+      return;
     }
+    // Cache miss (prefetch pending or previously failed) — fetch then play.
+    void fetchBlobUrl(id).then(url => {
+      if (url) startPlayback(id, url);
+    });
   };
 
   const loadPrints = async () => {
-    const list = await (window as any).inwiseAPI.getVoicePrints();
-    setPrints(list.sort((a: VoicePrintInfo, b: VoicePrintInfo) => (b.isUser ? 1 : 0) - (a.isUser ? 1 : 0)));
+    const list: VoicePrintInfo[] = await (window as any).inwiseAPI.getVoicePrints();
+    setPrints(list.sort((a, b) => (b.isUser ? 1 : 0) - (a.isUser ? 1 : 0)));
+    // Prefetch blob URLs so clicking Play stays on the user-gesture chain (Chromium).
+    list.filter(p => p.hasAudio).forEach(p => { void fetchBlobUrl(p._id); });
   };
 
   useEffect(() => { loadPrints(); }, []);
@@ -661,6 +725,10 @@ function VoiceEnrollment() {
     return () => {
       cancelAnimationFrame(rafRef.current);
       streamRef.current?.getTracks().forEach(t => t.stop());
+      for (const url of blobUrlCacheRef.current.values()) URL.revokeObjectURL(url);
+      blobUrlCacheRef.current.clear();
+      for (const timer of playErrorTimersRef.current.values()) window.clearTimeout(timer);
+      playErrorTimersRef.current.clear();
     };
   }, []);
 
@@ -808,16 +876,45 @@ function VoiceEnrollment() {
                 {new Date(p.createdAt).toLocaleDateString()}
               </span>
               {p.hasAudio && (
-                <button style={{
-                  background: playingId === p._id ? 'rgba(13, 148, 136, 0.15)' : 'none',
-                  border: '1px solid',
-                  borderColor: playingId === p._id ? 'var(--teal)' : 'var(--slate-300)',
-                  borderRadius: 6, cursor: 'pointer',
-                  color: playingId === p._id ? 'var(--teal)' : 'var(--slate-500)',
-                  fontSize: 12, padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 4,
-                }} onClick={() => playAudio(p._id)} title={playingId === p._id ? 'Stop playback' : 'Play voice sample'}>
-                  {playingId === p._id ? '⏹' : '▶'} {playingId === p._id ? 'Stop' : 'Play'}
-                </button>
+                <>
+                  <button
+                    disabled={!!missingAudio[p._id]}
+                    style={{
+                      background: playingId === p._id ? 'rgba(13, 148, 136, 0.15)' : 'none',
+                      border: '1px solid',
+                      borderColor: playingId === p._id ? 'var(--teal)' : 'var(--slate-300)',
+                      borderRadius: 6,
+                      cursor: missingAudio[p._id] ? 'not-allowed' : 'pointer',
+                      color: missingAudio[p._id]
+                        ? 'var(--slate-400)'
+                        : (playingId === p._id ? 'var(--teal)' : 'var(--slate-500)'),
+                      fontSize: 12, padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 4,
+                      opacity: missingAudio[p._id] ? 0.6 : 1,
+                    }}
+                    onClick={() => playAudio(p._id)}
+                    title={
+                      missingAudio[p._id]
+                        ? 'No audio clip stored for this voiceprint'
+                        : (playingId === p._id ? 'Stop playback' : 'Play voice sample')
+                    }
+                  >
+                    {missingAudio[p._id]
+                      ? '(no audio)'
+                      : (playingId === p._id ? '⏹ Stop' : '▶ Play')}
+                  </button>
+                  {playError[p._id] && (
+                    <span
+                      style={{
+                        fontSize: 11, color: 'var(--red)',
+                        maxWidth: 180, overflow: 'hidden',
+                        textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}
+                      title={playError[p._id]}
+                    >
+                      {playError[p._id]}
+                    </span>
+                  )}
+                </>
               )}
               {p.isUser ? (
                 <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, padding: '2px 8px' }}

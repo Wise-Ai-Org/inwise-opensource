@@ -36,8 +36,8 @@
         "Verify in browser using dev-browser skill: open Settings, click Play on Shravani Vatti, confirm audio plays"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Prefetch blob URL on mount preserves Chromium user-gesture chain; rejection from audio.play() now surfaces in a 3s inline error next to the row. dev-browser skill unavailable in this iteration — manual Electron launch required to confirm audible playback."
     },
     {
       "id": "US-003",
