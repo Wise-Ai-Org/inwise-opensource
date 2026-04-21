@@ -89,8 +89,8 @@
         "Tests pass"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "ipcMain.on('audio:health') now detects micOk/systemAudioOk true->false transitions during active recording and fires Notification({title, body}).show() with per-failure-type 60s debounce. isRecordingActive tracked at recording:start (manual + calendar-auto) and cleared at recording:audio-data. Debounce timestamps reset on recording start so back-to-back meetings each get a first notification. No test runner configured; main typecheck passes."
     },
     {
       "id": "US-006",

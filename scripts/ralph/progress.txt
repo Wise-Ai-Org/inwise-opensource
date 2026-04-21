@@ -89,3 +89,24 @@ Started: Mon Apr 20 19:57:07 PDT 2026
   - The Badge's `startMic` function has three distinct audio-failure branches; instrument all three when adding observability: device-not-found, sysStream catch (non-fatal), outer getUserMedia catch (fatal).
   - For transient renderer state that should survive across window reloads, cache in main (`latestAudioHealth`) and expose a pull IPC; Sidebar's effect calls pull on mount AND subscribes to push events to avoid missing updates emitted before mount.
 ---
+
+## 2026-04-20 20:19 PDT - US-005
+- Fired desktop Notification on audio capture failure transitions during active recording.
+- Files changed:
+  - `src/main/main.ts`:
+    - Added module state: `isRecordingActive`, `AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS=60000`, `lastMicFailureNotifiedAt`, `lastSysAudioFailureNotifiedAt`.
+    - `ipcMain.on('audio:health')`: captures `prev` before overwriting `latestAudioHealth`; when active recording and `Notification.isSupported()`, fires a notification on `prev.micOk===true && next.micOk===false` or the equivalent for `systemAudioOk`, each with its own 60s debounce.
+    - `ipcMain.handle('recording:start')`: sets `isRecordingActive=true` and resets both debounce timestamps (so back-to-back recordings each get a first notification).
+    - `calendarWatcher.on('meeting-starting')`: same reset, for auto-started meetings.
+    - `ipcMain.on('recording:audio-data')`: sets `isRecordingActive=false` at entry so a late health event post-stop doesn't fire.
+- Quality checks:
+  - `npx tsc -p tsconfig.main.json --noEmit` → exit 0.
+  - `npx tsc -p tsconfig.renderer.json --noEmit` → exit 0 (no renderer changes, but verified).
+  - No test runner configured in package.json.
+- **Learnings for future iterations:**
+  - Recording lifecycle in main.ts: `recording:start` (IPC or `meeting-starting`) → creates overlayWindow → Badge captures and streams via `recording:audio-data` (which is the terminal event, not `recording:stop-request`). `recording:stop` IPC just forwards a stop-request to the overlay; the overlay then sends `recording:audio-data` when it has the full WAV. So "recording is active" = between start and `recording:audio-data`.
+  - `Notification` is already imported from 'electron' at the top of main.ts and `Notification.isSupported()` must be checked before `new Notification(...).show()` (already-used pattern in `meeting-reminder`).
+  - Debounce approach: store per-failure-type `lastNotifiedAt` timestamps; compare `Date.now() - last > DEBOUNCE_MS`. Reset to 0 on recording start so the 60s window is recording-local, not global.
+  - Strict transition check (`prev?.x === true && next.x === false`) means: if the Badge's FIRST health emission in a recording is already-bad (e.g. mic blocked at OS level), no notification fires — the UI amber dot from US-004 covers that case. This matches the PRD wording "transitions from true->false".
+  - Guard with `!!prev?.xOk === true` form: `prev` may be `null` on the very first event; optional-chaining + strict equality handles all three null/true/false cases cleanly.
+---

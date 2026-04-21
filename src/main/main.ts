@@ -41,6 +41,10 @@ let activeRecording: { mediaRecorder?: any; chunks: Buffer[]; tmpPath?: string }
 
 type AudioHealth = { micOk: boolean; systemAudioOk: boolean; message?: string };
 let latestAudioHealth: AudioHealth | null = null;
+let isRecordingActive = false;
+const AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS = 60 * 1000;
+let lastMicFailureNotifiedAt = 0;
+let lastSysAudioFailureNotifiedAt = 0;
 
 // ── Windows ───────────────────────────────────────────────────────────────────
 
@@ -1160,6 +1164,9 @@ ipcMain.handle('jira:matchTasks', async (_e, items: any[], projectKey?: string) 
 ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string) => {
   createOverlayWindow(title, calendarEventId);
   updateTrayMenu(mainWindow!, true);
+  isRecordingActive = true;
+  lastMicFailureNotifiedAt = 0;
+  lastSysAudioFailureNotifiedAt = 0;
   return true;
 });
 
@@ -1172,14 +1179,34 @@ ipcMain.handle('recording:stop', async () => {
 
 ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
   if (!payload || typeof payload.micOk !== 'boolean' || typeof payload.systemAudioOk !== 'boolean') return;
-  latestAudioHealth = { micOk: payload.micOk, systemAudioOk: payload.systemAudioOk, message: payload.message };
-  mainWindow?.webContents.send('audio:health', latestAudioHealth);
+  const prev = latestAudioHealth;
+  const next: AudioHealth = { micOk: payload.micOk, systemAudioOk: payload.systemAudioOk, message: payload.message };
+  latestAudioHealth = next;
+  mainWindow?.webContents.send('audio:health', next);
+
+  if (!isRecordingActive || !Notification.isSupported()) return;
+  const now = Date.now();
+  if (prev?.micOk === true && next.micOk === false && now - lastMicFailureNotifiedAt > AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS) {
+    lastMicFailureNotifiedAt = now;
+    new Notification({
+      title: 'Microphone lost',
+      body: next.message || 'Microphone unavailable — the rest of this meeting will not be transcribed.',
+    }).show();
+  }
+  if (prev?.systemAudioOk === true && next.systemAudioOk === false && now - lastSysAudioFailureNotifiedAt > AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS) {
+    lastSysAudioFailureNotifiedAt = now;
+    new Notification({
+      title: 'System audio lost',
+      body: next.message || 'System audio lost — only your mic will be transcribed for the rest of this meeting.',
+    }).show();
+  }
 });
 
 ipcMain.handle('audio:health:get', () => latestAudioHealth);
 
 ipcMain.on('recording:audio-data', async (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
+  isRecordingActive = false;
   try {
     const tmpPath = path.join(os.tmpdir(), `inwise-rec-${Date.now()}.wav`);
     fs.writeFileSync(tmpPath, buffer);
@@ -1217,6 +1244,9 @@ calendarWatcher.on('events-updated', async (events: any[]) => {
 calendarWatcher.on('meeting-starting', (event: any) => {
   createOverlayWindow(event.title);
   updateTrayMenu(mainWindow!, true);
+  isRecordingActive = true;
+  lastMicFailureNotifiedAt = 0;
+  lastSysAudioFailureNotifiedAt = 0;
   mainWindow?.webContents.send('badge:show', event.title);
 });
 
