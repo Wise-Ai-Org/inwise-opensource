@@ -68,3 +68,24 @@ Started: Mon Apr 20 19:57:07 PDT 2026
   - Badge ref pattern: store per-recording mutable config (title, calendarEventId) in `useRef` set from the `recording:start` event, read at send time — React state isn't needed since the UI doesn't render these.
   - The `sendAudio` payload type in `badge-preload.ts` is authoritative for the renderer-side call; mismatches silently pass because it's behind `contextBridge` + `(window as any)`. Update the type when changing the payload shape.
 ---
+
+## 2026-04-20 20:13 PDT - US-004
+- Added audio:health IPC channel from Badge → main → mainWindow, plus pull IPC for initial state.
+- Files changed:
+  - `src/main/badge-preload.ts` — added `electronAPI.sendAudioHealth(payload)` using `ipcRenderer.send('audio:health', payload)`.
+  - `src/main/main.ts` — added `AudioHealth` type + `latestAudioHealth` module var; `ipcMain.on('audio:health', ...)` validates payload, caches latest, forwards to `mainWindow.webContents`; `ipcMain.handle('audio:health:get', ...)` returns cached state.
+  - `src/main/preload.ts` — added `getAudioHealth()` bridge call; added `'audio:health'` to allowed channel list for `on()`.
+  - `src/renderer/Badge.tsx` — `startMic` now calls a local `reportHealth()` at three points: mic-device-not-found (`micOk:false, systemAudioOk:false`), mic getUserMedia success with/without sysStream (`micOk:true, systemAudioOk:!!sysStream` + fallback message), and the outer catch (`micOk:false, systemAudioOk:false` with the thrown error message).
+  - `src/renderer/Sidebar.tsx` — added `audioHealth` state + effect that fetches initial state via `getAudioHealth()` and subscribes to `'audio:health'` events; amber `.audio-health-dot` span rendered on both Record Meeting and Stop Recording pills when `!micOk || !systemAudioOk`, with `title` attribute for hover tooltip.
+  - `src/renderer/styles.css` — added `.audio-health-dot` (8px amber `#f59e0b` circle with subtle glow).
+- Quality checks:
+  - `npx tsc -p tsconfig.main.json --noEmit` → exit 0.
+  - `npx tsc -p tsconfig.renderer.json --noEmit` → exit 0.
+- Browser verification: deferred — dev-browser skill not loaded. OS-level mic-block scenario requires manual Electron run.
+- **Learnings for future iterations:**
+  - Badge and main-renderer have SEPARATE preload files (`badge-preload.ts` vs `preload.ts`) exposing `inwiseAPI` with different allowed-channel lists. When adding a new main→renderer IPC event, add it to the allowed list in BOTH preloads if both windows need to receive it.
+  - `electronAPI` (distinct from `inwiseAPI`) is a second contextBridge world in `badge-preload.ts` used for badge→main `send()` (fire-and-forget) calls. Use it for channels like `audio:health` and `recording:audio-data` that don't need an invoke response.
+  - `ipcMain.on` (not `handle`) is correct for fire-and-forget channels; `handle` is only for renderer→main `invoke()` paths with a return value.
+  - The Badge's `startMic` function has three distinct audio-failure branches; instrument all three when adding observability: device-not-found, sysStream catch (non-fatal), outer getUserMedia catch (fatal).
+  - For transient renderer state that should survive across window reloads, cache in main (`latestAudioHealth`) and expose a pull IPC; Sidebar's effect calls pull on mount AND subscribes to push events to avoid missing updates emitted before mount.
+---

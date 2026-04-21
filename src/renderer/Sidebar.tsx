@@ -46,11 +46,14 @@ function openEnterprise() {
   (window as any).inwiseAPI?.openExternal('https://inwise.ai/enterprise');
 }
 
+type AudioHealth = { micOk: boolean; systemAudioOk: boolean; message?: string };
+
 export default function Sidebar({ activeView, onNavigate }: Props) {
   const [recording, setRecording] = useState(false);
   const [received, setReceived] = useState(false);
   const [showTitleInput, setShowTitleInput] = useState(false);
   const [title, setTitle] = useState('');
+  const [audioHealth, setAudioHealth] = useState<AudioHealth | null>(null);
 
   const [showSearchInput, setShowSearchInput] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -98,6 +101,15 @@ export default function Sidebar({ activeView, onNavigate }: Props) {
     };
     (window as any).inwiseAPI?.on('recording:status', handler);
     return () => (window as any).inwiseAPI?.off('recording:status', handler);
+  }, []);
+
+  useEffect(() => {
+    (window as any).inwiseAPI?.getAudioHealth?.().then((h: AudioHealth | null) => {
+      if (h) setAudioHealth(h);
+    }).catch(() => {});
+    const healthHandler = (h: AudioHealth) => setAudioHealth(h);
+    (window as any).inwiseAPI?.on('audio:health', healthHandler);
+    return () => (window as any).inwiseAPI?.off('audio:health', healthHandler);
   }, []);
 
   const startRecording = async () => {
@@ -230,6 +242,13 @@ export default function Sidebar({ activeView, onNavigate }: Props) {
           <button className="record-btn recording" onClick={stopRecording}>
             <span className="record-dot" />
             Stop Recording
+            {audioHealth && (!audioHealth.micOk || !audioHealth.systemAudioOk) && (
+              <span
+                className="audio-health-dot"
+                title={audioHealth.message || (!audioHealth.micOk ? 'Microphone unavailable' : 'System audio unavailable')}
+                aria-label="Audio capture issue"
+              />
+            )}
           </button>
         ) : (
           <button className="record-btn" onClick={() => setShowTitleInput(v => !v)}>
@@ -237,6 +256,13 @@ export default function Sidebar({ activeView, onNavigate }: Props) {
               <circle cx="12" cy="12" r="8" />
             </svg>
             Record Meeting
+            {audioHealth && (!audioHealth.micOk || !audioHealth.systemAudioOk) && (
+              <span
+                className="audio-health-dot"
+                title={audioHealth.message || (!audioHealth.micOk ? 'Microphone unavailable' : 'System audio unavailable')}
+                aria-label="Audio capture issue"
+              />
+            )}
           </button>
         )}
       </div>

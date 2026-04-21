@@ -39,6 +39,9 @@ let overlayWindow: BrowserWindow | null = null;
 const calendarWatcher = new CalendarWatcher();
 let activeRecording: { mediaRecorder?: any; chunks: Buffer[]; tmpPath?: string } | null = null;
 
+type AudioHealth = { micOk: boolean; systemAudioOk: boolean; message?: string };
+let latestAudioHealth: AudioHealth | null = null;
+
 // ── Windows ───────────────────────────────────────────────────────────────────
 
 function createMainWindow(): void {
@@ -1166,6 +1169,14 @@ ipcMain.handle('recording:stop', async () => {
   }
   return true;
 });
+
+ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
+  if (!payload || typeof payload.micOk !== 'boolean' || typeof payload.systemAudioOk !== 'boolean') return;
+  latestAudioHealth = { micOk: payload.micOk, systemAudioOk: payload.systemAudioOk, message: payload.message };
+  mainWindow?.webContents.send('audio:health', latestAudioHealth);
+});
+
+ipcMain.handle('audio:health:get', () => latestAudioHealth);
 
 ipcMain.on('recording:audio-data', async (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);

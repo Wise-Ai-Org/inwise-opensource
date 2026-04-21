@@ -16,4 +16,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendAudio: (payload: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
     ipcRenderer.send('recording:audio-data', payload);
   },
+  sendAudioHealth: (payload: { micOk: boolean; systemAudioOk: boolean; message?: string }) => {
+    ipcRenderer.send('audio:health', payload);
+  },
 });

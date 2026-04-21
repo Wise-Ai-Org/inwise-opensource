@@ -64,6 +64,9 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   // Desktop capture
   getDesktopSourceId: () => ipcRenderer.invoke('desktop:getSourceId'),
 
+  // Audio health (mic + system audio capture status)
+  getAudioHealth: () => ipcRenderer.invoke('audio:health:get'),
+
   // AI features
   generatePersonInsights: (personId: string) => ipcRenderer.invoke('ai:generatePersonInsights', personId),
   generateAgenda: (personId: string) => ipcRenderer.invoke('ai:generateAgenda', personId),
@@ -89,7 +92,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 
   // Events from main → renderer
   on: (channel: string, cb: (...args: any[]) => void) => {
-    const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'whisper:progress', 'tasks:reprioritized', 'jira:auto-synced', 'pipeline:error'];
+    const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'whisper:progress', 'tasks:reprioritized', 'jira:auto-synced', 'pipeline:error', 'audio:health'];
     if (allowed.includes(channel)) {
       ipcRenderer.on(channel, (_event, ...args) => cb(...args));
     }

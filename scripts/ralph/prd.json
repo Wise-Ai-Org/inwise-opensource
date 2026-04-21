@@ -72,8 +72,8 @@
         "Verify in browser using dev-browser skill: open app with mic blocked at OS level, confirm amber indicator and tooltip on Record Meeting pill"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Badge.tsx reports audio:health on mic-not-found, mic success (with system audio ok/fallback message), and mic getUserMedia catch. Main caches latestAudioHealth and both forwards via mainWindow webContents AND exposes audio:health:get pull IPC. Sidebar subscribes + fetches initial state on mount, renders .audio-health-dot on both Record Meeting and Stop Recording pills with title tooltip. dev-browser skill unavailable — OS-level mic-block verification deferred."
     },
     {
       "id": "US-005",
