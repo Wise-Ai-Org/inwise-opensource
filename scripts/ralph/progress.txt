@@ -4,10 +4,13 @@ Started: Tue Apr 21 13:19:47 PDT 2026
 ## Codebase Patterns
 - Tests live next to source as `X.test.ts` with a `run()` export and `if (require.main === module) run()`. Build via `npx tsc -p tsconfig.main.json`, then run `node dist/main/X.test.js`. No `npm test` script exists.
 - `src/main/config.ts` uses electron-store. `electron-store` cannot be imported from compiled JS at arbitrary locations — it must run from within the project's own `dist/main/` so node_modules resolves. Factor pure logic out of store-dependent helpers for unit tests.
-- Main-process typecheck: `npx tsc -p tsconfig.main.json --noEmit` (silent = success).
+- Main-process typecheck: `npx tsc -p tsconfig.main.json --noEmit` (silent = success). Renderer: `npx tsc -p tsconfig.renderer.json --noEmit`.
 - `preload.ts` hardcodes an `allowed[]` channel allowlist — every new main→renderer push channel must be added or it's silently dropped.
 - Date→epoch-ms is the convention for main→renderer IPC payloads carrying Date objects.
 - `mainWindow` hides on close (preventDefault+hide); fallback UI-path checks must verify `mainWindow.isVisible()`, not just `!isDestroyed()`.
+- `import { app } from 'electron'` in plain node is safe at load-time (`app` is `undefined`); it only fails when you actually call an `app.*` method. This means tests can import modules that import electron without booting electron.
+- NeDB (`@seald-io/nedb`) without a `filename` option is pure in-memory — perfect for unit tests. `{ field: null }` matches documents where the field is null OR missing (Mongo-compatible), so additive schema changes need no migration.
+- For testable DB helpers on `database.ts`, use the `__setTasksDbForTests(db)` injection hook. Follow the same pattern if future stories need to exercise meetings/people DBs in unit tests.
 
 ---
 
@@ -33,5 +36,33 @@ Learnings for future iterations:
 - `markAppOpened` intentionally writes on BOTH `ready-to-show` and `show` — this is double-fire on cold start (once for each event in sequence) but idempotent; writing now-to-now has no effect on getDaysSinceLastOpen since that reads the snapshot.
 - `welcomeBackLastSeenAt` has no prior-value snapshot and no read-helper yet — US-004 will compare it directly against `lastOpenedAt` in its null-return branch.
 - electron-store v8 requires Electron runtime to resolve paths reliably; this is why the test file only exercises the pure `computeDaysSince` helper and not the store-backed helpers.
+
+---
+
+## 2026-04-21 13:40 PDT - US-002
+- Added snooze schema fields to tasks: `snoozedAt`, `snoozedReason`, `lastMentionedAt` (default null) in `createTask` init. Also started stamping `updatedAt` at creation so downstream US-003 eligibility (age since last touch) works for freshly-created tasks too.
+- Added helpers in `src/main/database.ts`: `isSnoozed`, `snoozeTask`, `bringBackTask`, `getSnoozedTasks`, `touchLastMentioned`. `snooze`/`bringBack`/`touch*` all bump `updatedAt` per PRD.
+- Extracted `sortTasks(tasks[])` so `getTasks` and `getSnoozedTasks` share the priority/createdAt sort.
+- `getTasks(opts?: { includeSnoozed?: boolean })` — default excludes snoozed by adding `snoozedAt: null` to the NeDB query (NeDB matches both null and missing, so legacy rows without the field are treated as active). `includeSnoozed: true` drops the filter.
+- Added test-only export `__setTasksDbForTests(db)` so unit tests can inject an in-memory NeDB without booting Electron. Production code never uses it.
+- Wrote `src/main/database.test.ts` covering all US-002 acceptance gates: isSnoozed purity, createTask field defaults, snooze→excluded, includeSnoozed→all, getSnoozedTasks→only snoozed (with reason + timestamp), bringBack→reappears + reason cleared, touchLastMentioned persists + updatedAt bumps, archived still excluded regardless of includeSnoozed flag.
+
+Files changed:
+- src/main/database.ts
+- src/main/database.test.ts (new)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `node dist/main/database.test.js` — all tests passed.
+- `node dist/main/config.test.js` — regression, all tests passed.
+- `node dist/main/self-identity.test.js` — regression, all tests passed.
+
+Learnings for future iterations:
+- Electron's module in plain node is a string (path to the binary), so `import { app } from 'electron'` at file-top is NOT a load-time throw — `app` is just `undefined`. Tests can safely import `database.ts` as long as they never call `initDatabase()`; inject a raw `@seald-io/nedb` Datastore instead via the `__setTasksDbForTests` hook.
+- `new Datastore()` with no options is pure in-memory — no filesystem, no `app.getPath` — ideal for unit tests. Call `loadDatabaseAsync()` once before use.
+- NeDB matches `{ field: null }` against documents where the field is either null OR missing, matching Mongo semantics. This is what makes adding a new nullable field backward-compatible for existing rows without a migration.
+- There are still TWO inline `tasksDb.findAsync({ archivedAt: null, ... })` calls in `database.ts` (person-nudges at ~line 504, meeting-agenda at ~line 820) that do NOT filter snoozed. Out of scope for US-002 (PRD scoped to getTasks), but be aware: if snoozed tasks start appearing in person nudges or agenda context in a later iteration, those are the two sites to fix.
+- Pattern to follow when adding testable DB helpers to `database.ts`: pure helpers (like `isSnoozed`) stay free-standing; stateful helpers get a corresponding in-memory test using `__setTasksDbForTests`. Follow the same injection pattern for meetings/people DBs if future stories need it.
 
 ---

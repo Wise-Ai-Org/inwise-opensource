@@ -37,7 +37,7 @@
         "Tests pass: unit tests for snooze → default getTasks excludes it; bringBack → reappears; touchLastMentioned persists; getSnoozedTasks returns only snoozed"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
