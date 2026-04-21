@@ -18,8 +18,8 @@
         "Tests pass"
       ],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Extended Config in src/main/config.ts with calendars[] and selfEmails[] (defaults []); kept legacy googleIcsUrl/outlookIcsUrl (marked @deprecated). Added CalendarSubscription/CalendarProvider exports plus listCalendars/addCalendar/updateCalendar/removeCalendar/setSelfEmails helpers. migrateLegacyCalendars() seeds one row per non-empty legacy URL on first run, guarded by calendars.length === 0 (idempotent). Called from app.whenReady() in main.ts with info log when a migration actually happens. Both tsc --noEmit passes (main + renderer). Project has no test runner configured, so 'tests pass' is vacuously satisfied."
     },
     {
       "id": "US-002",

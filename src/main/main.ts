@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
-import { getConfig, setConfig } from './config';
+import { getConfig, setConfig, migrateLegacyCalendars } from './config';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
 import { transcribeAudio, setupWhisper } from './transcriber';
@@ -1345,6 +1345,10 @@ async function runDailyJiraPull(): Promise<void> {
 
 app.whenReady().then(() => {
   initDatabase();
+  const migration = migrateLegacyCalendars();
+  if (migration.migrated) {
+    log('info', 'config:migrate-calendars', `Seeded calendars[] from legacy fields — added=${migration.added}`);
+  }
   createMainWindow();
   createTray(mainWindow!);
   calendarWatcher.start();
