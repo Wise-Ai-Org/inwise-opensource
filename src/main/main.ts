@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
-import { getConfig, setConfig, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, CalendarSubscription } from './config';
+import { getConfig, setConfig, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
@@ -79,7 +79,14 @@ function createMainWindow(): void {
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
   }
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.once('ready-to-show', () => {
+    markAppOpened();
+    mainWindow?.show();
+  });
+
+  mainWindow.on('show', () => {
+    markAppOpened();
+  });
 
   mainWindow.on('close', (e) => {
     e.preventDefault();
