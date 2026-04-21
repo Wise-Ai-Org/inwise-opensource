@@ -32,6 +32,7 @@ import { matchAllItems, semanticMatch } from './jira-matcher';
 import { scoreTasks } from './task-scorer';
 import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from './mfcc';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
+import { sweepStaleTasks } from './staleness-sweep';
 
 Menu.setApplicationMenu(null);
 
@@ -1513,6 +1514,13 @@ app.whenReady().then(() => {
   createMainWindow();
   createTray(mainWindow!);
   calendarWatcher.start();
+
+  // Staleness sweep — fire-and-forget after calendar sync starts so the welcome-back
+  // compute IPC (US-004) can read lastSweepResult. Delayed to let first calendar sync
+  // settle but NOT awaited so whenReady() stays non-blocking.
+  setTimeout(() => {
+    sweepStaleTasks().catch((err) => log('error', 'staleness-sweep', String(err)));
+  }, 5_000);
 
   // Daily Jira pull — run on startup (after a short delay) and every 6 hours
   setTimeout(() => runDailyJiraPull(), 10_000);

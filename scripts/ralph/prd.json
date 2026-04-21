@@ -56,7 +56,7 @@
         "Tests pass: one unit test per eligibility gate (age, mention, priority, already-snoozed) — each returns empty when gate fails"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

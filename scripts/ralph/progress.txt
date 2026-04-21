@@ -66,3 +66,34 @@ Learnings for future iterations:
 - Pattern to follow when adding testable DB helpers to `database.ts`: pure helpers (like `isSnoozed`) stay free-standing; stateful helpers get a corresponding in-memory test using `__setTasksDbForTests`. Follow the same injection pattern for meetings/people DBs if future stories need it.
 
 ---
+
+## 2026-04-21 13:45 PDT - US-003
+- Added new module `src/main/staleness-sweep.ts` exporting `sweepStaleTasks(now?: Date): Promise<{ snoozed: any[] }>` and `getLastSweepResult(): SweepResult | null`.
+- Eligibility implementation follows PRD gates: `status === 'todo'` (this codebase uses 'todo' where the PRD says 'active' — they mean the same thing here), `!isSnoozed(t)`, `updatedAt < now - 30d`, `(!lastMentionedAt || lastMentionedAt < now - 14d)`, `priority !== 'high' && priority !== 'critical'`.
+- For each eligible task, call `snoozeTask(id, 'stale-30d')` (reuses US-002's helper — no new DB write path).
+- `lastSweepResult` is module-local and includes `{ snoozed, eligible, totalActive, ranAt }` so US-004's compute IPC can read `snoozed.length`, sample titles, and skip re-running if the cached result is fresh.
+- Hooked into `app.whenReady()` in `main.ts`: `setTimeout(() => sweepStaleTasks().catch(...), 5_000)` — fire-and-forget, runs after calendar sync starts but before the UI would typically ask for welcome-back data, and is NOT awaited inside whenReady (so startup stays non-blocking per PRD).
+- Log line format matches PRD spec: `log('info', 'staleness-sweep', 'snoozed=N eligible=E of total active tasks=T')` — logger formats this as `[ts] INFO staleness-sweep | snoozed=... eligible=... of total active tasks=...`.
+- Added test-only `__resetLastSweepResultForTests()` so tests don't leak stashed state across cases.
+- Accepts an optional `now: Date` parameter so tests can control the clock deterministically.
+
+Files changed:
+- src/main/staleness-sweep.ts (new)
+- src/main/staleness-sweep.test.ts (new)
+- src/main/main.ts (import + whenReady hook)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `node dist/main/staleness-sweep.test.js` — 8 test blocks passed (happy path, age gate, mention-blocks, mention-too-old-doesnt-block, priority=high + critical, already-snoozed, mixed counts, status=done gate).
+- `node dist/main/database.test.js` / `config.test.js` / `self-identity.test.js` — regressions still green.
+
+Learnings for future iterations:
+- This codebase's task "active" state is `status === 'todo'`, not literally `'active'`. The PRD used 'active' generically; implementation should treat them as synonymous. If a later story needs to distinguish (e.g., 'in_progress' as a separate active state), update the filter.
+- `high` AND `critical` priorities both skip the sweep. PRD only spelled out `priority !== 'high'`, but `critical` is strictly more important than `high`, so excluding it is the obvious-intent interpretation. Documented here so future reviewers don't think it was overreach.
+- The sweep does NOT touch `lastMentionedAt` for untouched tasks — it reads it only. US-007 (task completion inference) is where `lastMentionedAt` should start being written by the transcript-processing pipeline.
+- `lastSweepResult` is a singleton in module state — fine for Electron main process, but if we ever need per-window isolation or SSR, this needs to move to a store. Not currently a concern.
+- The whenReady `setTimeout(5_000)` delay is a soft fence — it is NOT synchronised with `calendarWatcher`'s first `events-updated` emission. If US-008's live-meeting suppression needs the sweep result to be guaranteed-present before rendering, promote the sweep call to listen on `calendarWatcher.once('events-updated', ...)` instead.
+- Tests build tasks via `createTask()` then backdate with `updateTask(id, { updatedAt: iso(daysAgo), ... })` because `createTask` stamps `updatedAt` to now. This is the standard pattern for time-sensitive DB tests in this codebase.
+
+---
