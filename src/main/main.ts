@@ -1204,6 +1204,13 @@ ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
 
 ipcMain.handle('audio:health:get', () => latestAudioHealth);
 
+ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; message?: string; stack?: string; source?: string }) => {
+  const name = payload?.name || 'UnhandledRejection';
+  const message = payload?.message || '(no message)';
+  const source = payload?.source ? ` source=${payload.source}` : '';
+  log('error', 'renderer:unhandled-rejection', `${name}: ${message}${source}`);
+});
+
 ipcMain.on('recording:audio-data', async (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   isRecordingActive = false;

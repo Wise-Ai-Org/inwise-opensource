@@ -110,3 +110,30 @@ Started: Mon Apr 20 19:57:07 PDT 2026
   - Strict transition check (`prev?.x === true && next.x === false`) means: if the Badge's FIRST health emission in a recording is already-bad (e.g. mic blocked at OS level), no notification fires — the UI amber dot from US-004 covers that case. This matches the PRD wording "transitions from true->false".
   - Guard with `!!prev?.xOk === true` form: `prev` may be `null` on the very first event; optional-chaining + strict equality handles all three null/true/false cases cleanly.
 ---
+
+## 2026-04-20 20:25 PDT - US-006
+- Added global unhandledrejection handler in both renderer entries; audited .play() sites.
+- Files changed:
+  - `src/main/main.ts` — new `ipcMain.on('renderer:unhandled-rejection', ...)` that extracts `name`, `message`, `source` and logs via existing `log('error', 'renderer:unhandled-rejection', ...)`.
+  - `src/main/preload.ts` — new `inwiseAPI.reportUnhandledRejection(payload)` using `ipcRenderer.send()` (fire-and-forget — no response needed).
+  - `src/main/badge-preload.ts` — same method added to the `electronAPI` world (which is the fire-and-forget bridge in the badge window).
+  - `src/renderer/index.tsx` — `window.addEventListener('unhandledrejection', ...)` BEFORE React mount; forwards `reason.name/message/stack` with `source: 'main-window'`; wrapped in try/catch so the reporter itself never throws.
+  - `src/renderer/badge-entry.tsx` — same listener with `source: 'badge-window'`, calling `electronAPI.reportUnhandledRejection` (the badge's `inwiseAPI` does not carry this method).
+- Audit of `.play()` call sites in `src/renderer/`:
+  - `Settings.tsx:680` — `audio.play()` — already chained with `.catch()` as of US-002 (surfaces `err.name: err.message` in a 3s inline error). ✔
+  - `Badge.tsx` — no `.play()` calls; only `new AudioContext()` for PCM capture. ✔
+  - `Onboarding.tsx` — no `.play()` calls; only `new AudioContext()` for enrollment preview. ✔
+  - `TranscriptReviewModal.tsx` (under `views/communications/`) — contains no `.play()` or `new Audio(...)` call. PRD listed it defensively; nothing to audit. ✔
+- Quality checks:
+  - `npx tsc -p tsconfig.main.json --noEmit` → exit 0.
+  - `npx tsc -p tsconfig.renderer.json --noEmit` → exit 0.
+  - No test runner configured in package.json (same as prior stories).
+- Manual invalid-data-URL verification: **deferred — requires Electron GUI run**. When performed, point Settings.tsx `startPlayback` at a bogus URL (e.g. `new Audio('data:audio/wav;base64,invalid')`), click Play, then inspect `userData/app.log` for a `renderer:unhandled-rejection` line. Revert the URL change afterward.
+- **Learnings for future iterations:**
+  - Two entry files bootstrap two different renderers: `index.tsx` (main window, exposes `inwiseAPI` via `preload.ts`) and `badge-entry.tsx` (overlay, exposes BOTH `inwiseAPI` AND `electronAPI` via `badge-preload.ts`). Global listeners must be installed in BOTH when you want cross-window coverage.
+  - Fire-and-forget renderer→main IPC uses `ipcRenderer.send` paired with `ipcMain.on`. Reserve `invoke`/`handle` for when you actually need a response — `send/on` has lower overhead and matches the semantic (the renderer doesn't care when or whether the log line landed).
+  - The preload bridges for the two windows have **different shapes**: the main preload has everything on `inwiseAPI`; the badge preload splits bridges into `inwiseAPI` (config + invoke patterns) and `electronAPI` (send-style audio + health forwarding). Pick the right world when adding a new method, or the call will silently be undefined at runtime.
+  - `window.addEventListener('unhandledrejection', ...)` is the DOM-level Chromium hook for unhandled promise rejections; it fires for `.then()`-less promises and uncaught errors inside async functions. Node-side `process.on('unhandledRejection')` is a different event — do not confuse the two.
+  - Wrap the reporter body in `try { ... } catch {}` — a throw inside the `unhandledrejection` handler itself creates an infinite loop of rejections; swallow silently here is correct.
+  - Single renderer-wide `.play()` audit: only `Settings.tsx:680` ever calls `.play()`. The rest of the audio code uses `AudioContext` / `createBufferSource` (WebAudio) which doesn't return a rejectable promise. No need to chase phantom `.play()` sites.
+---

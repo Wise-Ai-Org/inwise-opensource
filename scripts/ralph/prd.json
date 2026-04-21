@@ -106,8 +106,8 @@
         "Tests pass"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Global window.addEventListener('unhandledrejection') registered in BOTH renderer entries (index.tsx for main window, badge-entry.tsx for overlay). Each forwards reason.name/message/stack + source tag to main via ipcRenderer.send('renderer:unhandled-rejection'). Main-process handler logs at error level using existing log() module. Preload bridges: inwiseAPI.reportUnhandledRejection on main preload; electronAPI.reportUnhandledRejection on badge-preload (uses send(), not invoke(), for fire-and-forget). Audit of renderer play() call sites: Settings.tsx:680 is the ONLY .play() invocation in src/renderer — already wrapped with .catch() in US-002. Badge.tsx, Onboarding.tsx, and the TranscriptReviewModal.tsx referenced in PRD contain only new AudioContext() (not media playback), so no additional .play() audit remediation needed. Manual invalid-data-URL verification deferred — requires Electron GUI run."
     }
   ]
 }

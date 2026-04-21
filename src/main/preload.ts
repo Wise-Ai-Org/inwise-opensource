@@ -67,6 +67,10 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   // Audio health (mic + system audio capture status)
   getAudioHealth: () => ipcRenderer.invoke('audio:health:get'),
 
+  // Renderer error reporting
+  reportUnhandledRejection: (payload: { name?: string; message?: string; stack?: string; source?: string }) =>
+    ipcRenderer.send('renderer:unhandled-rejection', payload),
+
   // AI features
   generatePersonInsights: (personId: string) => ipcRenderer.invoke('ai:generatePersonInsights', personId),
   generateAgenda: (personId: string) => ipcRenderer.invoke('ai:generateAgenda', personId),

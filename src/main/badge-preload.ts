@@ -19,4 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendAudioHealth: (payload: { micOk: boolean; systemAudioOk: boolean; message?: string }) => {
     ipcRenderer.send('audio:health', payload);
   },
+  reportUnhandledRejection: (payload: { name?: string; message?: string; stack?: string; source?: string }) => {
+    ipcRenderer.send('renderer:unhandled-rejection', payload);
+  },
 });
