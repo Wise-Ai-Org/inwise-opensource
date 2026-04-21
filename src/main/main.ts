@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
-import { getConfig, setConfig, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, CalendarSubscription } from './config';
+import { getConfig, setConfig, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
@@ -693,6 +693,12 @@ ipcMain.handle('calendar:remove', async (_e, id: string) => {
   log('info', 'calendar:remove', `id=${id}`);
   calendarWatcher.refresh();
   return true;
+});
+ipcMain.handle('config:setSelfEmails', (_e, emails: string[]) => {
+  const clean = Array.isArray(emails) ? emails.map((e) => String(e).trim()).filter(Boolean) : [];
+  setSelfEmails(clean);
+  log('info', 'config:setSelfEmails', `count=${clean.length}`);
+  return clean;
 });
 ipcMain.handle('calendar:getEvents', () => {
   return calendarWatcher.getUpcomingEvents().map(e => ({

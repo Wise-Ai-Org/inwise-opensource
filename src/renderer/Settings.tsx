@@ -6,6 +6,7 @@ interface Config {
   whisperModel: 'tiny' | 'base' | 'small' | 'medium';
   micDeviceId: string;
   userName: string;
+  selfEmails: string[];
   jiraClientId: string;
   jiraClientSecret: string;
   jiraAutoPush: boolean;
@@ -745,6 +746,161 @@ function JiraSettings({ config, update }: { config: Config; update: (key: keyof 
   );
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function SelfEmailsEditor({ emails, onChange }: { emails: string[]; onChange: (next: string[]) => void }) {
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+  }, []);
+
+  const flashError = (msg: string) => {
+    setError(msg);
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = setTimeout(() => setError(null), 3000);
+  };
+
+  const tryAdd = (raw: string) => {
+    const candidate = raw.trim();
+    if (!candidate) return false;
+    if (!EMAIL_RE.test(candidate)) {
+      flashError(`"${candidate}" is not a valid email address`);
+      return false;
+    }
+    const lower = candidate.toLowerCase();
+    if (emails.some(e => e.toLowerCase() === lower)) {
+      return false;
+    }
+    onChange([...emails, candidate]);
+    return true;
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      if (tryAdd(draft)) {
+        setDraft('');
+      }
+    } else if (e.key === 'Backspace' && draft === '' && emails.length > 0) {
+      onChange(emails.slice(0, -1));
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    if (value.endsWith(',')) {
+      if (tryAdd(value.slice(0, -1))) {
+        setDraft('');
+      } else {
+        setDraft(value.slice(0, -1));
+      }
+    } else {
+      setDraft(value);
+    }
+  };
+
+  const handleBlur = () => {
+    if (draft.trim()) {
+      if (tryAdd(draft)) {
+        setDraft('');
+      }
+    }
+  };
+
+  const removeAt = (idx: number) => {
+    onChange(emails.filter((_, i) => i !== idx));
+  };
+
+  return (
+    <div className="form-group" style={{ marginBottom: 16 }}>
+      <label className="form-label">Your email addresses</label>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6,
+          padding: '6px 8px',
+          border: '1px solid var(--slate-300)',
+          borderRadius: 6,
+          background: 'var(--white, #fff)',
+          minHeight: 38,
+          alignItems: 'center',
+        }}
+      >
+        {emails.map((email, idx) => (
+          <span
+            key={`${email}-${idx}`}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '3px 4px 3px 10px',
+              background: 'var(--slate-100)',
+              border: '1px solid var(--slate-200)',
+              borderRadius: 999,
+              fontSize: 12,
+              color: 'var(--slate-700)',
+            }}
+          >
+            {email}
+            <button
+              type="button"
+              aria-label={`Remove ${email}`}
+              onClick={() => removeAt(idx)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                borderRadius: '50%',
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--slate-500)',
+                cursor: 'pointer',
+                fontSize: 14,
+                lineHeight: 1,
+                padding: 0,
+              }}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <input
+          type="text"
+          value={draft}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onBlur={handleBlur}
+          placeholder={emails.length === 0 ? 'you@example.com' : ''}
+          style={{
+            flex: 1,
+            minWidth: 140,
+            border: 'none',
+            outline: 'none',
+            background: 'transparent',
+            fontSize: 13,
+            padding: '4px 2px',
+            color: 'var(--slate-800)',
+          }}
+        />
+      </div>
+      {error && (
+        <span style={{ fontSize: 12, color: 'var(--red, #d33)', marginTop: 4, display: 'block' }}>
+          {error}
+        </span>
+      )}
+      <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
+        Separate from display name. Used to identify you in attendee lists across multiple calendars.
+      </span>
+    </div>
+  );
+}
+
 function VoiceEnrollment() {
   const [prints, setPrints] = useState<VoicePrintInfo[]>([]);
   const [enrolling, setEnrolling] = useState(false);
@@ -1297,6 +1453,15 @@ export default function Settings() {
                 Used to label your voice in transcripts (left/mic channel).
               </span>
             </div>
+
+            <SelfEmailsEditor
+              emails={config.selfEmails ?? []}
+              onChange={async (next) => {
+                setConfig(c => c ? { ...c, selfEmails: next } : c);
+                setSaved(false);
+                await (window as any).inwiseAPI.setSelfEmails(next);
+              }}
+            />
 
             <VoiceEnrollment />
           </div>

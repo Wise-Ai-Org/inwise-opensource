@@ -89,3 +89,22 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - The legacy `googleIcsUrl`/`outlookIcsUrl` fields stay in the backend Config (marked `@deprecated`) so `migrateLegacyCalendars()` can still seed calendars[] for users upgrading from pre-US-001 builds. The renderer does not need to know they exist, and removing them from the renderer Config keeps us from accidentally wiping them via `setConfig(config)` on Save.
   - Per-row auto-focus needs a *ref passed to the input*, set in an effect that fires when `autoFocus` becomes true for that row. Don't try to focus inside the parent's add handler — React hasn't mounted the new row yet at that point.
 ---
+
+## 2026-04-21 12:12 PDT - US-005
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Added `SelfEmailsEditor` component in `src/renderer/Settings.tsx` rendered in the Voice Enrollment section, right after the "Your Name" input.
+- Chips: each existing email renders as a pill with a `×` button; backspace on an empty draft removes the last chip.
+- Input: `Enter` or `,` commits the draft (`e.preventDefault()` avoids form submit); a trailing `,` pasted into `onChange` also auto-commits.
+- Validation: `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`. Invalid → inline red error below the chip row for 3 s (setTimeout cleared on unmount + on next error to avoid flicker). Duplicates rejected silently, case-insensitive.
+- Persistence: each mutation calls the new `inwiseAPI.setSelfEmails(next)` bridge → `ipcMain.handle('config:setSelfEmails')` in `main.ts` trims/drops empties and delegates to `setSelfEmails()` in `config.ts`, logging the resulting count. Added `selfEmails: string[]` to the renderer `Config` interface so the "Save Settings" whole-config save also persists the array.
+- Helper text: "Separate from display name. Used to identify you in attendee lists across multiple calendars."
+- Files changed: `src/main/main.ts` (import + new IPC handler), `src/main/preload.ts` (bridge entry), `src/renderer/Settings.tsx` (Config type + SelfEmailsEditor component + wiring).
+- Quality: `npx tsc -p tsconfig.main.json --noEmit` green, `npx tsc -p tsconfig.renderer.json --noEmit` green, `npm run build:renderer` succeeds.
+- Browser verification: not applicable — this is an Electron renderer running inside a BrowserWindow, not a web page the `dev-browser` skill can navigate to. Typecheck + webpack build are the real gates; interactive testing needs `npm start`.
+- **Learnings for future iterations:**
+  - The setSelfEmails IPC path is a *narrow helper*, not `setConfig({selfEmails: [...]})`. Using a dedicated channel makes the main-side logging meaningful (`count=N`) and lets us sanitize (trim + drop empties) at the boundary without polluting the generic `config:set` path.
+  - When the chip editor calls `onChange(next)`, the parent both updates local state *and* fires IPC — so the "Save Settings" button is not load-bearing for selfEmails persistence (changes save per-action). Keeping selfEmails in the renderer Config type still matters because `setConfig(config)` in the big save path would otherwise be `undefined`-valued for the key, which electron-store's `store.set('selfEmails', undefined)` would treat oddly. Always add newly-added main-Config fields to the renderer Config type when they participate in the save-all path.
+  - `Backspace`-to-remove-last-chip is a subtle UX affordance copied from Gmail/Linear: users discover it and like it, and it avoids trapping the cursor when they meant to edit the last email they typed.
+  - The 3-second inline error uses `useRef<ReturnType<typeof setTimeout>>()` not `number` — `setTimeout` is typed differently under Node (`NodeJS.Timeout`) vs. DOM (`number`), and `ReturnType<typeof setTimeout>` handles both without importing `@types/node` into the renderer.
+  - Comma-in-onChange (`value.endsWith(',')`) is necessary in addition to `onKeyDown === ','` because pasting "a@b.com," triggers onChange but not a keydown for the comma character — both paths need to commit.
+---

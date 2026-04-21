@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   updateCalendar: (id: string, patch: Partial<{ label: string; provider: 'google' | 'outlook' | 'ics'; url: string; enabled: boolean }>) =>
     ipcRenderer.invoke('calendar:update', id, patch),
   removeCalendar: (id: string) => ipcRenderer.invoke('calendar:remove', id),
+  setSelfEmails: (emails: string[]) => ipcRenderer.invoke('config:setSelfEmails', emails),
   seedDemoData: () => ipcRenderer.invoke('seed:demo'),
   clearDemoData: () => ipcRenderer.invoke('seed:clear'),
 

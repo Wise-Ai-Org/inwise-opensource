@@ -101,8 +101,8 @@
         "Verify in browser using dev-browser skill: add an email, reload the page, confirm chip persists; try an invalid entry, confirm rejection; remove a chip, confirm removal persists"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added SelfEmailsEditor component in src/renderer/Settings.tsx — rendered in the Voice Enrollment section right after the 'Your Name' input. Chips display each email with a × remove button; Enter or comma commits the draft; a trailing-comma in the input also auto-commits. Validation uses /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/ — invalid entries show an inline red error for exactly 3 seconds (setTimeout cleared on unmount + on the next error to prevent flicker). Duplicates are rejected silently with case-insensitive comparison. Backspace on an empty draft removes the last chip (standard chip-input ergonomic). Persistence: each mutation calls the new inwiseAPI.setSelfEmails(next) bridge, which invokes 'config:setSelfEmails' in main.ts — the handler trims and drops empty strings before calling setSelfEmails() from config.ts, then logs the resulting count. Added selfEmails: string[] to the renderer Config interface so the whole-config save path (Save Settings button) also persists the array. Initial value read via existing inwiseAPI.getConfig(). Helper text: 'Separate from display name. Used to identify you in attendee lists across multiple calendars.' Both tsc --noEmit targets pass; webpack renderer build succeeds. Electron renderer — dev-browser skill not applicable; typecheck + webpack build are the real gates."
     },
     {
       "id": "US-006",
