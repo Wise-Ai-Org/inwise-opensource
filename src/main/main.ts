@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 
 import { getConfig, setConfig, migrateLegacyCalendars } from './config';
+import { isSelf } from './self-identity';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
 import { transcribeAudio, setupWhisper } from './transcriber';
@@ -158,9 +159,7 @@ async function replaceSpeakerLabels(transcript: string, attendees: string[]): Pr
   }
 
   // Speaker 1 = other participant(s)
-  const otherAttendees = attendees.filter(
-    a => !userName || !a.toLowerCase().includes(userName.toLowerCase())
-  );
+  const otherAttendees = attendees.filter(a => !isSelf(a));
 
   if (otherAttendees.length === 1) {
     // 1:1 — we know exactly who speaker 1 is
@@ -213,10 +212,8 @@ async function autoEnrollVoices(audioPath: string, attendees: string[]): Promise
     return;
   }
 
-  // Filter out the user from attendees (case-insensitive partial match)
-  const otherAttendees = attendees.filter(
-    a => !a.toLowerCase().includes(userName.toLowerCase())
-  );
+  // Filter out the user from attendees
+  const otherAttendees = attendees.filter(a => !isSelf(a));
 
   if (otherAttendees.length === 0) {
     log('info', 'voice-enroll:skip', 'no other attendees');

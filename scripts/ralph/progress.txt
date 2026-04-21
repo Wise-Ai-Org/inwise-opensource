@@ -45,3 +45,23 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - `Promise.allSettled` returns results in input order, so we can pair `results[i]` with `enabled[i]` for per-calendar error attribution without threading the calendar id through the rejection.
   - `fetchIcsEvents()` now requires a `calendarId` argument; `testUrl()` passes the sentinel `'__test__'` because Settings → Test isn't tied to a saved row yet (US-004 will change that).
 ---
+
+## 2026-04-21 12:00 PDT - US-003
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Added `src/main/self-identity.ts` exporting `isSelf(attendee)` (reads `getConfig().selfEmails` + `userName`) and a pure `matchesSelf(attendee, selfEmails, userName)` helper kept side-effect-free so tests can run without loading electron-store. Rule: lowercased `attendee.includes()` any non-empty self-email, OR `attendee.includes()` a non-empty trimmed `userName`. Handles `Name <email>`, plain email, and plain display-name attendees.
+- Empty-config (`selfEmails=[]` and blank `userName`) returns `false` — preserves fresh-install behavior where nothing is filtered from attendee lists.
+- Replaced inline filters:
+  - `src/main/main.ts` — `replaceSpeakerLabels`'s `otherAttendees` now uses `attendees.filter(a => !isSelf(a))`; the `userName` local survives because it's still used to label speaker 0.
+  - `src/main/main.ts` — `autoEnrollVoices` `otherAttendees` uses `!isSelf(a)`. The early-return on blank `userName` stays (it has a different purpose: no known name to enroll as).
+  - `src/main/database.ts` — in the `getPerson` action-item filter, replaced the `(currentUserName && (owner.includes(currentUserName) || currentUserName.includes(owner)))` disjunct with `isSelf(owner)` and dropped the now-unused `const currentUserName` read.
+  - `src/main/database.ts` — in `getSuggestedPeople`, dropped the `userName` const and replaced the `if (userName && key === userName) continue` equality check with `if (isSelf(attendee)) continue` placed *before* lowercasing so aliases never reach the frequency map.
+- Added `src/main/self-identity.test.ts` using `node:assert/strict` with cases: email-only, display-name fallback, `Name <email>` combined, mixed-case (both sides), multi-email (one match), no-match, empty config, whitespace-only email/userName ignored, and empty-attendee. Verified green by compiling to a temp dir and running with node (output: `self-identity: all tests passed`). No permanent test runner was wired — `src/main/self-identity.test.ts` is picked up by `tsconfig.main.json` for typecheck coverage but ships in `dist/` as an unused module.
+- Files changed: `src/main/self-identity.ts` (new), `src/main/self-identity.test.ts` (new), `src/main/main.ts`, `src/main/database.ts`.
+- Quality: both `tsc --noEmit` targets green.
+- **Learnings for future iterations:**
+  - `tsconfig.main.json` has `include: ["src/main/**/*"]` and no test-file exclusion, so any `*.test.ts` in `src/main/` will be built into `dist/main/`. Harmless for a single leaf test module, but if the suite grows, either move tests to a sibling `tests/` dir with its own tsconfig or add a `**/*.test.ts` exclude pattern — excluding will drop them from typecheck too, so you'd need a paired `tsconfig.test.json` for that.
+  - Splitting `isSelf` into a pure `matchesSelf(attendee, selfEmails, userName)` + a thin `isSelf` that pulls from `getConfig()` is the pragmatic way to get unit tests without mocking `electron-store`. Follow this shape for any future identity/config-coupled predicates.
+  - Direction matters for fuzzy name matches. The old `database.ts:395` code did *bidirectional* `includes()` (`owner.includes(userName) || userName.includes(owner)`). `isSelf` is *unidirectional* (`owner.includes(userName)` only). The loosening was acceptable per the PRD and reduces false positives, but any caller expecting the old "userName is a substring of owner" behavior will regress silently.
+  - In `getSuggestedPeople`, the self-check must run on the raw `attendee` string *before* lowercasing to the map key. Placing the guard after `const key = attendee.toLowerCase()` still works but wastes the allocation; more importantly, keeping the guard first makes it obvious the self path is a short-circuit, not a tail-end filter.
+  - `autoEnrollVoices`'s `const userName = config.userName?.trim()` survived because the early-return is semantically about "can we label speaker 0 at all", not about self-filtering. Don't collapse that into `isSelf` — they answer different questions.
+---

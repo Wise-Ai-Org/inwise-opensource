@@ -59,8 +59,8 @@
         "Tests pass"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added src/main/self-identity.ts exporting isSelf(attendee) which reads getConfig().selfEmails and getConfig().userName, plus a pure matchesSelf(attendee, selfEmails, userName) helper used for unit tests (no electron-store dep). Rule: lowercased attendee.includes() any non-empty selfEmail, OR attendee.includes() trimmed non-empty userName. Handles 'Name <email>', plain email, plain display name, and mixed case; empty config returns false. Replaced inline filters: main.ts replaceSpeakerLabels (otherAttendees) and autoEnrollVoices (otherAttendees) → attendees.filter(a => !isSelf(a)); database.ts getPerson action-item filter → isSelf(owner) in the OR chain (dropped the local currentUserName var); database.ts getSuggestedPeople → replaced 'key === userName' equality check with 'if (isSelf(attendee)) continue' and moved the check above the lowercase key so self aliases are skipped before the frequency map is touched. Added src/main/self-identity.test.ts with node:assert/strict covering email-only, display-name fallback, 'Name <email>' combined, mixed-case, multi-email, no-match, empty-config, whitespace-only, and empty-attendee cases — verified green by compiling to a temp dir and running with node. Both tsc --noEmit targets pass."
     },
     {
       "id": "US-004",
