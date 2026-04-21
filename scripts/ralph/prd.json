@@ -1,113 +1,128 @@
 {
   "project": "inwise-opensource",
-  "branchName": "ralph/voice-enrollment-fixes",
-  "description": "Five-story batch fixing voice enrollment misses, silent audio-stack failures, and noisy calendar-sync errors uncovered during the 2026-04-17 Anu meeting post-mortem. Restores named voiceprints on scheduled meetings, makes audio health visible before recording, and eliminates silent-swallow paths.",
+  "branchName": "ralph/multi-calendar-accounts",
+  "description": "Support N labeled ICS calendar subscriptions (replacing the two fixed googleIcsUrl/outlookIcsUrl fields), plus a selfEmails list so users with multiple email aliases aren't misidentified as attendees of their own meetings. Migration from the existing single-URL config runs once, automatically.",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Fix calendar-sync $setOnInsert error spam",
-      "description": "As a developer, I want calendar polling to persist events to the local NeDB without throwing every 5 minutes so app.log is clean and events are actually available in the DB for downstream features.",
+      "title": "Extend config with calendars[] and selfEmails[] + one-time migration",
+      "description": "As a developer, I need the config to hold an arbitrary list of calendar subscriptions and a list of self-email aliases, migrating from the existing single-URL fields without data loss.",
       "acceptanceCriteria": [
-        "Locate the syncCalendarEventsToDb call path (likely src/main/database.ts and/or src/main/calendar-watcher.ts) where $setOnInsert is used with updateAsync+upsert",
-        "Replace the $setOnInsert upsert with a find-then-insert-or-update pattern: findOneAsync by id; if present updateAsync({_id}, {$set: doc}); if absent insertAsync(doc)",
-        "After 3 consecutive polls with the same event set, the calendar events collection count stays stable (idempotent)",
-        "No lines matching 'ERROR calendar-sync' or '$setOnInsert' appear in app.log during a 10-minute run",
-        "Existing in-memory getUpcomingEvents() behavior is unchanged",
+        "Extend Config interface in src/main/config.ts with: calendars: Array<{id:string, label:string, provider:'google'|'outlook'|'ics', url:string, enabled:boolean}> and selfEmails: string[]",
+        "Defaults for both are empty arrays",
+        "Keep existing googleIcsUrl and outlookIcsUrl fields in the interface (do not delete) — treat as deprecated, only migration reads them",
+        "Add a one-time migration helper callable from main.ts on app start: if calendars.length === 0 AND (googleIcsUrl OR outlookIcsUrl is non-empty), push one calendar row per non-empty URL with crypto.randomUUID() id, label 'Google'/'Outlook', correct provider, enabled:true",
+        "Migration is idempotent: running twice produces the same result (guard on calendars.length === 0)",
+        "Add helpers in a new src/main/calendar-config.ts (or extend config.ts): addCalendar(row without id), updateCalendar(id, patch), removeCalendar(id), listCalendars()",
         "Typecheck passes",
         "Tests pass"
       ],
       "priority": 1,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
       "id": "US-002",
-      "title": "Fix voiceprint playback silent failure in Settings",
-      "description": "As a user, when I click Play on a voiceprint row in Settings I want to hear the clip or see a visible error, not silently nothing.",
+      "title": "calendar-watcher polls all enabled calendars and merges events",
+      "description": "As a user, when I have multiple calendars enabled, I want events from all of them to appear in my upcoming meeting list, de-duplicated.",
       "acceptanceCriteria": [
-        "Edit src/renderer/Settings.tsx playAudio (around line 625-649): chain .catch() on audio.play() and surface the rejection reason in the row's UI state",
-        "Restructure so audio creation and audio.play() happen without an await in between (to preserve the Chromium user-gesture chain): set audio.src after creation, call audio.play() synchronously inside the click handler, then let oncanplay trigger playback if needed — OR pre-fetch the blob once on mount of the voiceprint list",
-        "Clicking Play on Shravani Vatti or Zee (existing rows in voiceprints.db) produces audible playback",
-        "If the IPC returns an object with no audioClip, the Play button is disabled or labeled '(no audio)' rather than silently doing nothing",
-        "If audio.play() rejects, the row shows an inline error containing the rejection name or message for at least 3 seconds",
-        "Clicking Play on the currently-playing row stops it (existing toggle behavior preserved)",
-        "No changes to the IPC handler at src/main/main.ts:1033-1051 (it already handles the three NeDB audioClip shapes correctly)",
+        "In src/main/calendar-watcher.ts, replace the direct reads of config.googleIcsUrl and config.outlookIcsUrl with iteration over getConfig().calendars.filter(c => c.enabled)",
+        "Fetch all enabled calendars in parallel via Promise.allSettled — one failing calendar does not block the others",
+        "Merge events from all calendars into a single list; de-duplicate by composite key (event.id + event.startTime.toISOString())",
+        "On duplicates, prefer the entry with more attendees; if tied, first-fetched wins",
+        "Tag each merged event with a new field sourceCalendarId: string referencing the calendar id it came from",
+        "Public API unchanged externally: getUpcomingEvents(), on('meeting-starting'), on('meeting-reminder') keep same shape",
+        "Log per calendar per poll: 'calendar-watcher:fetch | calendarId=X label=\"Y\" got=N events'",
+        "Aggregate poll summary: 'calendar-watcher:poll | Done — total=M unique events across K calendars'",
+        "Empty calendars array → skip polling with a debug log; no error",
         "Typecheck passes",
-        "Verify in browser using dev-browser skill: open Settings, click Play on Shravani Vatti, confirm audio plays"
+        "Tests pass"
       ],
       "priority": 2,
-      "passes": true,
-      "notes": "Prefetch blob URL on mount preserves Chromium user-gesture chain; rejection from audio.play() now surfaces in a 3s inline error next to the row. dev-browser skill unavailable in this iteration — manual Electron launch required to confirm audible playback."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-003",
-      "title": "Add calendar:active-event IPC and auto-attach calendarEventId when starting manual recordings",
-      "description": "As a user, when I click Record Meeting during a scheduled calendar event, I want that recording to be linked to the event so attendees drive speaker labeling and voice enrollment.",
+      "title": "Centralize attendee self-filtering via isSelf(attendee) using selfEmails",
+      "description": "As a user with multiple email addresses, I want the app to recognize all my aliases so I am not listed as an attendee of my own meetings and voice enrollment filters me out correctly.",
       "acceptanceCriteria": [
-        "Add IPC handler 'calendar:active-event' in src/main/main.ts that returns the single event from calendarWatcher.getUpcomingEvents() whose startTime <= now() AND (endTime || startTime + 90min) >= now()",
-        "Expose it on the preload bridge (src/main/preload.ts) as inwiseAPI.getActiveCalendarEvent()",
-        "In src/renderer/Sidebar.tsx Record Meeting button handler: call getActiveCalendarEvent() before emitting recording:audio-data; if a non-null event is returned, include its id as calendarEventId in the IPC payload",
-        "If the user hasn't typed a title and an active event is found, default the meeting title to the event's title",
-        "With a synthetic active calendar event (attendees = [user, other]), recording end-to-end produces a voice-enroll:auto log line and voiceprints.db gains a row named for the other attendee",
-        "With no active event, recording still works as ad-hoc (no regression)",
+        "Create src/main/self-identity.ts exporting isSelf(attendee: string): boolean",
+        "isSelf reads getConfig().selfEmails and getConfig().userName",
+        "Returns true if normalized lowercase attendee contains any entry from selfEmails, OR if userName is non-empty AND attendee.toLowerCase() includes userName.toLowerCase()",
+        "Handles attendee formats: plain email, plain display name, 'Name <email>' combined",
+        "When both selfEmails and userName are empty, returns false (preserves current fresh-install behavior)",
+        "Replace inline attendee self-filter at src/main/main.ts:162 (in replaceSpeakerLabels) and src/main/main.ts:210-218 (in autoEnrollVoices) with isSelf(a)",
+        "Replace the equivalent inline filter at src/main/database.ts:395, :554, :565 with isSelf",
+        "Add unit test file: test email-only match, test display-name fallback match, test 'Name <email>' format, test mixed-case, test empty-config returns false",
         "Typecheck passes",
-        "Verify in browser using dev-browser skill: simulate an in-progress calendar event, click Record Meeting, stop after a few seconds, confirm the title auto-filled and app.log shows calendarEventId was passed"
+        "Tests pass"
       ],
       "priority": 3,
-      "passes": true,
-      "notes": "calendar:active-event IPC added with 90-min fallback when endTime missing/invalid. calendarEventId threads Sidebar → recording:start IPC → createOverlayWindow → Badge recording:start event → calendarEventIdRef → sendAudio payload → recording:audio-data handler (which already attaches attendees). Title auto-fills from active event when user hasn't typed. dev-browser skill unavailable — end-to-end browser verification deferred."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-004",
-      "title": "Emit audio-health events from Badge and render indicator on Record Meeting pill",
-      "description": "As a user, I want to see at a glance whether my mic and system audio are being captured correctly, without opening the Badge overlay.",
+      "title": "Settings UI: calendar list with add/edit/remove/test/toggle",
+      "description": "As a user, I want a Settings page section where I can add, rename, disable, test, and remove calendar subscriptions.",
       "acceptanceCriteria": [
-        "Add a shared audio-health channel: Badge.tsx sends IPC 'audio:health' with payload { micOk: boolean, systemAudioOk: boolean, message?: string } on every getUserMedia/desktopCapturer success or failure",
-        "Main process forwards the latest health state to all renderer windows (or exposes a pull IPC inwiseAPI.getAudioHealth())",
-        "Sidebar.tsx subscribes and renders a small amber dot on the Record Meeting pill when micOk=false or systemAudioOk=false",
-        "Hovering the dot shows a tooltip with the message (e.g. 'System audio unavailable — only your voice will be recorded')",
-        "Pill shows the same indicator during recording (Stop Recording state)",
-        "No visual change when both are ok",
+        "Replace the two fixed IcsField components in src/renderer/Settings.tsx with a CalendarList component",
+        "Each row renders: label input, provider dropdown ('Google'|'Outlook'|'Other'), URL input, enabled toggle switch, 'Test' button, 'Delete' button",
+        "'Test' button invokes existing inwiseAPI.testCalendarUrl and shows result inline (connected + event count, or error)",
+        "'+ Add calendar' button at bottom appends a new empty row; label input is auto-focused",
+        "Changes persist via new IPC methods: inwiseAPI.addCalendar(row), updateCalendar(id, patch), removeCalendar(id) — add corresponding ipcMain handlers and preload bridge entries",
+        "Debounced on-change save (500ms) or save-on-blur for text fields; toggle saves immediately",
+        "After migration (US-001), user sees one pre-populated row for each of their old googleIcsUrl/outlookIcsUrl",
+        "Empty state: 'Add your first calendar to get started — paste a secret ICS link from your calendar settings'",
+        "CalendarStatus component at top aggregates across all enabled calendars: total event count + any-failing flag",
+        "Toggling a calendar off and waiting one poll cycle: events from that calendar disappear from the upcoming list",
         "Typecheck passes",
-        "Verify in browser using dev-browser skill: open app with mic blocked at OS level, confirm amber indicator and tooltip on Record Meeting pill"
+        "Verify in browser using dev-browser skill: open Settings, add a calendar with an invalid URL, confirm error inline; add one with a valid test URL, confirm event count shown; toggle off and confirm removal from upcoming list"
       ],
       "priority": 4,
-      "passes": true,
-      "notes": "Badge.tsx reports audio:health on mic-not-found, mic success (with system audio ok/fallback message), and mic getUserMedia catch. Main caches latestAudioHealth and both forwards via mainWindow webContents AND exposes audio:health:get pull IPC. Sidebar subscribes + fetches initial state on mount, renders .audio-health-dot on both Record Meeting and Stop Recording pills with title tooltip. dev-browser skill unavailable — OS-level mic-block verification deferred."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-005",
-      "title": "Fire desktop Notification on audio capture failure",
-      "description": "As a user, if my mic or system audio fails during recording, I want a desktop notification so I find out immediately — not after the meeting.",
+      "title": "Settings UI: selfEmails chip-input editor",
+      "description": "As a user, I want to list all my email addresses so the app recognizes me across calendars.",
       "acceptanceCriteria": [
-        "In src/main/main.ts, subscribe to the audio:health channel from US-004",
-        "When micOk transitions from true->false or systemAudioOk transitions from true->false during an active recording, fire new Notification({title, body}).show() if Notification.isSupported()",
-        "Debounce: do not fire more than once per 60 seconds for the same failure type",
-        "Notification body clearly describes the failure and the consequence (e.g. 'System audio lost — only your mic will be transcribed for the rest of this meeting')",
-        "No notification fires outside of an active recording",
+        "Add 'Your email addresses' section in src/renderer/Settings.tsx, near the existing userName field",
+        "Render existing selfEmails as removable chips; each chip has a small '×' button to remove",
+        "Text input accepts email; pressing Enter or comma adds it as a chip and clears the input",
+        "Validate on add with a basic email regex (e.g. /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/); invalid entries show inline error for 3 seconds and are not added",
+        "Duplicates are rejected silently (no-op if email already present, case-insensitive)",
+        "Persist via new IPC inwiseAPI.setSelfEmails(list: string[]) — add ipcMain handler + preload bridge entry",
+        "Initial value read from existing inwiseAPI.getConfig() shape",
+        "Helper text: 'Separate from display name. Used to identify you in attendee lists across multiple calendars.'",
         "Typecheck passes",
-        "Tests pass"
+        "Verify in browser using dev-browser skill: add an email, reload the page, confirm chip persists; try an invalid entry, confirm rejection; remove a chip, confirm removal persists"
       ],
       "priority": 5,
-      "passes": true,
-      "notes": "ipcMain.on('audio:health') now detects micOk/systemAudioOk true->false transitions during active recording and fires Notification({title, body}).show() with per-failure-type 60s debounce. isRecordingActive tracked at recording:start (manual + calendar-auto) and cleared at recording:audio-data. Debounce timestamps reset on recording start so back-to-back meetings each get a first notification. No test runner configured; main typecheck passes."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-006",
-      "title": "Add global unhandled-rejection handler and audit .play() call sites",
-      "description": "As a developer, I want every audio playback call site to either catch its rejection or be covered by a global handler so future silent-swallow bugs can't hide.",
+      "title": "Handle simultaneous meeting starts: conflict modal with 30s auto-select fallback",
+      "description": "As a user with two meetings starting at the same moment, I want the app to tell me about the conflict and let me pick which one to record, instead of silently dropping one.",
       "acceptanceCriteria": [
-        "Register window.addEventListener('unhandledrejection', ...) in the renderer entry (src/renderer/App.tsx or equivalent) that forwards the reason to main via IPC 'renderer:unhandled-rejection'",
-        "Main-process handler logs via the existing logger at error level with the reason.name and reason.message",
-        "Audit every .play() call in src/renderer/ (grep for '\\.play\\(' and 'new Audio'): each must be chained with .catch() OR wrapped in try/catch inside an async function",
-        "Settings.tsx, Badge.tsx, Onboarding.tsx, and TranscriptReviewModal.tsx play() sites are all verified safe",
-        "Manually point one play() at an invalid data URL temporarily, run the app, confirm app.log captures the rejection — then revert",
+        "Detect conflict in src/main/main.ts meeting-starting handler: if isRecordingActive is true OR another meeting-starting fired within the last 90 seconds, treat as a conflict",
+        "On conflict, send IPC 'meeting:conflict' to main window with payload { active: Event, incoming: Event } — renderer shows a modal with title, start time, and attendee count for each, plus Pick buttons",
+        "If mainWindow is hidden/minimized or doesn't exist, fall back to a desktop Notification with actions (new Notification with { actions: [...] }).show()",
+        "If the user does not respond within 30 seconds, auto-select: score each meeting by the count of attendees matching selfEmails/userName (use isSelf helper from US-003); higher score wins; tiebreaker = earlier startTime; final tiebreaker = first-fired wins",
+        "Log the decision: log('info', 'calendar-watcher:conflict', `recording=\"X\" passed-over=\"Y\" reason=auto-selected|user-selected`)",
+        "The passed-over meeting still appears in getUpcomingEvents() and the upcoming list (no silent removal from the calendar state)",
+        "If only one meeting starts (no overlap), current single-overlay path is preserved — no modal, no delay",
+        "Add a renderer ConflictModal component in src/renderer/ (e.g. components/modal/MeetingConflictModal.tsx) rendered from the main App or Sidebar when meeting:conflict fires",
         "Typecheck passes",
-        "Tests pass"
+        "Verify in browser using dev-browser skill: trigger two synthetic meeting-starting events within 5 seconds of each other via a test IPC or dev shortcut; confirm modal appears, pick one, confirm only that one records and log shows the decision"
       ],
       "priority": 6,
-      "passes": true,
-      "notes": "Global window.addEventListener('unhandledrejection') registered in BOTH renderer entries (index.tsx for main window, badge-entry.tsx for overlay). Each forwards reason.name/message/stack + source tag to main via ipcRenderer.send('renderer:unhandled-rejection'). Main-process handler logs at error level using existing log() module. Preload bridges: inwiseAPI.reportUnhandledRejection on main preload; electronAPI.reportUnhandledRejection on badge-preload (uses send(), not invoke(), for fire-and-forget). Audit of renderer play() call sites: Settings.tsx:680 is the ONLY .play() invocation in src/renderer — already wrapped with .catch() in US-002. Badge.tsx, Onboarding.tsx, and the TranscriptReviewModal.tsx referenced in PRD contain only new AudioContext() (not media playback), so no additional .play() audit remediation needed. Manual invalid-data-URL verification deferred — requires Electron GUI run."
+      "passes": false,
+      "notes": ""
     }
   ]
 }

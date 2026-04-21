@@ -5,3 +5,4 @@ dist/
 *.db
 release/
 release-v2/
+scripts/ralph/.last-branch
