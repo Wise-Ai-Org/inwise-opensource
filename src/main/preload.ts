@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
     ipcRenderer.invoke('calendar:update', id, patch),
   removeCalendar: (id: string) => ipcRenderer.invoke('calendar:remove', id),
   setSelfEmails: (emails: string[]) => ipcRenderer.invoke('config:setSelfEmails', emails),
+  chooseMeetingForConflict: (chosenId: string) => ipcRenderer.invoke('meeting:conflict:choose', chosenId),
   seedDemoData: () => ipcRenderer.invoke('seed:demo'),
   clearDemoData: () => ipcRenderer.invoke('seed:clear'),
 
@@ -103,7 +104,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 
   // Events from main → renderer
   on: (channel: string, cb: (...args: any[]) => void) => {
-    const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'whisper:progress', 'tasks:reprioritized', 'jira:auto-synced', 'pipeline:error', 'audio:health'];
+    const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'jira:auto-synced', 'pipeline:error', 'audio:health'];
     if (allowed.includes(channel)) {
       ipcRenderer.on(channel, (_event, ...args) => cb(...args));
     }

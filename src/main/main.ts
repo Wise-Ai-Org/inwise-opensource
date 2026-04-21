@@ -47,6 +47,15 @@ const AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS = 60 * 1000;
 let lastMicFailureNotifiedAt = 0;
 let lastSysAudioFailureNotifiedAt = 0;
 
+// Meeting conflict detection (US-006)
+const MEETING_CONFLICT_WINDOW_MS = 90 * 1000;
+const MEETING_CONFLICT_AUTO_SELECT_MS = 30 * 1000;
+type MeetingEvent = { id: string; title: string; startTime: Date; endTime: Date; attendees: string[]; meetingLink?: string; sourceCalendarId?: string };
+let lastMeetingStarting: { event: MeetingEvent; at: number } | null = null;
+let pendingConflict:
+  | { active: MeetingEvent; incoming: MeetingEvent; timer: NodeJS.Timeout }
+  | null = null;
+
 // ── Windows ───────────────────────────────────────────────────────────────────
 
 function createMainWindow(): void {
@@ -700,6 +709,14 @@ ipcMain.handle('config:setSelfEmails', (_e, emails: string[]) => {
   log('info', 'config:setSelfEmails', `count=${clean.length}`);
   return clean;
 });
+ipcMain.handle('meeting:conflict:choose', (_e, chosenId: string) => {
+  if (!pendingConflict) return { ok: false, reason: 'no-pending-conflict' };
+  const { active, incoming } = pendingConflict;
+  const winner = chosenId === active.id ? active : chosenId === incoming.id ? incoming : null;
+  if (!winner) return { ok: false, reason: 'invalid-id' };
+  resolveMeetingConflict(winner, 'user-selected');
+  return { ok: true };
+});
 ipcMain.handle('calendar:getEvents', () => {
   return calendarWatcher.getUpcomingEvents().map(e => ({
     ...e,
@@ -1272,14 +1289,128 @@ calendarWatcher.on('events-updated', async (events: any[]) => {
   }
 });
 
-calendarWatcher.on('meeting-starting', (event: any) => {
-  createOverlayWindow(event.title);
+calendarWatcher.on('meeting-starting', (event: MeetingEvent) => {
+  const now = Date.now();
+  const hasRecentStart =
+    !!lastMeetingStarting &&
+    lastMeetingStarting.event.id !== event.id &&
+    now - lastMeetingStarting.at <= MEETING_CONFLICT_WINDOW_MS;
+  const isConflict = (isRecordingActive || hasRecentStart) && !!lastMeetingStarting && lastMeetingStarting.event.id !== event.id;
+
+  if (isConflict && pendingConflict) {
+    // A third meeting-starting arrived while we're still awaiting a decision.
+    // We only support binary modal resolution — log and drop, but do still
+    // leave the event in the upcoming list for the user to record manually.
+    log('warn', 'calendar-watcher:conflict', `extra meeting ignored while conflict pending: "${event.title}"`);
+    return;
+  }
+
+  if (isConflict) {
+    handleMeetingConflict(lastMeetingStarting!.event, event);
+    lastMeetingStarting = { event, at: now };
+    return;
+  }
+
+  startMeetingRecording(event);
+  lastMeetingStarting = { event, at: now };
+});
+
+function startMeetingRecording(event: MeetingEvent): void {
+  createOverlayWindow(event.title, event.id);
   updateTrayMenu(mainWindow!, true);
   isRecordingActive = true;
   lastMicFailureNotifiedAt = 0;
   lastSysAudioFailureNotifiedAt = 0;
   mainWindow?.webContents.send('badge:show', event.title);
-});
+}
+
+function serializeMeetingEvent(event: MeetingEvent) {
+  return {
+    id: event.id,
+    title: event.title,
+    startTime: event.startTime instanceof Date ? event.startTime.getTime() : event.startTime,
+    endTime: event.endTime instanceof Date ? event.endTime.getTime() : event.endTime,
+    attendees: event.attendees ?? [],
+    meetingLink: event.meetingLink,
+    sourceCalendarId: event.sourceCalendarId,
+  };
+}
+
+function pickConflictWinner(a: MeetingEvent, b: MeetingEvent): MeetingEvent {
+  const scoreA = (a.attendees ?? []).filter((at) => isSelf(at)).length;
+  const scoreB = (b.attendees ?? []).filter((at) => isSelf(at)).length;
+  if (scoreA !== scoreB) return scoreA > scoreB ? a : b;
+  const tA = a.startTime instanceof Date ? a.startTime.getTime() : Number(a.startTime);
+  const tB = b.startTime instanceof Date ? b.startTime.getTime() : Number(b.startTime);
+  if (tA !== tB) return tA < tB ? a : b;
+  return a;
+}
+
+function handleMeetingConflict(active: MeetingEvent, incoming: MeetingEvent): void {
+  log('info', 'calendar-watcher:conflict', `detected active="${active.title}" incoming="${incoming.title}"`);
+  const payload = {
+    active: serializeMeetingEvent(active),
+    incoming: serializeMeetingEvent(incoming),
+    autoSelectMs: MEETING_CONFLICT_AUTO_SELECT_MS,
+  };
+
+  const canShowModal =
+    !!mainWindow &&
+    !mainWindow.isDestroyed() &&
+    mainWindow.isVisible() &&
+    !mainWindow.isMinimized();
+
+  if (canShowModal) {
+    mainWindow!.webContents.send('meeting:conflict', payload);
+  } else {
+    // Still queue the modal for when the user opens the window…
+    mainWindow?.webContents.send('meeting:conflict', payload);
+    // …and surface a native notification so they know to decide.
+    if (Notification.isSupported()) {
+      const n = new Notification({
+        title: 'Meeting conflict',
+        body: `"${active.title}" vs "${incoming.title}" — picking one automatically in ${MEETING_CONFLICT_AUTO_SELECT_MS / 1000}s.`,
+        actions: [
+          { type: 'button', text: `Record "${active.title}"` },
+          { type: 'button', text: `Record "${incoming.title}"` },
+        ],
+      });
+      n.on('action', (_e, index) => {
+        const winner = index === 1 ? incoming : active;
+        resolveMeetingConflict(winner, 'user-selected');
+      });
+      n.on('click', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      });
+      n.show();
+    }
+  }
+
+  const timer = setTimeout(() => {
+    const winner = pickConflictWinner(active, incoming);
+    resolveMeetingConflict(winner, 'auto-selected');
+  }, MEETING_CONFLICT_AUTO_SELECT_MS);
+
+  pendingConflict = { active, incoming, timer };
+}
+
+function resolveMeetingConflict(winner: MeetingEvent, reason: 'auto-selected' | 'user-selected'): void {
+  if (!pendingConflict) return;
+  const { active, incoming, timer } = pendingConflict;
+  clearTimeout(timer);
+  pendingConflict = null;
+
+  const passedOver = winner.id === active.id ? incoming : active;
+  log('info', 'calendar-watcher:conflict', `recording="${winner.title}" passed-over="${passedOver.title}" reason=${reason}`);
+  mainWindow?.webContents.send('meeting:conflict:resolved', { chosenId: winner.id, reason });
+
+  if (winner.id !== active.id) {
+    startMeetingRecording(winner);
+  }
+}
 
 calendarWatcher.on('meeting-reminder', (event: any) => {
   // System notification
