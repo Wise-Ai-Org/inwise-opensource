@@ -64,6 +64,11 @@ export class CalendarWatcher extends EventEmitter {
     return { ...this.health };
   }
 
+  /** Force an immediate re-poll (e.g. after a calendar is added, toggled, or removed). */
+  async refresh(): Promise<void> {
+    await this.poll();
+  }
+
   async testUrl(url: string): Promise<{ ok: boolean; eventCount: number; error?: string }> {
     try {
       const events = await fetchIcsEvents(url, '__test__');

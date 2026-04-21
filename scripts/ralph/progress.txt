@@ -65,3 +65,27 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - In `getSuggestedPeople`, the self-check must run on the raw `attendee` string *before* lowercasing to the map key. Placing the guard after `const key = attendee.toLowerCase()` still works but wastes the allocation; more importantly, keeping the guard first makes it obvious the self path is a short-circuit, not a tail-end filter.
   - `autoEnrollVoices`'s `const userName = config.userName?.trim()` survived because the early-return is semantically about "can we label speaker 0 at all", not about self-filtering. Don't collapse that into `isSelf` — they answer different questions.
 ---
+
+## 2026-04-21 12:05 PDT - US-004
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Replaced the two fixed `IcsField` components in `src/renderer/Settings.tsx` with a `CalendarList` + `CalendarRowView` pair. Removed `IcsField` entirely.
+- Each row: label input (debounced 500ms + save-on-blur), provider `<select>` (Google/Outlook/Other → 'google'/'outlook'/'ics'), URL input (debounced+blur), "Enabled" checkbox (saves immediately), Test, Delete.
+- Test wires to existing `inwiseAPI.testCalendarUrl` — the event-count/error message renders inline directly under the URL row.
+- `+ Add calendar` appends a blank row server-side via `inwiseAPI.addCalendar({ label:'', provider:'ics', url:'', enabled:true })`; the returned `id` is tracked in a `newlyAddedId` state that the child row consumes to auto-focus the label input on mount.
+- Empty state: dashed-border placeholder with copy "Add your first calendar to get started — paste a secret ICS link from your calendar settings."
+- `CalendarStatus` left untouched — the aggregation it already showed (ok/error/no-url + `eventCount` + `lastError`) is already "total event count + any-failing flag" per the PRD; `lastError` is populated whenever any single calendar fails even if others succeed (see calendar-watcher health rollup).
+- Delete uses `window.confirm` with explicit warning that events from that calendar will disappear from the upcoming list.
+- Added three new IPC handlers in `main.ts` — `calendar:add`, `calendar:update`, `calendar:remove` (plus `calendar:list`) — each calls `calendarWatcher.refresh()` so toggling a calendar off removes its events on the NEXT poll cycle within seconds, not at the 5-minute interval.
+- Added a public `refresh()` method on `CalendarWatcher` that awaits `poll()`.
+- `src/main/preload.ts` exposes `listCalendars`, `addCalendar`, `updateCalendar`, `removeCalendar`.
+- Removed `googleIcsUrl` and `outlookIcsUrl` from the renderer `Config` interface — they stay in the backend store (used by the migration path only), but the Settings form no longer reads/writes them.
+- Files changed: `src/main/calendar-watcher.ts`, `src/main/main.ts`, `src/main/preload.ts`, `src/renderer/Settings.tsx`.
+- Quality: both `tsc --noEmit` targets pass; `npm run build:renderer` (webpack) compiles successfully.
+- Browser verification: not applicable — this is an Electron app whose renderer runs inside a BrowserWindow, not a standalone web page the `dev-browser` skill can navigate to. Typecheck + webpack build are the real signals here; interactive testing needs `npm start`.
+- **Learnings for future iterations:**
+  - Because we post to main via IPC for every calendar mutation, the calendar list state lives primarily in the main store (`electron-store`) — the renderer mirrors it with optimistic updates. Don't try to round-trip through the existing `config:get`/`config:set` path: the `calendars[]` array is large/nested enough that per-row `updateCalendar(id, patch)` is much cleaner than serializing the whole array through setConfig.
+  - `calendarWatcher.refresh()` is now load-bearing for "toggle off and events disappear". If you add other mutation paths (e.g. bulk import from a file), call `refresh()` there too — otherwise users wait up to 5 minutes for the poll to reflect their change.
+  - The renderer's `Config` type is *not* the same shape as `src/main/config.ts`'s `Config`. The renderer uses a narrow subset — don't synchronize them; instead, add fields only if the UI needs them. US-005 will add `selfEmails` to the renderer type for the chip editor.
+  - The legacy `googleIcsUrl`/`outlookIcsUrl` fields stay in the backend Config (marked `@deprecated`) so `migrateLegacyCalendars()` can still seed calendars[] for users upgrading from pre-US-001 builds. The renderer does not need to know they exist, and removing them from the renderer Config keeps us from accidentally wiping them via `setConfig(config)` on Save.
+  - Per-row auto-focus needs a *ref passed to the input*, set in an effect that fires when `autoFocus` becomes true for that row. Don't try to focus inside the parent's add handler — React hasn't mounted the new row yet at that point.
+---

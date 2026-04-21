@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
-import { getConfig, setConfig, migrateLegacyCalendars } from './config';
+import { getConfig, setConfig, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
@@ -674,6 +674,26 @@ ipcMain.handle('seed:clear', async () => {
 
 ipcMain.handle('calendar:testUrl', (_e, url: string) => calendarWatcher.testUrl(url));
 ipcMain.handle('calendar:health', () => calendarWatcher.getHealth());
+
+ipcMain.handle('calendar:list', () => listCalendars());
+ipcMain.handle('calendar:add', async (_e, row: Omit<CalendarSubscription, 'id'>) => {
+  const created = addCalendar(row);
+  log('info', 'calendar:add', `id=${created.id} label="${created.label}" provider=${created.provider}`);
+  calendarWatcher.refresh();
+  return created;
+});
+ipcMain.handle('calendar:update', async (_e, id: string, patch: Partial<Omit<CalendarSubscription, 'id'>>) => {
+  const updated = updateCalendar(id, patch);
+  log('info', 'calendar:update', `id=${id} patch=${JSON.stringify(Object.keys(patch))}`);
+  calendarWatcher.refresh();
+  return updated;
+});
+ipcMain.handle('calendar:remove', async (_e, id: string) => {
+  removeCalendar(id);
+  log('info', 'calendar:remove', `id=${id}`);
+  calendarWatcher.refresh();
+  return true;
+});
 ipcMain.handle('calendar:getEvents', () => {
   return calendarWatcher.getUpcomingEvents().map(e => ({
     ...e,

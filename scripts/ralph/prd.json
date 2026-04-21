@@ -81,8 +81,8 @@
         "Verify in browser using dev-browser skill: open Settings, add a calendar with an invalid URL, confirm error inline; add one with a valid test URL, confirm event count shown; toggle off and confirm removal from upcoming list"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Replaced the two fixed IcsField components in src/renderer/Settings.tsx with a new CalendarList component + CalendarRowView sub-component. Each row renders: label input (debounced save 500ms, save-on-blur), provider dropdown (Google/Outlook/Other → 'google'/'outlook'/'ics'), URL input (same debounced+on-blur save pattern), Enabled checkbox (saves immediately via onPatch), Test button (wires to existing testCalendarUrl), Delete button (with confirm dialog). '+ Add calendar' appends a new empty row via addCalendar and auto-focuses the label input on the new row. Empty state: dashed-border placeholder with 'Add your first calendar to get started — paste a secret ICS link from your calendar settings.' CalendarStatus component unchanged — already aggregates across all enabled calendars via the health object's status/eventCount/lastError. Added three new IPC handlers in main.ts — calendar:add, calendar:update, calendar:remove (plus calendar:list) — each logs and calls calendarWatcher.refresh() so toggling a calendar off removes its events from the next upcoming list without waiting for the 5-minute interval. Added a public refresh() method on CalendarWatcher that wraps poll(). Preload bridge exposes listCalendars/addCalendar/updateCalendar/removeCalendar. The renderer Config interface no longer references googleIcsUrl/outlookIcsUrl (still in electron-store for backwards-compat/audit, only migration reads them). After migration (US-001), users see one pre-populated row per legacy URL because migrateLegacyCalendars() seeded calendars[] during app start. Both main and renderer tsc --noEmit pass; webpack renderer build completes successfully. Electron app — dev-browser skill not applicable (renderer runs inside BrowserWindow, not a web browser)."
     },
     {
       "id": "US-005",

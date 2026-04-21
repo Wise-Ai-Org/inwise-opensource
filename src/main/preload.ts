@@ -10,6 +10,12 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   getCalendarEvents: () => ipcRenderer.invoke('calendar:getEvents'),
   getActiveCalendarEvent: () => ipcRenderer.invoke('calendar:active-event'),
   getCalendarHealth: () => ipcRenderer.invoke('calendar:health'),
+  listCalendars: () => ipcRenderer.invoke('calendar:list'),
+  addCalendar: (row: { label: string; provider: 'google' | 'outlook' | 'ics'; url: string; enabled: boolean }) =>
+    ipcRenderer.invoke('calendar:add', row),
+  updateCalendar: (id: string, patch: Partial<{ label: string; provider: 'google' | 'outlook' | 'ics'; url: string; enabled: boolean }>) =>
+    ipcRenderer.invoke('calendar:update', id, patch),
+  removeCalendar: (id: string) => ipcRenderer.invoke('calendar:remove', id),
   seedDemoData: () => ipcRenderer.invoke('seed:demo'),
   clearDemoData: () => ipcRenderer.invoke('seed:clear'),
 
