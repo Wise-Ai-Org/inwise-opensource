@@ -484,8 +484,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
     // Keep audio file on failure so user can retry — delete only on success
     return;
   }
-  // Success — clean up temp audio
-  fs.unlink(audioPath, () => {});
+  // Recording preserved on success and failure — user explicitly requested retention.
 }
 
 function getAudioDuration(filePath: string): number {
@@ -1215,7 +1214,9 @@ ipcMain.on('recording:audio-data', async (_e, { buffer, title, calendarEventId, 
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   isRecordingActive = false;
   try {
-    const tmpPath = path.join(os.tmpdir(), `inwise-rec-${Date.now()}.wav`);
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+    if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
+    const tmpPath = path.join(recordingsDir, `inwise-rec-${Date.now()}.wav`);
     fs.writeFileSync(tmpPath, buffer);
     updateTrayMenu(mainWindow!, false);
     // Look up attendees from the calendar event if available
