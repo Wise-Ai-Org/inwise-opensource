@@ -110,10 +110,12 @@ export default function Badge() {
   const hasStereoRef = useRef(false);
   const stopRecordingRef = useRef<() => void>(() => {});
   const titleRef = useRef<string>('Meeting');
+  const calendarEventIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    (window as any).inwiseAPI.on('recording:start', (title: string) => {
+    (window as any).inwiseAPI.on('recording:start', (title: string, calendarEventId?: string) => {
       titleRef.current = title;
+      calendarEventIdRef.current = calendarEventId;
       setState({ status: 'recording', title });
       startRef.current = Date.now();
       startMic(title);
@@ -229,6 +231,7 @@ export default function Badge() {
     (window as any).electronAPI?.sendAudio({
       buffer: new Uint8Array(wav),
       title: titleRef.current,
+      calendarEventId: calendarEventIdRef.current,
       stereo: hasStereoRef.current,
     });
 

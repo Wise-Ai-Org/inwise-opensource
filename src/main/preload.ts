@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   // Calendar
   testCalendarUrl: (url: string) => ipcRenderer.invoke('calendar:testUrl', url),
   getCalendarEvents: () => ipcRenderer.invoke('calendar:getEvents'),
+  getActiveCalendarEvent: () => ipcRenderer.invoke('calendar:active-event'),
   getCalendarHealth: () => ipcRenderer.invoke('calendar:health'),
   seedDemoData: () => ipcRenderer.invoke('seed:demo'),
   clearDemoData: () => ipcRenderer.invoke('seed:clear'),
@@ -73,7 +74,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
     ipcRenderer.invoke('ai:suggestTaskFields', data),
 
   // Recording (manual)
-  startRecording: (title: string) => ipcRenderer.invoke('recording:start', title),
+  startRecording: (title: string, calendarEventId?: string) =>
+    ipcRenderer.invoke('recording:start', title, calendarEventId),
   stopRecording: () => ipcRenderer.invoke('recording:stop'),
 
   // Whisper setup

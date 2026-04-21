@@ -47,3 +47,24 @@ Started: Mon Apr 20 19:57:07 PDT 2026
   - Per-id transient UI state (inline errors, missing-audio flags) works well as `Record<string, T>` + `Record<string, number>` timer map; don't add an effect when a ref-keyed `setTimeout` will do.
   - `var(--red)` is the project-wide error color; `var(--teal)` is the accent.
 ---
+
+## 2026-04-20 20:10 PDT - US-003
+- Added calendar:active-event IPC and threaded calendarEventId from Sidebar → main → Badge → recording:audio-data.
+- Files changed:
+  - `src/main/main.ts` — new `ipcMain.handle('calendar:active-event')` returns the single cached event where `startTime <= now` and `endTime >= now` (falls back to `startTime + 90min` when endTime is missing or not greater than startTime); times serialized to epoch ms like `calendar:getEvents`. `recording:start` IPC handler now accepts optional `calendarEventId`; `createOverlayWindow(title, calendarEventId)` forwards both args on both the `did-finish-load` path and the already-open-overlay path.
+  - `src/main/preload.ts` — added `getActiveCalendarEvent()`; `startRecording` now takes `(title, calendarEventId?)`.
+  - `src/main/badge-preload.ts` — `sendAudio` payload type extended with `stereo?: boolean` (already flowing at runtime but was missing from the type).
+  - `src/renderer/Sidebar.tsx` — `startRecording` now awaits `getActiveCalendarEvent()` before IPC: auto-fills title from `activeEvent.title` when the user hasn't typed one; passes `activeEvent.id` to `startRecording` as second arg.
+  - `src/renderer/Badge.tsx` — new `calendarEventIdRef`; `recording:start` handler reads second arg; `sendAudio` payload now includes `calendarEventId`.
+- Quality checks:
+  - `npx tsc -p tsconfig.main.json --noEmit` → exit 0.
+  - `npx tsc -p tsconfig.renderer.json --noEmit` → exit 0.
+- Browser verification: deferred — dev-browser skill not loaded. End-to-end path (calendar event active → click Record Meeting → voice-enroll:auto log + new voiceprints.db row for other attendee) requires manual Electron run.
+- **Learnings for future iterations:**
+  - `recording:audio-data` in main.ts already resolves attendees via `calendarWatcher.getUpcomingEvents().find(e => e.id === calendarEventId)?.attendees` — downstream voice-enroll pipeline triggers purely from that ID, so threading it through is sufficient. Don't duplicate the attendee lookup in the renderer.
+  - Two code paths fire `recording:start` to the Badge window: `did-finish-load` (first open) and the early-return branch when the overlay already exists. Both must pass the same args or you'll get a stale ref on the second recording.
+  - `ipcRenderer.on` forwards `...args` through the contextBridge `on` shim in preload; adding a second positional arg is backward-compatible because existing handlers ignore extra args.
+  - `CalendarEvent.endTime` is always a `Date` per the TS interface, but ICS all-day/zero-duration events can produce `endTime <= startTime` — use `rawEnd > start ? rawEnd : start + 90*60_000` to stay robust.
+  - Badge ref pattern: store per-recording mutable config (title, calendarEventId) in `useRef` set from the `recording:start` event, read at send time — React state isn't needed since the UI doesn't render these.
+  - The `sendAudio` payload type in `badge-preload.ts` is authoritative for the renderer-side call; mismatches silently pass because it's behind `contextBridge` + `(window as any)`. Update the type when changing the payload shape.
+---

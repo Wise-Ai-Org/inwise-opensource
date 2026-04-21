@@ -101,12 +101,19 @@ export default function Sidebar({ activeView, onNavigate }: Props) {
   }, []);
 
   const startRecording = async () => {
-    const t = title.trim() || 'Meeting';
+    let activeEvent: { id: string; title: string } | null = null;
+    try {
+      activeEvent = await (window as any).inwiseAPI?.getActiveCalendarEvent();
+    } catch {
+      activeEvent = null;
+    }
+    const typed = title.trim();
+    const t = typed || activeEvent?.title || 'Meeting';
     setShowTitleInput(false);
     setTitle('');
     setReceived(false);
     setRecording(true);
-    await (window as any).inwiseAPI?.startRecording(t);
+    await (window as any).inwiseAPI?.startRecording(t, activeEvent?.id);
   };
 
   const stopRecording = async () => {

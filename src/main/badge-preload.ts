@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 });
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  sendAudio: (payload: { buffer: Buffer; title: string; calendarEventId?: string }) => {
+  sendAudio: (payload: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
     ipcRenderer.send('recording:audio-data', payload);
   },
 });

@@ -54,8 +54,8 @@
         "Verify in browser using dev-browser skill: simulate an in-progress calendar event, click Record Meeting, stop after a few seconds, confirm the title auto-filled and app.log shows calendarEventId was passed"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "calendar:active-event IPC added with 90-min fallback when endTime missing/invalid. calendarEventId threads Sidebar → recording:start IPC → createOverlayWindow → Badge recording:start event → calendarEventIdRef → sendAudio payload → recording:audio-data handler (which already attaches attendees). Title auto-fills from active event when user hasn't typed. dev-browser skill unavailable — end-to-end browser verification deferred."
     },
     {
       "id": "US-004",

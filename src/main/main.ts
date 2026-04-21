@@ -70,9 +70,9 @@ function createMainWindow(): void {
   });
 }
 
-function createOverlayWindow(title: string): void {
+function createOverlayWindow(title: string, calendarEventId?: string): void {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.webContents.send('recording:start', title);
+    overlayWindow.webContents.send('recording:start', title, calendarEventId);
     return;
   }
 
@@ -95,7 +95,7 @@ function createOverlayWindow(title: string): void {
 
   overlayWindow.loadFile(path.join(__dirname, '../../dist/renderer/badge.html'));
   overlayWindow.webContents.once('did-finish-load', () => {
-    overlayWindow?.webContents.send('recording:start', title);
+    overlayWindow?.webContents.send('recording:start', title, calendarEventId);
   });
 }
 
@@ -680,6 +680,23 @@ ipcMain.handle('calendar:getEvents', () => {
   }));
 });
 
+ipcMain.handle('calendar:active-event', () => {
+  const now = Date.now();
+  const FALLBACK_DURATION_MS = 90 * 60_000;
+  const active = calendarWatcher.getUpcomingEvents().find(e => {
+    const start = e.startTime.getTime();
+    const rawEnd = e.endTime?.getTime();
+    const end = rawEnd && rawEnd > start ? rawEnd : start + FALLBACK_DURATION_MS;
+    return start <= now && end >= now;
+  });
+  if (!active) return null;
+  return {
+    ...active,
+    startTime: active.startTime.getTime(),
+    endTime: active.endTime.getTime(),
+  };
+});
+
 // Meetings
 ipcMain.handle('db:getMeetings', async () => getMeetings());
 ipcMain.handle('db:getMeeting', async (_e, id) => getMeeting(id));
@@ -1137,8 +1154,8 @@ ipcMain.handle('jira:matchTasks', async (_e, items: any[], projectKey?: string) 
 });
 
 // Recording
-ipcMain.handle('recording:start', (_e, title: string) => {
-  createOverlayWindow(title);
+ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string) => {
+  createOverlayWindow(title, calendarEventId);
   updateTrayMenu(mainWindow!, true);
   return true;
 });
