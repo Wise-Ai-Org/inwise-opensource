@@ -3,6 +3,7 @@ import { app } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
 import Datastore from '@seald-io/nedb';
 import { getConfig } from './config';
+import { isSelf } from './self-identity';
 
 let meetingsDb: Datastore;
 let tasksDb: Datastore;
@@ -392,7 +393,6 @@ export async function getPerson(id: string): Promise<any> {
   }));
 
   // Only show action items owned by the person or the logged-in user
-  const currentUserName = (getConfig().userName || '').toLowerCase();
   const pendingActionItems = communications
     .flatMap((c: any) => c.actionItems)
     .filter((item: any) => {
@@ -401,7 +401,7 @@ export async function getPerson(id: string): Promise<any> {
       if (!owner) return true; // unassigned items are relevant
       return owner.includes(personName) || personName.includes(owner) ||
              owner.includes(personEmail) || personEmail.includes(owner) ||
-             (currentUserName && (owner.includes(currentUserName) || currentUserName.includes(owner)));
+             isSelf(owner);
     });
 
   // Aggregate commitments made by this person across all meetings
@@ -550,9 +550,6 @@ export async function getSuggestedPeople(): Promise<any[]> {
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const recentMeetings = await (meetingsDb as any).findAsync({ date: { $gte: sevenDaysAgo } });
 
-  // Current user name for self-exclusion
-  const userName = (getConfig().userName || '').toLowerCase();
-
   // Already-tracked people for exclusion
   const allPeople = await peopleDb.findAsync({ archived: { $ne: true } });
   const trackedNames = new Set(allPeople.map((p: any) => (p.name || '').toLowerCase()));
@@ -560,9 +557,9 @@ export async function getSuggestedPeople(): Promise<any[]> {
   const frequency: Record<string, { name: string; count: number; meetings: any[] }> = {};
   for (const m of recentMeetings) {
     for (const attendee of (m.attendees || [])) {
+      // Exclude current user across all their aliases
+      if (isSelf(attendee)) continue;
       const key = attendee.toLowerCase();
-      // Exclude current user
-      if (userName && key === userName) continue;
       if (!frequency[key]) frequency[key] = { name: attendee, count: 0, meetings: [] };
       frequency[key].count++;
       frequency[key].meetings.push({ _id: m._id, title: m.title, date: m.date });

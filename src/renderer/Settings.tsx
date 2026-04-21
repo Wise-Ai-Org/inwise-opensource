@@ -4,14 +4,23 @@ interface Config {
   apiProvider: 'anthropic' | 'openai';
   apiKey: string;
   whisperModel: 'tiny' | 'base' | 'small' | 'medium';
-  googleIcsUrl: string;
-  outlookIcsUrl: string;
   micDeviceId: string;
   userName: string;
+  selfEmails: string[];
   jiraClientId: string;
   jiraClientSecret: string;
   jiraAutoPush: boolean;
   jiraDefaultProject: string;
+}
+
+type CalendarProviderUI = 'google' | 'outlook' | 'ics';
+
+interface CalendarRow {
+  id: string;
+  label: string;
+  provider: CalendarProviderUI;
+  url: string;
+  enabled: boolean;
 }
 
 interface VoicePrintInfo {
@@ -116,79 +125,208 @@ function formatAgo(epochMs: number): string {
   return `${Math.floor(diffSec / 86400)}d ago`;
 }
 
-function IcsField({
-  label,
-  value,
-  onChange,
-  placeholder,
-  steps,
-  syncNote,
+function CalendarRowView({
+  row,
+  autoFocus,
+  onPatch,
+  onRemove,
 }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder: string;
-  steps: string[];
-  syncNote?: string;
+  row: CalendarRow;
+  autoFocus: boolean;
+  onPatch: (id: string, patch: Partial<Omit<CalendarRow, 'id'>>) => void;
+  onRemove: (id: string) => void;
 }) {
-  const [status, setStatus] = useState<TestStatus>('idle');
-  const [statusMsg, setStatusMsg] = useState('');
+  const [label, setLabel] = useState(row.label);
+  const [url, setUrl] = useState(row.url);
+  const [testStatus, setTestStatus] = useState<TestStatus>('idle');
+  const [testMsg, setTestMsg] = useState('');
+  const labelDebouncer = useRef<number | null>(null);
+  const urlDebouncer = useRef<number | null>(null);
+  const labelInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (autoFocus && labelInputRef.current) {
+      labelInputRef.current.focus();
+    }
+  }, [autoFocus]);
+
+  useEffect(() => {
+    return () => {
+      if (labelDebouncer.current) window.clearTimeout(labelDebouncer.current);
+      if (urlDebouncer.current) window.clearTimeout(urlDebouncer.current);
+    };
+  }, []);
+
+  const debouncedSave = (key: 'label' | 'url', value: string) => {
+    const ref = key === 'label' ? labelDebouncer : urlDebouncer;
+    if (ref.current) window.clearTimeout(ref.current);
+    ref.current = window.setTimeout(() => onPatch(row.id, { [key]: value } as any), 500);
+  };
 
   const test = async () => {
-    if (!value.trim()) return;
-    setStatus('testing');
-    setStatusMsg('');
-    const result = await (window as any).inwiseAPI.testCalendarUrl(value.trim());
+    if (!url.trim()) return;
+    setTestStatus('testing');
+    setTestMsg('');
+    const result = await (window as any).inwiseAPI.testCalendarUrl(url.trim());
     if (result.ok) {
-      setStatus('ok');
-      setStatusMsg(`Connected — ${result.eventCount} upcoming event${result.eventCount !== 1 ? 's' : ''} found`);
+      setTestStatus('ok');
+      setTestMsg(`Connected — ${result.eventCount} upcoming event${result.eventCount !== 1 ? 's' : ''} found`);
     } else {
-      setStatus('error');
-      setStatusMsg(result.error || 'Could not read calendar. Double-check the URL.');
+      setTestStatus('error');
+      setTestMsg(result.error || 'Could not read calendar. Double-check the URL.');
     }
   };
 
-  const statusColor = status === 'ok' ? 'var(--teal)' : status === 'error' ? 'var(--red)' : 'var(--slate-500)';
+  const statusColor = testStatus === 'ok' ? 'var(--teal)' : testStatus === 'error' ? 'var(--red)' : 'var(--slate-500)';
 
   return (
-    <div style={{ marginBottom: 24 }}>
-      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--navy)', marginBottom: 10 }}>{label}</div>
+    <div style={{
+      padding: 14,
+      marginBottom: 12,
+      border: '1px solid var(--slate-200)',
+      borderRadius: 8,
+      background: row.enabled ? 'white' : 'var(--slate-50)',
+    }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+        <input
+          ref={labelInputRef}
+          className="form-input"
+          style={{ flex: 1, fontWeight: 600 }}
+          value={label}
+          onChange={e => { setLabel(e.target.value); debouncedSave('label', e.target.value); }}
+          onBlur={() => {
+            if (labelDebouncer.current) window.clearTimeout(labelDebouncer.current);
+            onPatch(row.id, { label });
+          }}
+          placeholder="Calendar name (e.g. Work, Personal)"
+        />
+        <select
+          className="form-select"
+          style={{ width: 120, flexShrink: 0 }}
+          value={row.provider}
+          onChange={e => onPatch(row.id, { provider: e.target.value as CalendarProviderUI })}
+        >
+          <option value="google">Google</option>
+          <option value="outlook">Outlook</option>
+          <option value="ics">Other</option>
+        </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>
+          <input
+            type="checkbox"
+            checked={row.enabled}
+            onChange={e => onPatch(row.id, { enabled: e.target.checked })}
+          />
+          <span style={{ fontSize: 13, color: 'var(--slate-700)' }}>Enabled</span>
+        </label>
+      </div>
 
-      <ol style={{ paddingLeft: 18, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {steps.map((step, i) => (
-          <li key={i} style={{ fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.5 }}
-            dangerouslySetInnerHTML={{ __html: step }} />
-        ))}
-      </ol>
-
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <input
           className="form-input"
           style={{ flex: 1 }}
-          value={value}
-          onChange={e => { onChange(e.target.value); setStatus('idle'); }}
-          placeholder={placeholder}
+          value={url}
+          onChange={e => { setUrl(e.target.value); setTestStatus('idle'); debouncedSave('url', e.target.value); }}
+          onBlur={() => {
+            if (urlDebouncer.current) window.clearTimeout(urlDebouncer.current);
+            onPatch(row.id, { url });
+          }}
+          placeholder="https://… (paste your secret ICS link)"
         />
         <button
           className="btn btn-secondary btn-sm"
           onClick={test}
-          disabled={!value.trim() || status === 'testing'}
+          disabled={!url.trim() || testStatus === 'testing'}
           style={{ flexShrink: 0 }}
         >
-          {status === 'testing' ? 'Testing…' : 'Test'}
+          {testStatus === 'testing' ? 'Testing…' : 'Test'}
+        </button>
+        <button
+          className="btn btn-secondary btn-sm"
+          onClick={() => onRemove(row.id)}
+          style={{ flexShrink: 0, color: 'var(--red)' }}
+        >
+          Delete
         </button>
       </div>
 
-      {status !== 'idle' && (
-        <div style={{ fontSize: 12, color: statusColor, marginTop: 6 }}>
-          {status === 'ok' && '✓ '}{status === 'error' && '✕ '}{statusMsg}
+      {testStatus !== 'idle' && (
+        <div style={{ fontSize: 12, color: statusColor, marginTop: 8 }}>
+          {testStatus === 'ok' && '✓ '}{testStatus === 'error' && '✕ '}{testMsg}
         </div>
       )}
-      {syncNote && (
-        <div style={{ fontSize: 12, color: 'var(--slate-400)', marginTop: 8, lineHeight: 1.5 }}>
-          ⏱ {syncNote}
+    </div>
+  );
+}
+
+function CalendarList() {
+  const [rows, setRows] = useState<CalendarRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [newlyAddedId, setNewlyAddedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    (window as any).inwiseAPI.listCalendars().then((list: CalendarRow[]) => {
+      setRows(list);
+      setLoaded(true);
+    });
+  }, []);
+
+  const handleAdd = async () => {
+    const created = await (window as any).inwiseAPI.addCalendar({
+      label: '',
+      provider: 'ics' as CalendarProviderUI,
+      url: '',
+      enabled: true,
+    });
+    setRows(prev => [...prev, created]);
+    setNewlyAddedId(created.id);
+  };
+
+  const handleRemove = async (id: string) => {
+    if (!window.confirm('Remove this calendar? Events from this calendar will disappear from your upcoming list.')) return;
+    await (window as any).inwiseAPI.removeCalendar(id);
+    setRows(prev => prev.filter(r => r.id !== id));
+  };
+
+  const handlePatch = async (id: string, patch: Partial<Omit<CalendarRow, 'id'>>) => {
+    setRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r));
+    await (window as any).inwiseAPI.updateCalendar(id, patch);
+  };
+
+  if (!loaded) return null;
+
+  return (
+    <div>
+      {rows.length === 0 ? (
+        <div style={{
+          padding: '20px 16px',
+          border: '1px dashed var(--slate-300)',
+          borderRadius: 8,
+          textAlign: 'center',
+          color: 'var(--slate-500)',
+          fontSize: 13,
+          lineHeight: 1.5,
+          marginBottom: 12,
+        }}>
+          Add your first calendar to get started — paste a secret ICS link from your calendar settings.
         </div>
+      ) : (
+        rows.map(row => (
+          <CalendarRowView
+            key={row.id}
+            row={row}
+            autoFocus={row.id === newlyAddedId}
+            onPatch={handlePatch}
+            onRemove={handleRemove}
+          />
+        ))
       )}
+      <button className="btn btn-secondary btn-sm" onClick={handleAdd}>
+        + Add calendar
+      </button>
+      <div style={{ fontSize: 12, color: 'var(--slate-400)', marginTop: 10, lineHeight: 1.5 }}>
+        ⏱ Changes to calendars refresh automatically. New events from Google can take 5–15 minutes to appear;
+        Outlook ICS feeds can take 15–60 minutes. Disabled calendars are skipped on the next poll.
+      </div>
     </div>
   );
 }
@@ -604,6 +742,161 @@ function JiraSettings({ config, update }: { config: Config; update: (key: keyof 
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function SelfEmailsEditor({ emails, onChange }: { emails: string[]; onChange: (next: string[]) => void }) {
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+  }, []);
+
+  const flashError = (msg: string) => {
+    setError(msg);
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = setTimeout(() => setError(null), 3000);
+  };
+
+  const tryAdd = (raw: string) => {
+    const candidate = raw.trim();
+    if (!candidate) return false;
+    if (!EMAIL_RE.test(candidate)) {
+      flashError(`"${candidate}" is not a valid email address`);
+      return false;
+    }
+    const lower = candidate.toLowerCase();
+    if (emails.some(e => e.toLowerCase() === lower)) {
+      return false;
+    }
+    onChange([...emails, candidate]);
+    return true;
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      if (tryAdd(draft)) {
+        setDraft('');
+      }
+    } else if (e.key === 'Backspace' && draft === '' && emails.length > 0) {
+      onChange(emails.slice(0, -1));
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    if (value.endsWith(',')) {
+      if (tryAdd(value.slice(0, -1))) {
+        setDraft('');
+      } else {
+        setDraft(value.slice(0, -1));
+      }
+    } else {
+      setDraft(value);
+    }
+  };
+
+  const handleBlur = () => {
+    if (draft.trim()) {
+      if (tryAdd(draft)) {
+        setDraft('');
+      }
+    }
+  };
+
+  const removeAt = (idx: number) => {
+    onChange(emails.filter((_, i) => i !== idx));
+  };
+
+  return (
+    <div className="form-group" style={{ marginBottom: 16 }}>
+      <label className="form-label">Your email addresses</label>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6,
+          padding: '6px 8px',
+          border: '1px solid var(--slate-300)',
+          borderRadius: 6,
+          background: 'var(--white, #fff)',
+          minHeight: 38,
+          alignItems: 'center',
+        }}
+      >
+        {emails.map((email, idx) => (
+          <span
+            key={`${email}-${idx}`}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '3px 4px 3px 10px',
+              background: 'var(--slate-100)',
+              border: '1px solid var(--slate-200)',
+              borderRadius: 999,
+              fontSize: 12,
+              color: 'var(--slate-700)',
+            }}
+          >
+            {email}
+            <button
+              type="button"
+              aria-label={`Remove ${email}`}
+              onClick={() => removeAt(idx)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                borderRadius: '50%',
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--slate-500)',
+                cursor: 'pointer',
+                fontSize: 14,
+                lineHeight: 1,
+                padding: 0,
+              }}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <input
+          type="text"
+          value={draft}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onBlur={handleBlur}
+          placeholder={emails.length === 0 ? 'you@example.com' : ''}
+          style={{
+            flex: 1,
+            minWidth: 140,
+            border: 'none',
+            outline: 'none',
+            background: 'transparent',
+            fontSize: 13,
+            padding: '4px 2px',
+            color: 'var(--slate-800)',
+          }}
+        />
+      </div>
+      {error && (
+        <span style={{ fontSize: 12, color: 'var(--red, #d33)', marginTop: 4, display: 'block' }}>
+          {error}
+        </span>
+      )}
+      <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
+        Separate from display name. Used to identify you in attendee lists across multiple calendars.
+      </span>
     </div>
   );
 }
@@ -1131,34 +1424,7 @@ export default function Settings() {
 
             <CalendarStatus />
 
-            <IcsField
-              label="Google Calendar"
-              value={config.googleIcsUrl}
-              onChange={v => update('googleIcsUrl', v)}
-              placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"
-              steps={[
-                'Open <strong>Google Calendar</strong> in your browser',
-                'Click the <strong>⚙ Settings</strong> gear (top right) → <strong>Settings</strong>',
-                'In the left panel, click your calendar name under <em>Settings for my calendars</em>',
-                'Scroll down to <strong>"Secret address in iCal format"</strong>',
-                'Click <strong>copy</strong> and paste the URL below',
-              ]}
-              syncNote="New events created in Google Calendar typically take 5–15 minutes to appear here (ICS propagation delay + 10 min app refresh)."
-            />
-
-            <IcsField
-              label="Outlook / Microsoft 365"
-              value={config.outlookIcsUrl}
-              onChange={v => update('outlookIcsUrl', v)}
-              placeholder="https://outlook.live.com/owa/calendar/…/calendar.ics"
-              steps={[
-                'Open <strong>Outlook</strong> (web or desktop)',
-                'Go to <strong>Calendar</strong> → right-click your calendar → <strong>Share</strong>',
-                'Choose <strong>"Publish this calendar"</strong> → set permissions to <em>Can view all details</em>',
-                'Copy the <strong>ICS link</strong> and paste it below',
-              ]}
-              syncNote="New events created in Outlook / Microsoft 365 can take 15–60 minutes to appear here due to ICS propagation delay."
-            />
+            <CalendarList />
           </div>
 
           {/* Jira */}
@@ -1187,6 +1453,15 @@ export default function Settings() {
                 Used to label your voice in transcripts (left/mic channel).
               </span>
             </div>
+
+            <SelfEmailsEditor
+              emails={config.selfEmails ?? []}
+              onChange={async (next) => {
+                setConfig(c => c ? { ...c, selfEmails: next } : c);
+                setSaved(false);
+                await (window as any).inwiseAPI.setSelfEmails(next);
+              }}
+            />
 
             <VoiceEnrollment />
           </div>

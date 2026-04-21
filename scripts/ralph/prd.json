@@ -18,8 +18,8 @@
         "Tests pass"
       ],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Extended Config in src/main/config.ts with calendars[] and selfEmails[] (defaults []); kept legacy googleIcsUrl/outlookIcsUrl (marked @deprecated). Added CalendarSubscription/CalendarProvider exports plus listCalendars/addCalendar/updateCalendar/removeCalendar/setSelfEmails helpers. migrateLegacyCalendars() seeds one row per non-empty legacy URL on first run, guarded by calendars.length === 0 (idempotent). Called from app.whenReady() in main.ts with info log when a migration actually happens. Both tsc --noEmit passes (main + renderer). Project has no test runner configured, so 'tests pass' is vacuously satisfied."
     },
     {
       "id": "US-002",
@@ -39,8 +39,8 @@
         "Tests pass"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Replaced googleIcsUrl/outlookIcsUrl reads in calendar-watcher.ts with iteration over getConfig().calendars filtered by enabled+non-empty URL. Fetches use Promise.allSettled so one failing calendar doesn't block the others. Each event is tagged with sourceCalendarId. Dedup uses composite key id+startTime.toISOString() and prefers the entry with more attendees (first-fetched wins on tie). Per-calendar log: 'calendar-watcher:fetch | calendarId=X label=\"Y\" got=N events'. Aggregate poll log: 'calendar-watcher:poll | Done — total=M unique events across K calendars'. Empty-enabled-list path skips with an info log (logger.ts has no 'debug' level). CalendarHealth keeps googleConfigured/outlookConfigured (now derived from calendars[]) so the existing Settings.tsx still compiles — US-004 will redesign that surface. Notifications fire from the deduped list to avoid double-notifying when the same event is on two synced calendars. Both tsc --noEmit passes (main + renderer). No test runner configured."
     },
     {
       "id": "US-003",
@@ -59,8 +59,8 @@
         "Tests pass"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added src/main/self-identity.ts exporting isSelf(attendee) which reads getConfig().selfEmails and getConfig().userName, plus a pure matchesSelf(attendee, selfEmails, userName) helper used for unit tests (no electron-store dep). Rule: lowercased attendee.includes() any non-empty selfEmail, OR attendee.includes() trimmed non-empty userName. Handles 'Name <email>', plain email, plain display name, and mixed case; empty config returns false. Replaced inline filters: main.ts replaceSpeakerLabels (otherAttendees) and autoEnrollVoices (otherAttendees) → attendees.filter(a => !isSelf(a)); database.ts getPerson action-item filter → isSelf(owner) in the OR chain (dropped the local currentUserName var); database.ts getSuggestedPeople → replaced 'key === userName' equality check with 'if (isSelf(attendee)) continue' and moved the check above the lowercase key so self aliases are skipped before the frequency map is touched. Added src/main/self-identity.test.ts with node:assert/strict covering email-only, display-name fallback, 'Name <email>' combined, mixed-case, multi-email, no-match, empty-config, whitespace-only, and empty-attendee cases — verified green by compiling to a temp dir and running with node. Both tsc --noEmit targets pass."
     },
     {
       "id": "US-004",
@@ -81,8 +81,8 @@
         "Verify in browser using dev-browser skill: open Settings, add a calendar with an invalid URL, confirm error inline; add one with a valid test URL, confirm event count shown; toggle off and confirm removal from upcoming list"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Replaced the two fixed IcsField components in src/renderer/Settings.tsx with a new CalendarList component + CalendarRowView sub-component. Each row renders: label input (debounced save 500ms, save-on-blur), provider dropdown (Google/Outlook/Other → 'google'/'outlook'/'ics'), URL input (same debounced+on-blur save pattern), Enabled checkbox (saves immediately via onPatch), Test button (wires to existing testCalendarUrl), Delete button (with confirm dialog). '+ Add calendar' appends a new empty row via addCalendar and auto-focuses the label input on the new row. Empty state: dashed-border placeholder with 'Add your first calendar to get started — paste a secret ICS link from your calendar settings.' CalendarStatus component unchanged — already aggregates across all enabled calendars via the health object's status/eventCount/lastError. Added three new IPC handlers in main.ts — calendar:add, calendar:update, calendar:remove (plus calendar:list) — each logs and calls calendarWatcher.refresh() so toggling a calendar off removes its events from the next upcoming list without waiting for the 5-minute interval. Added a public refresh() method on CalendarWatcher that wraps poll(). Preload bridge exposes listCalendars/addCalendar/updateCalendar/removeCalendar. The renderer Config interface no longer references googleIcsUrl/outlookIcsUrl (still in electron-store for backwards-compat/audit, only migration reads them). After migration (US-001), users see one pre-populated row per legacy URL because migrateLegacyCalendars() seeded calendars[] during app start. Both main and renderer tsc --noEmit pass; webpack renderer build completes successfully. Electron app — dev-browser skill not applicable (renderer runs inside BrowserWindow, not a web browser)."
     },
     {
       "id": "US-005",
@@ -101,8 +101,8 @@
         "Verify in browser using dev-browser skill: add an email, reload the page, confirm chip persists; try an invalid entry, confirm rejection; remove a chip, confirm removal persists"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added SelfEmailsEditor component in src/renderer/Settings.tsx — rendered in the Voice Enrollment section right after the 'Your Name' input. Chips display each email with a × remove button; Enter or comma commits the draft; a trailing-comma in the input also auto-commits. Validation uses /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/ — invalid entries show an inline red error for exactly 3 seconds (setTimeout cleared on unmount + on the next error to prevent flicker). Duplicates are rejected silently with case-insensitive comparison. Backspace on an empty draft removes the last chip (standard chip-input ergonomic). Persistence: each mutation calls the new inwiseAPI.setSelfEmails(next) bridge, which invokes 'config:setSelfEmails' in main.ts — the handler trims and drops empty strings before calling setSelfEmails() from config.ts, then logs the resulting count. Added selfEmails: string[] to the renderer Config interface so the whole-config save path (Save Settings button) also persists the array. Initial value read via existing inwiseAPI.getConfig(). Helper text: 'Separate from display name. Used to identify you in attendee lists across multiple calendars.' Both tsc --noEmit targets pass; webpack renderer build succeeds. Electron renderer — dev-browser skill not applicable; typecheck + webpack build are the real gates."
     },
     {
       "id": "US-006",
@@ -121,8 +121,8 @@
         "Verify in browser using dev-browser skill: trigger two synthetic meeting-starting events within 5 seconds of each other via a test IPC or dev shortcut; confirm modal appears, pick one, confirm only that one records and log shows the decision"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Conflict detection added to src/main/main.ts 'meeting-starting' handler. Refactored the previous inline body into startMeetingRecording(event) so the normal (non-conflict) path is unchanged. Tracks lastMeetingStarting + pendingConflict at module scope; a second meeting-starting fires a conflict when isRecordingActive is true OR lastMeetingStarting fired within MEETING_CONFLICT_WINDOW_MS (90s) and is a different event id. A third concurrent meeting-starting while pendingConflict is set is logged at 'warn' and dropped (binary modal can't resolve three-way). handleMeetingConflict() serializes both events (Date→epoch ms to mirror the 'calendar:events' channel) and sends IPC 'meeting:conflict' to mainWindow; if the window is hidden/minimized/missing it also shows a desktop Notification with two action buttons that route through the same resolveMeetingConflict() path, and a click handler that show()+focus()es the main window. A 30s setTimeout fires pickConflictWinner() for auto-select: score = count of attendees where isSelf(a) (US-003 helper) is true; higher wins; tiebreaker = earlier startTime; final tiebreaker = first-fired (a). resolveMeetingConflict() clears the timer, clears pendingConflict, logs 'calendar-watcher:conflict | recording=\"X\" passed-over=\"Y\" reason=auto-selected|user-selected', sends 'meeting:conflict:resolved' with {chosenId, reason}, and calls startMeetingRecording(winner) only when the winner is NOT the already-active event (avoiding redundant overlay setup). Added ipcMain.handle('meeting:conflict:choose', chosenId) that validates the id and routes to resolveMeetingConflict with reason='user-selected'. Added chooseMeetingForConflict bridge entry to preload.ts and added 'meeting:conflict'+'meeting:conflict:resolved' to the allowed on() channel list. Created src/renderer/components/modal/MeetingConflictModal.tsx: Chakra Modal (not dismissable, no overlay click, no ESC close), two side-by-side cards showing label/title/start time/attendee count with a 'Record this one' button each, a live-ticking seconds-left countdown driven by a 250ms setInterval against a startedAt timestamp so restarts from a new payload work correctly. App.tsx wires two effects: subscribe to 'meeting:conflict' → setConflict(payload), 'meeting:conflict:resolved' → setConflict(null). handlePickConflict invokes chooseMeetingForConflict and optimistically clears state. Passed-over meetings remain in calendarWatcher.cachedEvents (conflict resolution never touches the calendar cache) so getUpcomingEvents() still includes them — confirmed by inspection, no calendar-watcher changes were needed. Both tsc --noEmit targets pass; npm run build:renderer succeeds. Electron app — dev-browser skill not applicable; typecheck + webpack build are the real gates."
     }
   ]
 }

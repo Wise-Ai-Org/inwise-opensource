@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { getConfig } from './config';
+import { listCalendars } from './config';
 import { log } from './logger';
 import * as ical from 'node-ical';
 
@@ -10,6 +10,7 @@ interface CalendarEvent {
   endTime: Date;
   meetingLink?: string;
   attendees: string[];
+  sourceCalendarId: string;
 }
 
 export interface CalendarHealth {
@@ -18,7 +19,9 @@ export interface CalendarHealth {
   lastSuccessAt: number | null;
   lastError: string | null;
   eventCount: number;
+  /** @deprecated derived from calendars[]; will be removed when Settings UI is migrated */
   googleConfigured: boolean;
+  /** @deprecated derived from calendars[]; will be removed when Settings UI is migrated */
   outlookConfigured: boolean;
 }
 
@@ -61,9 +64,14 @@ export class CalendarWatcher extends EventEmitter {
     return { ...this.health };
   }
 
+  /** Force an immediate re-poll (e.g. after a calendar is added, toggled, or removed). */
+  async refresh(): Promise<void> {
+    await this.poll();
+  }
+
   async testUrl(url: string): Promise<{ ok: boolean; eventCount: number; error?: string }> {
     try {
-      const events = await fetchIcsEvents(url);
+      const events = await fetchIcsEvents(url, '__test__');
       return { ok: true, eventCount: events.length };
     } catch (e: any) {
       return { ok: false, eventCount: 0, error: classifyError(e) };
@@ -71,85 +79,108 @@ export class CalendarWatcher extends EventEmitter {
   }
 
   private async poll(): Promise<void> {
-    const config = getConfig();
-    const googleUrl = config.googleIcsUrl?.trim();
-    const outlookUrl = config.outlookIcsUrl?.trim();
+    const enabled = listCalendars().filter((c) => c.enabled && c.url.trim());
 
-    this.health.googleConfigured = !!googleUrl;
-    this.health.outlookConfigured = !!outlookUrl;
+    this.health.googleConfigured = enabled.some((c) => c.provider === 'google');
+    this.health.outlookConfigured = enabled.some((c) => c.provider === 'outlook');
 
-    const urls = [googleUrl, outlookUrl].filter(Boolean) as string[];
-    if (urls.length === 0) {
+    if (enabled.length === 0) {
       this.health.status = 'no-url';
-      log('info', 'calendar-watcher:poll', 'No calendar URLs configured — skipping');
+      log('info', 'calendar-watcher:poll', 'No enabled calendars — skipping');
       return;
     }
 
     this.health.lastPollAt = Date.now();
     const now = Date.now();
+
+    const results = await Promise.allSettled(
+      enabled.map(async (cal) => {
+        log('info', 'calendar-watcher:fetch', `calendarId=${cal.id} label="${cal.label}" fetching…`);
+        const events = await fetchIcsEventsWithTimeout(cal.url, cal.id);
+        log('info', 'calendar-watcher:fetch', `calendarId=${cal.id} label="${cal.label}" got=${events.length} events`);
+        return { cal, events };
+      }),
+    );
+
     const allEvents: CalendarEvent[] = [];
-    let hadError = false;
+    let succeeded = 0;
+    let failed = 0;
+    let lastErrorMsg: string | null = null;
 
-    for (const url of urls) {
-      const source = url.includes('google') ? 'google' : 'outlook';
-      try {
-        log('info', `calendar-watcher:fetch:${source}`, 'Fetching ICS feed…');
-        const events = await fetchIcsEventsWithTimeout(url);
-        log('info', `calendar-watcher:fetch:${source}`, `Got ${events.length} events`);
-        allEvents.push(...events);
-
-        for (const event of events) {
-          const msUntilStart = event.startTime.getTime() - now;
-          if (
-            msUntilStart >= 0 &&
-            msUntilStart <= START_WINDOW_MS &&
-            !this.notifiedIds.has(event.id)
-          ) {
-            this.notifiedIds.add(event.id);
-            log('info', 'calendar-watcher:notify', `${event.meetingLink ? 'meeting-starting' : 'meeting-reminder'}: "${event.title}" starts in ${Math.round(msUntilStart / 60_000)}m`);
-            if (event.meetingLink) {
-              this.emit('meeting-starting', event);
-            } else {
-              this.emit('meeting-reminder', event);
-            }
-          }
-        }
-      } catch (e: any) {
-        hadError = true;
-        const friendly = classifyError(e);
-        this.health.lastError = friendly;
-        log('error', `calendar-watcher:fetch:${source}`, `${friendly} | raw: ${e.message}`);
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      const cal = enabled[i];
+      if (r.status === 'fulfilled') {
+        succeeded++;
+        allEvents.push(...r.value.events);
+      } else {
+        failed++;
+        const friendly = classifyError(r.reason);
+        lastErrorMsg = friendly;
+        log('error', 'calendar-watcher:fetch', `calendarId=${cal.id} label="${cal.label}" ${friendly} | raw: ${r.reason?.message ?? r.reason}`);
       }
     }
 
-    if (!hadError) {
+    if (failed === 0) {
       this.health.status = 'ok';
       this.health.lastSuccessAt = Date.now();
       this.health.lastError = null;
-    } else if (allEvents.length > 0) {
-      // One source failed but the other worked
+    } else if (succeeded > 0) {
       this.health.status = 'ok';
       this.health.lastSuccessAt = Date.now();
+      this.health.lastError = lastErrorMsg;
     } else {
       this.health.status = 'error';
+      this.health.lastError = lastErrorMsg;
     }
 
-    this.health.eventCount = allEvents.length;
+    // De-duplicate by composite key (id + startTime ISO).
+    // On collision: prefer entry with more attendees; tie → first-fetched wins.
+    const dedup = new Map<string, CalendarEvent>();
+    for (const ev of allEvents) {
+      const key = `${ev.id}|${ev.startTime.toISOString()}`;
+      const existing = dedup.get(key);
+      if (!existing) {
+        dedup.set(key, ev);
+        continue;
+      }
+      if (ev.attendees.length > existing.attendees.length) {
+        dedup.set(key, ev);
+      }
+    }
 
-    // Deduplicate by id and sort by start time
-    const seen = new Set<string>();
-    this.cachedEvents = allEvents
-      .filter(e => { if (seen.has(e.id)) return false; seen.add(e.id); return true; })
-      .sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+    this.cachedEvents = Array.from(dedup.values()).sort(
+      (a, b) => a.startTime.getTime() - b.startTime.getTime(),
+    );
+    this.health.eventCount = this.cachedEvents.length;
 
-    log('info', 'calendar-watcher:poll', `Done — ${this.cachedEvents.length} unique events cached`);
+    // Fire start/reminder notifications from the deduped list so we don't notify twice
+    // when the same event is on two synced calendars.
+    for (const event of this.cachedEvents) {
+      const msUntilStart = event.startTime.getTime() - now;
+      if (
+        msUntilStart >= 0 &&
+        msUntilStart <= START_WINDOW_MS &&
+        !this.notifiedIds.has(event.id)
+      ) {
+        this.notifiedIds.add(event.id);
+        log('info', 'calendar-watcher:notify', `${event.meetingLink ? 'meeting-starting' : 'meeting-reminder'}: "${event.title}" starts in ${Math.round(msUntilStart / 60_000)}m`);
+        if (event.meetingLink) {
+          this.emit('meeting-starting', event);
+        } else {
+          this.emit('meeting-reminder', event);
+        }
+      }
+    }
+
+    log('info', 'calendar-watcher:poll', `Done — total=${this.cachedEvents.length} unique events across ${enabled.length} calendars`);
     this.emit('events-updated', this.cachedEvents);
   }
 }
 
 function classifyError(e: any): string {
-  const msg = (e.message || '').toLowerCase();
-  const code = e.code || '';
+  const msg = (e?.message || '').toLowerCase();
+  const code = e?.code || '';
 
   if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || msg.includes('timeout')) {
     return 'Calendar feed timed out. Check your internet connection.';
@@ -176,19 +207,19 @@ function classifyError(e: any): string {
     return 'The calendar data could not be parsed. The URL may not be a valid ICS feed.';
   }
 
-  return `Calendar sync failed: ${e.message || 'unknown error'}`;
+  return `Calendar sync failed: ${e?.message || 'unknown error'}`;
 }
 
-async function fetchIcsEventsWithTimeout(url: string): Promise<CalendarEvent[]> {
+async function fetchIcsEventsWithTimeout(url: string, calendarId: string): Promise<CalendarEvent[]> {
   return new Promise<CalendarEvent[]>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('timeout')), FETCH_TIMEOUT_MS);
-    fetchIcsEvents(url)
+    fetchIcsEvents(url, calendarId)
       .then(events => { clearTimeout(timer); resolve(events); })
       .catch(err => { clearTimeout(timer); reject(err); });
   });
 }
 
-async function fetchIcsEvents(url: string): Promise<CalendarEvent[]> {
+async function fetchIcsEvents(url: string, calendarId: string): Promise<CalendarEvent[]> {
   const data = await ical.async.fromURL(url);
   const now = new Date();
   const lookahead = new Date(now.getTime() + LOOKAHEAD_DAYS * 24 * 60 * 60_000);
@@ -251,6 +282,7 @@ async function fetchIcsEvents(url: string): Promise<CalendarEvent[]> {
           endTime: new Date(occ.getTime() + duration),
           meetingLink,
           attendees: attendeeNames,
+          sourceCalendarId: calendarId,
         });
       }
       continue;
@@ -269,6 +301,7 @@ async function fetchIcsEvents(url: string): Promise<CalendarEvent[]> {
       endTime: new Date(start.getTime() + duration),
       meetingLink,
       attendees: attendeeNames,
+      sourceCalendarId: calendarId,
     });
   }
 
