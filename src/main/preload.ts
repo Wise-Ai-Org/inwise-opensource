@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   // Calendar
   testCalendarUrl: (url: string) => ipcRenderer.invoke('calendar:testUrl', url),
   getCalendarEvents: () => ipcRenderer.invoke('calendar:getEvents'),
+  getActiveCalendarEvent: () => ipcRenderer.invoke('calendar:active-event'),
   getCalendarHealth: () => ipcRenderer.invoke('calendar:health'),
   seedDemoData: () => ipcRenderer.invoke('seed:demo'),
   clearDemoData: () => ipcRenderer.invoke('seed:clear'),
@@ -63,6 +64,13 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   // Desktop capture
   getDesktopSourceId: () => ipcRenderer.invoke('desktop:getSourceId'),
 
+  // Audio health (mic + system audio capture status)
+  getAudioHealth: () => ipcRenderer.invoke('audio:health:get'),
+
+  // Renderer error reporting
+  reportUnhandledRejection: (payload: { name?: string; message?: string; stack?: string; source?: string }) =>
+    ipcRenderer.send('renderer:unhandled-rejection', payload),
+
   // AI features
   generatePersonInsights: (personId: string) => ipcRenderer.invoke('ai:generatePersonInsights', personId),
   generateAgenda: (personId: string) => ipcRenderer.invoke('ai:generateAgenda', personId),
@@ -73,7 +81,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
     ipcRenderer.invoke('ai:suggestTaskFields', data),
 
   // Recording (manual)
-  startRecording: (title: string) => ipcRenderer.invoke('recording:start', title),
+  startRecording: (title: string, calendarEventId?: string) =>
+    ipcRenderer.invoke('recording:start', title, calendarEventId),
   stopRecording: () => ipcRenderer.invoke('recording:stop'),
 
   // Whisper setup
@@ -87,7 +96,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 
   // Events from main → renderer
   on: (channel: string, cb: (...args: any[]) => void) => {
-    const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'whisper:progress', 'tasks:reprioritized', 'jira:auto-synced', 'pipeline:error'];
+    const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'whisper:progress', 'tasks:reprioritized', 'jira:auto-synced', 'pipeline:error', 'audio:health'];
     if (allowed.includes(channel)) {
       ipcRenderer.on(channel, (_event, ...args) => cb(...args));
     }

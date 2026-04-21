@@ -39,6 +39,13 @@ let overlayWindow: BrowserWindow | null = null;
 const calendarWatcher = new CalendarWatcher();
 let activeRecording: { mediaRecorder?: any; chunks: Buffer[]; tmpPath?: string } | null = null;
 
+type AudioHealth = { micOk: boolean; systemAudioOk: boolean; message?: string };
+let latestAudioHealth: AudioHealth | null = null;
+let isRecordingActive = false;
+const AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS = 60 * 1000;
+let lastMicFailureNotifiedAt = 0;
+let lastSysAudioFailureNotifiedAt = 0;
+
 // ── Windows ───────────────────────────────────────────────────────────────────
 
 function createMainWindow(): void {
@@ -70,9 +77,9 @@ function createMainWindow(): void {
   });
 }
 
-function createOverlayWindow(title: string): void {
+function createOverlayWindow(title: string, calendarEventId?: string): void {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.webContents.send('recording:start', title);
+    overlayWindow.webContents.send('recording:start', title, calendarEventId);
     return;
   }
 
@@ -95,7 +102,7 @@ function createOverlayWindow(title: string): void {
 
   overlayWindow.loadFile(path.join(__dirname, '../../dist/renderer/badge.html'));
   overlayWindow.webContents.once('did-finish-load', () => {
-    overlayWindow?.webContents.send('recording:start', title);
+    overlayWindow?.webContents.send('recording:start', title, calendarEventId);
   });
 }
 
@@ -680,6 +687,23 @@ ipcMain.handle('calendar:getEvents', () => {
   }));
 });
 
+ipcMain.handle('calendar:active-event', () => {
+  const now = Date.now();
+  const FALLBACK_DURATION_MS = 90 * 60_000;
+  const active = calendarWatcher.getUpcomingEvents().find(e => {
+    const start = e.startTime.getTime();
+    const rawEnd = e.endTime?.getTime();
+    const end = rawEnd && rawEnd > start ? rawEnd : start + FALLBACK_DURATION_MS;
+    return start <= now && end >= now;
+  });
+  if (!active) return null;
+  return {
+    ...active,
+    startTime: active.startTime.getTime(),
+    endTime: active.endTime.getTime(),
+  };
+});
+
 // Meetings
 ipcMain.handle('db:getMeetings', async () => getMeetings());
 ipcMain.handle('db:getMeeting', async (_e, id) => getMeeting(id));
@@ -1137,9 +1161,12 @@ ipcMain.handle('jira:matchTasks', async (_e, items: any[], projectKey?: string) 
 });
 
 // Recording
-ipcMain.handle('recording:start', (_e, title: string) => {
-  createOverlayWindow(title);
+ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string) => {
+  createOverlayWindow(title, calendarEventId);
   updateTrayMenu(mainWindow!, true);
+  isRecordingActive = true;
+  lastMicFailureNotifiedAt = 0;
+  lastSysAudioFailureNotifiedAt = 0;
   return true;
 });
 
@@ -1150,8 +1177,43 @@ ipcMain.handle('recording:stop', async () => {
   return true;
 });
 
+ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
+  if (!payload || typeof payload.micOk !== 'boolean' || typeof payload.systemAudioOk !== 'boolean') return;
+  const prev = latestAudioHealth;
+  const next: AudioHealth = { micOk: payload.micOk, systemAudioOk: payload.systemAudioOk, message: payload.message };
+  latestAudioHealth = next;
+  mainWindow?.webContents.send('audio:health', next);
+
+  if (!isRecordingActive || !Notification.isSupported()) return;
+  const now = Date.now();
+  if (prev?.micOk === true && next.micOk === false && now - lastMicFailureNotifiedAt > AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS) {
+    lastMicFailureNotifiedAt = now;
+    new Notification({
+      title: 'Microphone lost',
+      body: next.message || 'Microphone unavailable — the rest of this meeting will not be transcribed.',
+    }).show();
+  }
+  if (prev?.systemAudioOk === true && next.systemAudioOk === false && now - lastSysAudioFailureNotifiedAt > AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS) {
+    lastSysAudioFailureNotifiedAt = now;
+    new Notification({
+      title: 'System audio lost',
+      body: next.message || 'System audio lost — only your mic will be transcribed for the rest of this meeting.',
+    }).show();
+  }
+});
+
+ipcMain.handle('audio:health:get', () => latestAudioHealth);
+
+ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; message?: string; stack?: string; source?: string }) => {
+  const name = payload?.name || 'UnhandledRejection';
+  const message = payload?.message || '(no message)';
+  const source = payload?.source ? ` source=${payload.source}` : '';
+  log('error', 'renderer:unhandled-rejection', `${name}: ${message}${source}`);
+});
+
 ipcMain.on('recording:audio-data', async (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
+  isRecordingActive = false;
   try {
     const tmpPath = path.join(os.tmpdir(), `inwise-rec-${Date.now()}.wav`);
     fs.writeFileSync(tmpPath, buffer);
@@ -1189,6 +1251,9 @@ calendarWatcher.on('events-updated', async (events: any[]) => {
 calendarWatcher.on('meeting-starting', (event: any) => {
   createOverlayWindow(event.title);
   updateTrayMenu(mainWindow!, true);
+  isRecordingActive = true;
+  lastMicFailureNotifiedAt = 0;
+  lastSysAudioFailureNotifiedAt = 0;
   mainWindow?.webContents.send('badge:show', event.title);
 });
 

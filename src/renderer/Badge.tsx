@@ -110,10 +110,12 @@ export default function Badge() {
   const hasStereoRef = useRef(false);
   const stopRecordingRef = useRef<() => void>(() => {});
   const titleRef = useRef<string>('Meeting');
+  const calendarEventIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    (window as any).inwiseAPI.on('recording:start', (title: string) => {
+    (window as any).inwiseAPI.on('recording:start', (title: string, calendarEventId?: string) => {
       titleRef.current = title;
+      calendarEventIdRef.current = calendarEventId;
       setState({ status: 'recording', title });
       startRef.current = Date.now();
       startMic(title);
@@ -135,6 +137,9 @@ export default function Badge() {
   }, [state.status]);
 
   const startMic = async (title: string) => {
+    const reportHealth = (h: { micOk: boolean; systemAudioOk: boolean; message?: string }) => {
+      try { (window as any).electronAPI?.sendAudioHealth(h); } catch { /* ignore */ }
+    };
     try {
       const cfg = await (window as any).inwiseAPI.getConfig();
       const deviceId = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
@@ -147,6 +152,7 @@ export default function Badge() {
         if (!found) {
           const micNames = mics.map(d => d.label || d.deviceId).join(', ');
           console.warn('[Badge] Saved mic not found. Available:', micNames);
+          reportHealth({ micOk: false, systemAudioOk: false, message: 'Microphone not found — go to Settings to reconnect' });
           setState(s => ({
             ...s,
             status: 'error',
@@ -179,6 +185,12 @@ export default function Badge() {
       if (!sysStream) setSysAudioWarning(true);
       hasStereoRef.current = !!sysStream;
 
+      reportHealth({
+        micOk: true,
+        systemAudioOk: !!sysStream,
+        message: sysStream ? undefined : 'System audio unavailable — only your voice will be recorded',
+      });
+
       const audioCtx = new AudioContext({ sampleRate: 16000 });
       audioCtxRef.current = audioCtx;
       const destination = audioCtx.createMediaStreamDestination();
@@ -200,7 +212,9 @@ export default function Badge() {
       mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       mr.start(250);
     } catch (e: any) {
-      setState((s) => ({ ...s, status: 'error', message: `Microphone error: ${e?.name || ''} ${e?.message || String(e)}` }));
+      const msg = `Microphone error: ${e?.name || ''} ${e?.message || String(e)}`.trim();
+      reportHealth({ micOk: false, systemAudioOk: false, message: msg });
+      setState((s) => ({ ...s, status: 'error', message: msg }));
     }
   };
 
@@ -229,6 +243,7 @@ export default function Badge() {
     (window as any).electronAPI?.sendAudio({
       buffer: new Uint8Array(wav),
       title: titleRef.current,
+      calendarEventId: calendarEventIdRef.current,
       stereo: hasStereoRef.current,
     });
 

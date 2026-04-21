@@ -123,6 +123,17 @@ body {
   animation: pulse-dot 1.5s ease-in-out infinite;
 }
 
+.audio-health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+  flex-shrink: 0;
+  margin-left: auto;
+  cursor: help;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+}
+
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
