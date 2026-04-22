@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Microphone access: capture the user's voice during meetings -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+
+  <!-- Screen + system-audio recording: capture other participants via desktopCapturer -->
+  <key>com.apple.security.device.screen-capture</key>
+  <true/>
+
+  <!-- Allow the notarized app to load the bundled whisper.cpp binary as a subprocess -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- Required for Electron: allows loading the V8 JIT -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+
+  <!-- Network client — for Anthropic / OpenAI / Jira / ICS feed -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!-- Local loopback for OAuth code-exchange redirect (Jira) -->
+  <key>com.apple.security.network.server</key>
+  <true/>
+
+  <!-- Read-write access to app.getPath('userData') / temp -->
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+</dict>
+</plist>

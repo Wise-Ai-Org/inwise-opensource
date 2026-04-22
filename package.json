@@ -13,7 +13,8 @@
     "watch:renderer": "webpack --config webpack.renderer.config.js --watch",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win"
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac"
   },
   "build": {
     "appId": "com.inwise.desktop",
@@ -44,6 +45,26 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "icon": "assets/icon.png",
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Inwise uses your microphone to record your voice during meetings for local transcription.",
+        "NSScreenCaptureUsageDescription": "Inwise captures system audio so other meeting participants can be transcribed. No video is recorded.",
+        "LSUIElement": false
+      }
+    },
+    "dmg": {
+      "sign": false
     },
     "asar": true
   },
