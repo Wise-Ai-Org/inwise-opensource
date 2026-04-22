@@ -822,6 +822,9 @@ function TaskColumn({
 interface SnoozedTask extends Task {
   snoozedAt?: string | null;
   snoozedReason?: string | null;
+  updatedAt?: string | null;
+  createdAt?: string | null;
+  lastMentionedAt?: string | null;
 }
 
 function formatRelative(iso: string | null | undefined): string {
@@ -840,11 +843,29 @@ function formatRelative(iso: string | null | undefined): string {
   return `${months} months ago`;
 }
 
-function humanSnoozedReason(reason: string | null | undefined): string {
-  if (!reason) return 'snoozed';
-  if (reason === 'stale-30d') return 'auto-snoozed — no activity for 30+ days';
-  if (reason === 'manual') return 'snoozed manually';
-  return reason;
+function snoozedReasonText(task: SnoozedTask): string {
+  const snoozedRel = formatRelative(task.snoozedAt);
+
+  if (task.snoozedReason === 'stale-30d') {
+    // Prefer the most informative signal we have for this task
+    if (task.lastMentionedAt) return `Not mentioned since ${formatRelative(task.lastMentionedAt)}`;
+    if (task.updatedAt) return `No activity since ${formatRelative(task.updatedAt)}`;
+    return snoozedRel ? `Auto-snoozed ${snoozedRel}` : 'Auto-snoozed';
+  }
+
+  if (task.snoozedReason === 'manual') {
+    return snoozedRel ? `You snoozed this ${snoozedRel}` : 'You snoozed this';
+  }
+
+  // Unknown-but-specific reason code — show it with when if we have it
+  if (task.snoozedReason) {
+    return snoozedRel ? `${task.snoozedReason} · ${snoozedRel}` : task.snoozedReason;
+  }
+
+  // Null reason but we know when
+  if (task.snoozedAt) return `Snoozed ${snoozedRel}`;
+
+  return 'snoozed';
 }
 
 function SnoozedRow({
@@ -880,8 +901,8 @@ function SnoozedRow({
                 Snoozed {formatRelative(task.snoozedAt)}
               </Text>
             )}
-            <Text fontSize="xs" color="gray.600" fontStyle="italic">
-              {humanSnoozedReason(task.snoozedReason)}
+            <Text fontSize="xs" color="gray.600" fontStyle="italic" title={task.snoozedAt ? new Date(task.snoozedAt).toLocaleString() : undefined}>
+              {snoozedReasonText(task)}
             </Text>
           </HStack>
         </Box>
