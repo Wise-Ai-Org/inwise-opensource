@@ -75,6 +75,10 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   // Audio health (mic + system audio capture status)
   getAudioHealth: () => ipcRenderer.invoke('audio:health:get'),
 
+  // Welcome-back (returns null when not eligible)
+  welcomeBackCompute: () => ipcRenderer.invoke('welcomeBack:compute'),
+  welcomeBackDismiss: () => ipcRenderer.invoke('welcomeBack:dismiss'),
+
   // Renderer error reporting
   reportUnhandledRejection: (payload: { name?: string; message?: string; stack?: string; source?: string }) =>
     ipcRenderer.send('renderer:unhandled-rejection', payload),

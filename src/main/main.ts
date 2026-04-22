@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
-import { getConfig, setConfig, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, CalendarSubscription } from './config';
+import { getConfig, setConfig, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
@@ -32,7 +32,8 @@ import { matchAllItems, semanticMatch } from './jira-matcher';
 import { scoreTasks } from './task-scorer';
 import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from './mfcc';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
-import { sweepStaleTasks } from './staleness-sweep';
+import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
+import { computeWelcomeBack } from './welcome-back';
 
 Menu.setApplicationMenu(null);
 
@@ -1250,6 +1251,33 @@ ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
 });
 
 ipcMain.handle('audio:health:get', () => latestAudioHealth);
+
+ipcMain.handle('welcomeBack:compute', async () => {
+  let openAtLogin = false;
+  try {
+    openAtLogin = app.getLoginItemSettings().openAtLogin;
+  } catch {
+    openAtLogin = false;
+  }
+  const tasks = await getTasks({ includeSnoozed: true });
+  const meetings = await getMeetings();
+  return computeWelcomeBack({
+    now: new Date(),
+    daysSinceLastOpen: getDaysSinceLastOpen(),
+    lastOpenedAtSnapshot: getLastOpenedAtSnapshot(),
+    welcomeBackLastSeenAt: getWelcomeBackLastSeenAt(),
+    openAtLogin,
+    lastSweepResult: getLastSweepResult(),
+    tasks,
+    meetings,
+    upcomingEvents: calendarWatcher.getUpcomingEvents(),
+  });
+});
+
+ipcMain.handle('welcomeBack:dismiss', () => {
+  markWelcomeBackSeen();
+  return true;
+});
 
 ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; message?: string; stack?: string; source?: string }) => {
   const name = payload?.name || 'UnhandledRejection';

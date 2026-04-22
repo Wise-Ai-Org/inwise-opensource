@@ -126,6 +126,18 @@ export function getDaysSinceLastOpen(): number | null {
   return computeDaysSince(priorLastOpenedAtSnapshot, Date.now());
 }
 
+// Exposes the pre-current-session lastOpenedAt snapshot. Welcome-back compute
+// compares this against welcomeBackLastSeenAt to detect "already dismissed for
+// this gap" — using the live store value would fail because markAppOpened()
+// overwrites it on every show event.
+export function getLastOpenedAtSnapshot(): string | null {
+  return priorLastOpenedAtSnapshot;
+}
+
+export function getWelcomeBackLastSeenAt(): string | null {
+  return store.get('welcomeBackLastSeenAt');
+}
+
 export function markWelcomeBackSeen(): void {
   store.set('welcomeBackLastSeenAt', new Date().toISOString());
 }

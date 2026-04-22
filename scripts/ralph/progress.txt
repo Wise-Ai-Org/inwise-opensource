@@ -97,3 +97,41 @@ Learnings for future iterations:
 - Tests build tasks via `createTask()` then backdate with `updateTask(id, { updatedAt: iso(daysAgo), ... })` because `createTask` stamps `updatedAt` to now. This is the standard pattern for time-sensitive DB tests in this codebase.
 
 ---
+
+## 2026-04-21 19:40 PDT - US-004
+- Added pure compute module `src/main/welcome-back.ts` exporting `computeWelcomeBack(inputs): WelcomeBackResult | null`. All data dependencies (tasks, meetings, upcoming events, sweep result, config timestamps, openAtLogin) are passed as inputs — zero imports from `electron` or `config` so the function is fully unit-testable.
+- Added IPC handlers in `main.ts`:
+  - `welcomeBack:compute` — assembles tasks (`getTasks({ includeSnoozed: true })`), meetings (`getMeetings()`), upcoming events (`calendarWatcher.getUpcomingEvents()`), sweep cache (`getLastSweepResult()`), config timestamps, and `app.getLoginItemSettings().openAtLogin`, then calls `computeWelcomeBack`. `getLoginItemSettings` is guarded by try/catch for platforms that throw (Linux dev env).
+  - `welcomeBack:dismiss` — calls `markWelcomeBackSeen()`.
+- Extended `src/main/config.ts` with `getLastOpenedAtSnapshot()` and `getWelcomeBackLastSeenAt()` so compute can read the pre-session snapshot (the live store value is overwritten on every `show` event by `markAppOpened`).
+- Added `welcomeBackCompute` and `welcomeBackDismiss` to `src/main/preload.ts`. Both are invoke-style (no `allowed[]` update needed — that list is only for main→renderer push channels).
+- Null-return gates implemented per PRD: (1) `daysSinceLastOpen === null` (first-ever launch), (2) `< 2` days, (3) `welcomeBackLastSeenAt >= lastOpenedAtSnapshot` (already dismissed for this gap). Using the SNAPSHOT, not the live store value, is critical — see `getLastOpenedAtSnapshot` doc comment.
+- Ask-selection follows documented priority: contradiction > overdueWithSignal > launchAtStartupOffer. Only the first qualifying ask is returned; when none qualify, `ask` is omitted entirely.
+- Contradictions come from `meetings.insights.contradictions` (stored via `saveInsights`), not from re-calling the LLM `detectContradictions` function. Gap filter: `m.createdAt > priorSnapshot`. PRD originally used `detectContradictions.createdAt` but the real source is the meeting row.
+- `jiraProgress` = tasks where `source.type === 'jira'` AND `updatedAt > priorSnapshot`; `doneCount` is the subset with `status === 'completed' || 'done'`. No explicit status-change history exists, so `updatedAt` is the best proxy (runDailyJiraPull bumps it on status map).
+- `meetingsMatched` counts DISTINCT meeting IDs (via `provenance.meetingId`) for jira-linked tasks whose meeting was created in the gap window. A single meeting with multiple jira-linked tasks counts once.
+- Missed meetings for launchAtStartupOffer: calendar events with `startTime` in `(priorOpen, now)` that have NO meetings row, OR only a `status === 'calendar_sync'` placeholder row (calendar sync created a stub but nothing was actually recorded).
+
+Files changed:
+- src/main/config.ts (added `getLastOpenedAtSnapshot`, `getWelcomeBackLastSeenAt`)
+- src/main/welcome-back.ts (new)
+- src/main/welcome-back.test.ts (new)
+- src/main/main.ts (imports + two IPC handlers)
+- src/main/preload.ts (two new invoke wrappers)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `node dist/main/welcome-back.test.js` — 19 test blocks passed (3 null-return gates + 1 gate counter + 4 wins + 3 ask-priority branches + 6 ask guards + empty-wins sanity + 1 misc).
+- `node dist/main/{config,database,staleness-sweep,self-identity}.test.js` — regressions all green.
+
+Learnings for future iterations:
+- Pure-function extraction is the key testability pattern in this codebase. `staleness-sweep.ts` does this via `sweepStaleTasks(now?: Date)` (injects the clock); `welcome-back.ts` takes it further and injects ALL dependencies. When a new story needs data from multiple modules (config + db + calendar + staleness), follow this pattern and let `main.ts` be the wiring layer.
+- The PRD null-return condition "`welcomeBackLastSeenAt >= lastOpenedAt`" MUST compare against the module-load snapshot from config.ts, NOT the live store value. `markAppOpened()` fires on every `show` event, so the live `lastOpenedAt` is always >= `welcomeBackLastSeenAt` and the gate would never fire. `getLastOpenedAtSnapshot()` is the correct reader. Document this pattern wherever else "pre-session state" is needed.
+- Contradictions are stored in `meetings.insights.contradictions` by `saveInsights` — do NOT re-call `detectContradictions` (that's the LLM extractor, it's a COMPUTE function not a STORE). Query `getMeetings()` and filter by `insights.contradictions.length > 0` + createdAt window.
+- `getLoginItemSettings` can throw on non-darwin/win32 platforms; wrap in try/catch and default to `false`. US-009 will add the `setLoginItemSettings` side. The PRD's guard ("never return launchAtStartupOffer if already openAtLogin") is in compute, not in the IPC — good for testing, but means the compute also needs a try-safe boolean input.
+- `calendarWatcher.getUpcomingEvents()` returns events including the PAST 7 days (see `fetchIcsEvents` starting `todayStart` 7 days back). That's why missed-meetings detection can iterate upcomingEvents rather than needing a separate history query. Document this in AGENTS.md for calendar-watcher if a future story assumes future-only.
+- The new preload entries (`welcomeBackCompute`, `welcomeBackDismiss`) are both `invoke` style and do NOT need to be added to the `allowed[]` array in the `on()` handler — that allowlist is ONLY for main→renderer push channels. This distinction is documented in Codebase Patterns as well.
+- When adding a new module with `any[]` dependencies (tasks, meetings), default to `any` at the boundary but use well-named interfaces for the OUTPUT shape (WelcomeBackResult, WelcomeBackWins, WelcomeBackAsk). The IPC payload is the contract for US-005's UI.
+- Wins fields are individually optional (`?`) — only populated when count > 0. Empty wins + no ask is the signal for US-005's "Nothing urgent while you were out" empty-state copy.
+---
