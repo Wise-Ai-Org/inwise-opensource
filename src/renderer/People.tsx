@@ -732,16 +732,18 @@ function SuggestedPersonTile({
   return (
     <Box p={4} bg={bg} borderWidth="2px" borderColor={borderColor} borderRadius="xl" cursor="pointer"
       onClick={onToggle} transition="all 0.15s" _hover={{ boxShadow: 'md' }}>
-      <HStack spacing={3} align="start">
-        <Checkbox isChecked={checked} onChange={onToggle} onClick={e => e.stopPropagation()} colorScheme="brand" mt={1} />
-        <VStack align="start" spacing={1} flex={1}>
-          <HStack justify="space-between" w="full">
-            <Avatar size="sm" name={person.name} />
-            <Badge colorScheme="purple" fontSize="xs">{person.meetingCount} meetings / 7d</Badge>
+      <HStack spacing={3} align="start" w="full" minW={0}>
+        <Checkbox isChecked={checked} onChange={onToggle} onClick={e => e.stopPropagation()} colorScheme="brand" mt={1} flexShrink={0} />
+        <VStack align="start" spacing={1} flex={1} minW={0} w="full">
+          <HStack justify="space-between" w="full" spacing={2}>
+            <Avatar size="sm" name={person.name} flexShrink={0} />
+            <Badge colorScheme="purple" fontSize="xs" flexShrink={0} whiteSpace="nowrap">
+              {person.meetingCount} meetings / 7d
+            </Badge>
           </HStack>
-          <Text fontWeight="semibold" fontSize="sm">{person.name}</Text>
+          <Text fontWeight="semibold" fontSize="sm" noOfLines={1} w="full" title={person.name}>{person.name}</Text>
           {person.recentMeetings.length > 0 && (
-            <Text fontSize="xs" color="gray.500" noOfLines={1}>
+            <Text fontSize="xs" color="gray.500" noOfLines={1} w="full" title={person.recentMeetings[person.recentMeetings.length - 1]?.title}>
               Last: {person.recentMeetings[person.recentMeetings.length - 1]?.title}
             </Text>
           )}
