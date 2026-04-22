@@ -656,6 +656,84 @@ ipcMain.handle('seed:demo', async () => {
     });
     await updateMeetingStatus(m3Id, 'reviewed');
 
+    // ── More people (extends the cast beyond the core 4) ─────────────────────
+    const extraPeople = [
+      { firstName: 'Priya', lastName: 'Sharma', email: 'priya.sharma@example.com' },
+      { firstName: 'David', lastName: 'Sobie', email: 'david@customer-co.com' },
+      { firstName: 'Anu', lastName: 'Codaty', email: 'anu@designstudio.com' },
+      { firstName: 'Benjamin', lastName: 'Wu', email: 'ben.wu@example.com' },
+      { firstName: 'Olivia', lastName: 'Brooks', email: 'olivia.b@example.com' },
+      { firstName: 'Ravi', lastName: 'Menon', email: 'ravi.menon@example.com' },
+      { firstName: 'Leah', lastName: 'Goldberg', email: 'leah.g@example.com' },
+      { firstName: 'Tomás', lastName: 'García', email: 'tomas.g@example.com' },
+      { firstName: 'Harper', lastName: 'Okonkwo', email: 'harper@customer-co.com' },
+      { firstName: 'Kai', lastName: 'Nakamura', email: 'kai.n@example.com' },
+    ];
+    for (const p of extraPeople) {
+      try { await addPerson(p); } catch { /* skip if exists */ }
+    }
+
+    // ── More meetings with insights ──────────────────────────────────────────
+    const m4Id = await createMeeting({ title: 'Customer sync — Harper Okonkwo (CustomerCo)', date: daysAgo(7), duration: 1800, attendees: ['Harper Okonkwo', 'Olivia Brooks'], source: 'demo_seed' });
+    await saveInsights(m4Id, {
+      summary: 'Harper outlined CustomerCo requirements for Q3 rollout: SSO, audit log export, role-based permissions. Budget signed off; procurement kicks off next week.',
+      actionItems: [
+        { text: 'Send SSO integration technical spec to Harper', owner: 'Olivia Brooks', dueDate: daysFromNow(2), priority: 'high', isCommitment: true },
+        { text: 'Prepare audit-log export mockup for next sync', owner: 'Maya Rodriguez', dueDate: daysFromNow(5), priority: 'high' },
+      ],
+      decisions: [{ text: 'CustomerCo Q3 rollout approved', rationale: 'Budget signed; legal review complete' }],
+      blockers: [],
+    });
+    await updateMeetingStatus(m4Id, 'reviewed');
+
+    const m5Id = await createMeeting({ title: 'Weekly Engineering Standup', date: daysAgo(1), duration: 900, attendees: ['Alex Chen', 'Jordan Patel', 'Ravi Menon', 'Leah Goldberg', 'Tomás García'], source: 'demo_seed' });
+    await saveInsights(m5Id, {
+      summary: 'Sprint progressing; 7 of 12 stories in-flight. Ravi unblocked on auth refactor. Tomás raising concerns about test flakiness in CI — 20% failure rate on retries.',
+      actionItems: [
+        { text: 'Investigate CI test flakiness root cause', owner: 'Tomás García', dueDate: daysFromNow(1), priority: 'medium' },
+        { text: 'Pair with Leah on WebSocket implementation', owner: 'Ravi Menon', dueDate: daysFromNow(2), priority: 'medium' },
+      ],
+      decisions: [],
+      blockers: [{ text: 'CI flakiness hurting merge velocity', severity: 'medium' }],
+    });
+
+    const m6Id = await createMeeting({ title: 'All-hands — Q2 kickoff', date: daysAgo(10), duration: 3600, attendees: ['Alex Chen', 'Sarah Kim', 'Maya Rodriguez', 'Priya Sharma', 'Kai Nakamura'], source: 'demo_seed' });
+    await saveInsights(m6Id, {
+      summary: 'Q1 recap: 3 enterprise deals closed, 18% churn reduction. Q2 focus: ship dashboard, API v2, mobile onboarding. Hiring freeze lifted — 2 eng roles, 1 design.',
+      actionItems: [
+        { text: 'Open 2 senior engineer reqs', owner: 'Alex Chen', dueDate: daysFromNow(3), priority: 'high', isCommitment: true },
+        { text: 'Open senior product designer req', owner: 'Maya Rodriguez', dueDate: daysFromNow(3), priority: 'medium' },
+      ],
+      decisions: [{ text: 'Q2 focus locked: dashboard + API v2 + mobile onboarding', rationale: 'Customer-driven; aligned with board' }],
+      blockers: [],
+    });
+    await updateMeetingStatus(m6Id, 'reviewed');
+
+    const m7Id = await createMeeting({ title: '1:1 with Jordan — API v2 architecture', date: daysAgo(5), duration: 1800, attendees: ['Jordan Patel'], source: 'demo_seed' });
+    await saveInsights(m7Id, {
+      summary: 'Jordan proposing event-sourced read models for API v2 read path. Clear perf benefit; adds complexity. Decision needed by end of week. Jordan to document trade-offs and alternatives.',
+      actionItems: [
+        { text: 'Write ADR for API v2 read-path approach', owner: 'Jordan Patel', dueDate: daysFromNow(4), priority: 'high' },
+      ],
+      decisions: [],
+      blockers: [],
+    });
+
+    const m8Id = await createMeeting({ title: 'Design critique — Mobile onboarding v2', date: daysAgo(3), duration: 1800, attendees: ['Maya Rodriguez', 'Anu Codaty', 'Sarah Kim'], source: 'demo_seed' });
+    await saveInsights(m8Id, {
+      summary: 'Reviewed three onboarding flows. Anu\u0027s Variant B wins on time-to-value; needs accessibility pass. Ship candidate decided; will run small quantitative test next week.',
+      actionItems: [
+        { text: 'Accessibility audit on onboarding Variant B', owner: 'Anu Codaty', dueDate: daysFromNow(6), priority: 'medium' },
+      ],
+      decisions: [{ text: 'Onboarding Variant B is the ship candidate', rationale: 'Best time-to-value in user tests' }],
+      blockers: [],
+    });
+    await updateMeetingStatus(m8Id, 'reviewed');
+
+    // Two calendar-only meetings (no insights — simulate meetings that weren't recorded or reviewed yet)
+    await createMeeting({ title: 'Standup', date: daysAgo(6), duration: 900, attendees: ['Alex Chen', 'Jordan Patel', 'Ravi Menon'], source: 'demo_seed' });
+    await createMeeting({ title: 'Board prep — Q2 metrics', date: daysAgo(8), duration: 1800, attendees: ['Kai Nakamura', 'Priya Sharma'], source: 'demo_seed' });
+
     // Approve some tasks to make the board interesting
     const allTasks = await getTasks();
     const demoTasks = allTasks.filter((t: any) => t.source?.type === 'meeting');
@@ -667,8 +745,42 @@ ipcMain.handle('seed:demo', async () => {
       }
     }
 
-    log('info', 'seed:demo', `Seeded 3 meetings, ${demoTasks.length} tasks, ${people.length} people`);
-    return { seeded: true, meetings: 3, tasks: demoTasks.length, people: people.length };
+    // ── Standalone tasks (ad-hoc, not from meetings) ─────────────────────────
+    const standaloneTasks: any[] = [
+      { title: 'Book hotel for DevCon Austin', priority: 'medium', status: 'todo', dueDate: daysFromNow(6) },
+      { title: 'Reply to Priya about onsite interview loop', priority: 'high', status: 'todo', dueDate: daysFromNow(1) },
+      { title: 'Read "Staff Engineer" chapter 3', priority: 'low', status: 'todo', dueDate: daysFromNow(14) },
+      { title: 'Update LinkedIn with role change', priority: 'low', status: 'todo' },
+      { title: 'Renew passport', priority: 'medium', status: 'todo', dueDate: daysFromNow(45) },
+      { title: 'Submit expense report for Q1', priority: 'high', status: 'inProgress', dueDate: daysFromNow(0) },
+      { title: 'Schedule annual physical', priority: 'low', status: 'todo' },
+      { title: 'Draft engineering ladder v3', priority: 'medium', status: 'inProgress', dueDate: daysFromNow(10) },
+    ];
+    for (const t of standaloneTasks) {
+      await createTask({ ...t, source: { type: 'manual' }, approval: { status: 'approved' } });
+    }
+
+    // ── Snoozed demo tasks (populate the Snoozed filter with varied reasons) ──
+    const snoozeDemos: Array<{ title: string; reason: string; lastMentionedDaysAgo?: number }> = [
+      { title: 'Ensure the house is clean and organized (speak and span)', reason: 'stale-30d', lastMentionedDaysAgo: 45 },
+      { title: 'Revisit the Slack bot idea from last offsite', reason: 'stale-30d', lastMentionedDaysAgo: 60 },
+      { title: 'Follow up on vendor proposal from Notion', reason: 'manual' },
+      { title: 'Try new standing desk setup', reason: 'deferred' },
+    ];
+    for (const s of snoozeDemos) {
+      const t = await createTask({ title: s.title, status: 'todo', priority: 'low', source: { type: 'manual' }, approval: { status: 'approved' } } as any);
+      if (s.lastMentionedDaysAgo) {
+        try { await updateTask(t._id, { lastMentionedAt: daysAgo(s.lastMentionedDaysAgo) } as any); } catch { /* schema may not accept */ }
+      }
+      await snoozeTask(t._id, s.reason);
+    }
+
+    const totalPeople = people.length + extraPeople.length;
+    const totalTasks = demoTasks.length + standaloneTasks.length + snoozeDemos.length;
+    const totalMeetings = 10;
+
+    log('info', 'seed:demo', `Seeded ${totalMeetings} meetings, ${totalTasks} tasks, ${totalPeople} people`);
+    return { seeded: true, meetings: totalMeetings, tasks: totalTasks, people: totalPeople };
   } catch (e: any) {
     log('error', 'seed:demo', e.message);
     return { seeded: false, error: e.message };
