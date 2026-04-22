@@ -135,3 +135,36 @@ Learnings for future iterations:
 - When adding a new module with `any[]` dependencies (tasks, meetings), default to `any` at the boundary but use well-named interfaces for the OUTPUT shape (WelcomeBackResult, WelcomeBackWins, WelcomeBackAsk). The IPC payload is the contract for US-005's UI.
 - Wins fields are individually optional (`?`) — only populated when count > 0. Empty wins + no ask is the signal for US-005's "Nothing urgent while you were out" empty-state copy.
 ---
+
+## 2026-04-21 19:50 PDT - US-005
+- Added `src/renderer/WelcomeBack.tsx`: full-screen overlay that calls `inwiseAPI.welcomeBackCompute()` on mount, renders nothing when the IPC returns null, otherwise renders greeting + wins list + at most one ask + chip row + Done button.
+- Wins render count-not-list per PRD copy: cleared, jiraProgress (with doneCount), meetingsMatched, calendarHealthy. Sample titles are NOT shown — PRD says "detail on-demand via chips," so the sampleTitles array coming from compute is intentionally unused by the UI.
+- Ask variants: `contradiction` → Review/Dismiss (Review navigates to Communications + dismisses the screen); `overdueWithSignal` → Snooze to next week / Mark done / Keep as-is (all local-dismiss the ask for US-005 scope — US-007 wires completion semantics); `launchAtStartupOffer` → Turn on / Not now (both local-dismiss per PRD note that action logic is deferred to US-009).
+- "Nothing urgent" empty-state line renders ONLY when both wins are empty AND no ask is shown (after any local ask-dismiss, the chip row remains so the user isn't trapped).
+- Chip row: Tasks → tasks view, Meetings → communications, Jira → settings, Calendar → settings. Clicking any chip calls welcomeBackDismiss() via the shared handleDone() and then navigates.
+- Done button top-right calls `inwiseAPI.welcomeBackDismiss()` and unmounts (parent clears `welcomeBackVisible`).
+- Integrated into `src/renderer/App.tsx`: new `welcomeBackVisible` state (default true) — WelcomeBack renders while it is true AND FirstTimeUserFlow is not active (avoid stacking modals on first-run).
+
+Files changed:
+- src/renderer/WelcomeBack.tsx (new)
+- src/renderer/App.tsx (import + conditional render)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `npx webpack --config webpack.renderer.config.js` — bundle compiled successfully.
+- `node dist/main/{config,database,staleness-sweep,welcome-back,self-identity}.test.js` — all pass (regression).
+
+Browser verification:
+- **Dev-browser skill was NOT available in this session.** No standalone browser test harness exists in this codebase (Electron renderer only bundles via webpack into the app shell). Verification relied on: (a) renderer typecheck, (b) full webpack bundle passes, (c) structural inspection of rendered JSX against PRD copy spec. A follow-up `electron .` run with synthetic `welcomeBack:compute` fixtures is the recommended human smoke test before shipping.
+
+Learnings for future iterations:
+- This codebase's UI components use **plain inline styles** for full-screen overlays (see `FirstTimeUserFlow.tsx`) and **Chakra UI** for interactive cards/modals (see `MeetingConflictModal.tsx`). Both are fine; I chose inline styles for `WelcomeBack.tsx` because the overlay pattern is closer to FirstTimeUserFlow and we want minimal dependency coupling.
+- Palette: `#0d9488` teal primary, `#14b8a6` teal hover, `#0f172a` ink, `#64748b` muted, `#e2e8f0` border. Matches FirstTimeUserFlow and the Chakra theme.
+- `inwiseAPI` is accessed via `(window as any).inwiseAPI` in components — there's `src/renderer/api.ts` that wraps a subset but it doesn't include welcome-back yet. Use the raw `(window as any).inwiseAPI.welcomeBack*` invoke path and handle the missing-API case defensively (for headless test environments, the API object may be absent).
+- PRD says "sampleTitles up to 3" but also "NEVER render a list of task/meeting titles (count is the message, detail on-demand via chips)". These are not in conflict — sampleTitles is still useful as telemetry/debug surface in the IPC payload, but the UI MUST NOT display them. I left the data in the compute return and just ignored it in the component.
+- There are **only 4 views**: communications, tasks, people, settings. The PRD's chip row mentions "Jira" and "Calendar" — both live inside `settings`. Mapping Jira→settings and Calendar→settings is the pragmatic interpretation.
+- The `allowed[]` allowlist in `preload.ts` is for main→renderer **push** channels (`ipcRenderer.on`). New **invoke** handlers (like `welcomeBackCompute`/`welcomeBackDismiss`) do NOT need to be added there. (Reiterated from US-004 for anyone touching preload.)
+- When adding new overlays on top of App.tsx, decide stacking order with care: FirstTimeUserFlow is shown to first-run users at a higher z-index (10000) than Sidebar but must take precedence over WelcomeBack. I gate WelcomeBack with `!showFirstTimeFlow` so first-time users never see both.
+- For Electron-only projects with UI acceptance criteria, "verify in browser" in a PRD is aspirational unless the project has an explicit web-renderer mode. Document when skipped — don't silently claim browser verification that didn't happen.
+---

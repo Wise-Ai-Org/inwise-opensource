@@ -6,6 +6,7 @@ import People from './People';
 import MyTasks from './MyTasks';
 import Settings from './Settings';
 import FirstTimeUserFlow from './FirstTimeUserFlow';
+import WelcomeBack from './WelcomeBack';
 import MeetingConflictModal, { ConflictMeeting } from './components/modal/MeetingConflictModal';
 
 type View = 'communications' | 'tasks' | 'people' | 'settings';
@@ -44,6 +45,7 @@ export default function App() {
     | { active: ConflictMeeting; incoming: ConflictMeeting; autoSelectMs: number }
     | null
   >(null);
+  const [welcomeBackVisible, setWelcomeBackVisible] = useState(true);
 
   useEffect(() => {
     (window as any).inwiseAPI.getConfig().then((cfg: any) => {
@@ -104,6 +106,12 @@ export default function App() {
         <FirstTimeUserFlow
           onNavigate={setView}
           onComplete={handleFirstTimeFlowComplete}
+        />
+      )}
+      {welcomeBackVisible && !showFirstTimeFlow && (
+        <WelcomeBack
+          onNavigate={setView}
+          onDismiss={() => setWelcomeBackVisible(false)}
         />
       )}
       <MeetingConflictModal

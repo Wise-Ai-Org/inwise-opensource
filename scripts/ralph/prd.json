@@ -99,7 +99,7 @@
         "Verify in browser using dev-browser skill: launch app with synthetic welcomeBack:compute payloads covering (a) wins-only, (b) ask.contradiction, (c) empty-state (no wins, no ask); confirm copy matches; confirm dismiss persists welcomeBackLastSeenAt"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
