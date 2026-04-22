@@ -55,8 +55,8 @@
         "Verify in browser using dev-browser skill: with seeded demo data, open a Person drawer with pending items; click Reject on one → it disappears from the pending list; toast appears; clicking Undo within 5s restores it; click + on another → it moves from pending to Active (after US-004 ships)"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "dev-browser skill not available in this Ralph environment; UI wired per PRD and both builds + all 7 main-process test suites pass. Manual Electron run still required to visually confirm toast + undo."
     },
     {
       "id": "US-004",

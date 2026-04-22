@@ -22,7 +22,8 @@ import {
 } from '@chakra-ui/icons';
 import {
   MdWork, MdBusiness, MdVideocam, MdChat, MdAutoAwesome, MdAccessTime,
-  MdPerson, MdArchive, MdUnarchive, MdMoreVert, MdRefresh, MdOutlineEventNote, MdWarning
+  MdPerson, MdArchive, MdUnarchive, MdMoreVert, MdRefresh, MdOutlineEventNote, MdWarning,
+  MdClose
 } from 'react-icons/md';
 import Card from './components/card/Card';
 import {
@@ -192,12 +193,15 @@ function computeNudges(actionItems: ActionItem[]): Nudge[] {
 
 function ActionItemRow({
   item,
-  onCreateTask
+  onCreateTask,
+  onReject
 }: {
   item: ActionItem;
   onCreateTask: (item: ActionItem) => Promise<void>;
+  onReject?: (item: ActionItem) => Promise<void>;
 }) {
   const [creating, setCreating] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
   const borderColor = useColorModeValue('gray.200', 'gray.600');
   const bg = useColorModeValue('white', 'gray.750');
 
@@ -207,6 +211,16 @@ function ActionItemRow({
       await onCreateTask(item);
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!onReject) return;
+    setRejecting(true);
+    try {
+      await onReject(item);
+    } finally {
+      setRejecting(false);
     }
   };
 
@@ -222,17 +236,37 @@ function ActionItemRow({
             ⊙ {taskStatusLabel(item.taskStatus)}
           </Badge>
         ) : (
-          <IconButton
-            aria-label="Create task"
-            icon={<AddIcon />}
-            size="xs"
-            variant="ghost"
-            borderRadius="full"
-            border="1px solid"
-            borderColor={borderColor}
-            isLoading={creating}
-            onClick={handleCreate}
-          />
+          <HStack spacing={1} flexShrink={0}>
+            <IconButton
+              aria-label="Create task"
+              title="Create task"
+              icon={<AddIcon />}
+              size="xs"
+              variant="ghost"
+              borderRadius="full"
+              border="1px solid"
+              borderColor={borderColor}
+              isLoading={creating}
+              isDisabled={rejecting}
+              onClick={handleCreate}
+            />
+            {onReject && (
+              <IconButton
+                aria-label="Reject"
+                title="Reject"
+                icon={<Icon as={MdClose} />}
+                size="xs"
+                variant="ghost"
+                borderRadius="full"
+                border="1px solid"
+                borderColor={borderColor}
+                color="gray.500"
+                isLoading={rejecting}
+                isDisabled={creating}
+                onClick={handleReject}
+              />
+            )}
+          </HStack>
         )}
       </Flex>
       <HStack spacing={3} mt={1.5}>
@@ -404,20 +438,74 @@ function PersonDetailDrawer({
     }
   };
 
+  const reloadPerson = useCallback(async () => {
+    if (!personId) return;
+    const data = await api.getPerson(personId);
+    if (data) setPerson(data);
+  }, [personId]);
+
   const handleCreateTask = useCallback(async (item: ActionItem) => {
     if (!person) return;
     try {
-      await api.createTask({
-        title: item.text,
-        dueDate: item.dueDate,
-        status: 'todo',
-        priority: 'medium',
+      await api.convertActionItem({
+        meetingId: item.meetingId,
+        actionItemIndex: item.actionItemIndex,
+        taskFields: {
+          title: item.text,
+          dueDate: item.dueDate,
+          status: 'todo',
+          priority: 'medium',
+        },
       });
+      await reloadPerson();
       toast({ title: 'Task created', status: 'success', duration: 2000 });
     } catch {
       toast({ title: 'Failed to create task', status: 'error', duration: 3000 });
     }
-  }, [person, toast]);
+  }, [person, toast, reloadPerson]);
+
+  const handleRejectActionItem = useCallback(async (item: ActionItem) => {
+    if (!person) return;
+    try {
+      await api.dismissActionItem({
+        meetingId: item.meetingId,
+        actionItemIndex: item.actionItemIndex,
+      });
+      await reloadPerson();
+      toast({
+        duration: 5000,
+        position: 'bottom',
+        render: ({ onClose: closeToast }) => (
+          <Box bg="gray.700" color="white" px={4} py={3} borderRadius="md" boxShadow="lg">
+            <HStack spacing={4}>
+              <Text fontSize="sm">Rejected — won't show again</Text>
+              <Button
+                size="xs"
+                variant="link"
+                color="teal.200"
+                onClick={async () => {
+                  closeToast();
+                  try {
+                    await api.undismissActionItem({
+                      meetingId: item.meetingId,
+                      actionItemIndex: item.actionItemIndex,
+                    });
+                    await reloadPerson();
+                  } catch {
+                    toast({ title: 'Failed to undo', status: 'error', duration: 3000 });
+                  }
+                }}
+              >
+                Undo
+              </Button>
+            </HStack>
+          </Box>
+        ),
+      });
+    } catch {
+      toast({ title: 'Failed to reject', status: 'error', duration: 3000 });
+    }
+  }, [person, toast, reloadPerson]);
 
   const initials = person?.name
     ? person.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) : '';
@@ -575,12 +663,12 @@ function PersonDetailDrawer({
 
               <Divider />
 
-              {/* Pending Action Items */}
+              {/* Action items pending review */}
               <Box>
                 <HStack mb={3} spacing={1}>
                   <Icon as={MdAccessTime} boxSize={3.5} color={sectionLabelColor} />
                   <Text fontSize="xs" fontWeight="bold" color={sectionLabelColor} letterSpacing="wider" textTransform="uppercase">
-                    Pending Action Items
+                    Action items pending review
                   </Text>
                 </HStack>
                 {(person.pendingActionItems?.length ?? 0) === 0 ? (
@@ -588,7 +676,12 @@ function PersonDetailDrawer({
                 ) : (
                   <VStack spacing={2} align="stretch">
                     {(person.pendingActionItems ?? []).map((item, idx) => (
-                      <ActionItemRow key={idx} item={item} onCreateTask={handleCreateTask} />
+                      <ActionItemRow
+                        key={idx}
+                        item={item}
+                        onCreateTask={handleCreateTask}
+                        onReject={handleRejectActionItem}
+                      />
                     ))}
                   </VStack>
                 )}

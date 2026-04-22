@@ -39,3 +39,21 @@ Started: Wed Apr 22 12:38:22 PDT 2026
   - `ipcMain.handle` handlers that return `void` from the underlying helper should explicitly `return true` (or the actual result) — a `return undefined` through IPC is harmless but the pattern in this codebase (see `db:reviewMeeting`, `db:archivePerson`) is to return `true` for successful fire-and-forget ops, which gives UI a predictable truthy value to await.
   - Import order in main.ts for `./database`: the named-imports block is alphabetical-ish but grouped by domain (meetings, tasks, snoozed, likely-done, people, …). New DB helpers slot in next to the helpers they logically sit beside — keeps diffs small and the import block scannable.
 ---
+
+
+## 2026-04-22 12:58 PDT — US-003
+- Renamed "Pending Action Items" heading → "Action items pending review" in PersonDetailDrawer (src/renderer/People.tsx)
+- Added MdClose import; extended ActionItemRow props with optional `onReject: (item) => Promise<void>`; rendered a second IconButton (aria-label='Reject', title='Reject') next to the existing + Create-task button — both buttons live inside an HStack and are mutually loading-disabled so users can't double-fire
+- Rewrote `handleCreateTask` to call `api.convertActionItem({ meetingId, actionItemIndex, taskFields })` so `convertedToTaskId` is persisted on the source insight (prior implementation called raw `api.createTask` which left the back-reference unset)
+- Added `reloadPerson` helper that re-fetches `api.getPerson(personId)` and setPersons the result — invoked after convert/reject/undo so the drawer reflects the new lifecycle tier immediately
+- Added `handleRejectActionItem`: calls `api.dismissActionItem`, reloads drawer, then surfaces a custom-render Chakra toast ("Rejected — won't show again") with an inline [Undo] link button that calls `api.undismissActionItem` + reloads; toast duration 5000ms
+- Only the pending-list section passes `onReject` to ActionItemRow; rows rendered inside CommunicationRow (per-meeting action items) stay read-only as before
+- Files changed: src/renderer/People.tsx
+- Main build + renderer build both green; all 7 main-process test suites pass (config, database, live-meeting-banner, self-identity, staleness-sweep, task-completion-inference, welcome-back)
+- Browser verification: dev-browser skill unavailable in this Ralph environment (Electron app, not web). PRD note reflects the limitation; manual `npm start` pass recommended before release.
+- **Learnings for future iterations:**
+  - Chakra `useToast` accepts a `render: ({ onClose }) => ReactNode` callback for fully-custom toast bodies — this is the idiomatic way to put action buttons (Undo, Retry) inside a toast. Duration still applies; clicking a button inside should call the passed `onClose` to dismiss early.
+  - Person drawer state lives in a single `person` useState, refreshed via a local `reloadPerson` callback — any mutation (convert, dismiss, undismiss, archive) should await the mutation *then* call `reloadPerson` so the UI reflects the new partition without optimistic bookkeeping.
+  - When a row has multiple action buttons (+ and ×), wrap them in an HStack and cross-disable via `isDisabled={otherLoading}` so an in-flight convert doesn't race with a reject on the same item.
+  - ActionItemRow is reused inside CommunicationRow too — keep the `onReject` prop optional so the component stays portable into contexts where reject doesn't apply.
+---
