@@ -301,6 +301,81 @@ export async function createTask(data: {
   return doc;
 }
 
+/**
+ * Convert a pending action item on a meeting into a real Task, and atomically
+ * write the new taskId back to insights.actionItems[index].convertedToTaskId
+ * so the lifecycle state is durable across getPerson() reloads.
+ */
+export async function convertActionItemToTask(
+  meetingId: string,
+  actionItemIndex: number,
+  taskFields: {
+    title: string;
+    description?: string;
+    priority?: string;
+    dueDate?: string;
+    status?: string;
+  },
+): Promise<{ taskId: string }> {
+  const meeting = await meetingsDb.findOneAsync({ _id: meetingId });
+  if (!meeting) throw new Error(`Meeting not found: ${meetingId}`);
+  const items = (meeting as any).insights?.actionItems || [];
+  if (actionItemIndex < 0 || actionItemIndex >= items.length) {
+    throw new Error(`Action item index out of range: ${actionItemIndex}`);
+  }
+
+  const now = new Date().toISOString();
+  const taskId = uuidv4();
+  await tasksDb.insertAsync({
+    _id: taskId,
+    title: taskFields.title,
+    description: taskFields.description || '',
+    status: taskFields.status || 'todo',
+    priority: taskFields.priority || 'medium',
+    dueDate: taskFields.dueDate || null,
+    source: { type: 'meeting', id: meetingId },
+    aiExtracted: true,
+    approval: { status: 'approved' },
+    provenance: {
+      meetingId,
+      actionItemIndex,
+      extractionMethod: 'manual_convert',
+      extractedAt: now,
+    },
+    archivedAt: null,
+    snoozedAt: null,
+    snoozedReason: null,
+    lastMentionedAt: null,
+    likelyDone: false,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await meetingsDb.updateAsync(
+    { _id: meetingId },
+    { $set: { [`insights.actionItems.${actionItemIndex}.convertedToTaskId`]: taskId } },
+    {},
+  );
+
+  return { taskId };
+}
+
+export async function dismissActionItem(meetingId: string, actionItemIndex: number): Promise<void> {
+  await meetingsDb.updateAsync(
+    { _id: meetingId },
+    { $set: { [`insights.actionItems.${actionItemIndex}.dismissed`]: true } },
+    {},
+  );
+}
+
+export async function undismissActionItem(meetingId: string, actionItemIndex: number): Promise<void> {
+  await meetingsDb.updateAsync(
+    { _id: meetingId },
+    { $unset: { [`insights.actionItems.${actionItemIndex}.dismissed`]: true } },
+    {},
+  );
+}
+
 export async function markLikelyDone(taskId: string): Promise<void> {
   const now = new Date().toISOString();
   await tasksDb.updateAsync(
@@ -367,6 +442,14 @@ export async function touchLastMentioned(taskId: string, when: string): Promise<
 // booting Electron. Do NOT call from production code.
 export function __setTasksDbForTests(db: Datastore): void {
   tasksDb = db;
+}
+
+export function __setMeetingsDbForTests(db: Datastore): void {
+  meetingsDb = db;
+}
+
+export function __setPeopleDbForTests(db: Datastore): void {
+  peopleDb = db;
 }
 
 // ── People ─────────────────────────────────────────────────────────────────────
@@ -455,36 +538,69 @@ export async function getPerson(id: string): Promise<any> {
     )
     .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  const communications = personMeetings.map((m: any, idx: number) => ({
+  // Load tasks once so we can join taskStatus/updatedAt onto converted items
+  const allTasksForJoin = await tasksDb.findAsync({ archivedAt: null });
+  const tasksById = new Map<string, any>(
+    (allTasksForJoin as any[]).map((t: any) => [t._id, t]),
+  );
+
+  const communications = personMeetings.map((m: any) => ({
     _id: m._id,
     title: m.title,
     date: m.date,
     channel: 'meeting',
     summary: m.insights?.summary || null,
-    actionItems: (m.insights?.actionItems || []).map((item: any, i: number) => ({
-      text: item.text,
-      assignee: item.owner || '',
-      dueDate: item.dueDate || '',
-      convertedToTaskId: null,
-      taskStatus: null,
-      insightId: m._id,
-      actionItemIndex: i,
-      meetingId: m._id,
-    })),
+    actionItems: (m.insights?.actionItems || []).map((item: any, i: number) => {
+      const linkedTask = item.convertedToTaskId ? tasksById.get(item.convertedToTaskId) : null;
+      return {
+        text: item.text,
+        assignee: item.owner || '',
+        dueDate: item.dueDate || '',
+        convertedToTaskId: item.convertedToTaskId || null,
+        taskStatus: linkedTask?.status || null,
+        taskUpdatedAt: linkedTask?.updatedAt || null,
+        taskDueDate: linkedTask?.dueDate || null,
+        dismissed: item.dismissed === true,
+        insightId: m._id,
+        actionItemIndex: i,
+        meetingId: m._id,
+        meetingTitle: m.title,
+        isCommitment: item.isCommitment === true,
+      };
+    }),
     keyDecisions: (m.insights?.decisions || []).map((d: any) => d.text || d),
   }));
 
-  // Only show action items owned by the person or the logged-in user
-  const pendingActionItems = communications
-    .flatMap((c: any) => c.actionItems)
-    .filter((item: any) => {
-      if (item.convertedToTaskId) return false;
-      const owner = (item.assignee || '').toLowerCase();
-      if (!owner) return true; // unassigned items are relevant
-      return owner.includes(personName) || personName.includes(owner) ||
-             owner.includes(personEmail) || personEmail.includes(owner) ||
-             isSelf(owner);
-    });
+  const isRelevantOwner = (item: any): boolean => {
+    const owner = (item.assignee || '').toLowerCase();
+    if (!owner) return true; // unassigned items are relevant
+    return owner.includes(personName) || personName.includes(owner) ||
+           owner.includes(personEmail) || personEmail.includes(owner) ||
+           isSelf(owner);
+  };
+
+  const allActionItems = communications.flatMap((c: any) => c.actionItems);
+
+  // Pending: not converted AND not dismissed
+  const pendingActionItems = allActionItems.filter((item: any) => {
+    if (item.convertedToTaskId) return false;
+    if (item.dismissed) return false;
+    return isRelevantOwner(item);
+  });
+
+  // Active: converted AND linked task NOT in completed/cancelled
+  const activeActionItems = allActionItems.filter((item: any) => {
+    if (!item.convertedToTaskId) return false;
+    if (item.taskStatus === 'completed' || item.taskStatus === 'cancelled') return false;
+    return isRelevantOwner(item);
+  });
+
+  // Done: converted AND linked task IN completed/cancelled
+  const doneActionItems = allActionItems.filter((item: any) => {
+    if (!item.convertedToTaskId) return false;
+    if (item.taskStatus !== 'completed' && item.taskStatus !== 'cancelled') return false;
+    return isRelevantOwner(item);
+  });
 
   // Aggregate commitments made by this person across all meetings
   const commitments: any[] = [];
@@ -550,6 +666,8 @@ export async function getPerson(id: string): Promise<any> {
   return {
     ...base,
     pendingActionItems,
+    activeActionItems,
+    doneActionItems,
     commitments,
     nudges: nudges.sort((a, b) => (b.severity === 'high' ? 1 : 0) - (a.severity === 'high' ? 1 : 0)),
     communications,
@@ -558,6 +676,8 @@ export async function getPerson(id: string): Promise<any> {
       totalMeetings: base.meetingCount,
       totalActionItems: base.actionItemCount,
       pendingActionItems: pendingActionItems.length,
+      activeActionItems: activeActionItems.length,
+      doneActionItems: doneActionItems.length,
       totalDecisions: communications.reduce((s: number, c: any) => s + c.keyDecisions.length, 0),
       totalCommitments: commitments.length,
       keyTopics: [],

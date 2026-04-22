@@ -62,6 +62,9 @@ interface ActionItem {
   dueDate: string;
   convertedToTaskId: string | null;
   taskStatus: string | null;
+  taskUpdatedAt?: string | null;
+  taskDueDate?: string | null;
+  dismissed?: boolean;
   insightId: string;
   actionItemIndex: number;
   meetingId: string;
@@ -106,6 +109,8 @@ interface PersonDetail {
     daysSinceLastContact: number | null;
   };
   pendingActionItems: ActionItem[];
+  activeActionItems?: ActionItem[];
+  doneActionItems?: ActionItem[];
   communications: Communication[];
   workingGroups: Array<{ name: string; meetingsTogether: number }>;
 }

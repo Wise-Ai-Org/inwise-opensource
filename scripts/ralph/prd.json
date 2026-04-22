@@ -20,7 +20,7 @@
         "Tests pass: unit tests for convertActionItemToTask (task created + back-reference written), dismissActionItem (flag set), getPerson partitioning (pending vs active vs done vs dismissed-excluded)"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
