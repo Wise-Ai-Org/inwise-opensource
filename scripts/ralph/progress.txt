@@ -168,3 +168,40 @@ Learnings for future iterations:
 - When adding new overlays on top of App.tsx, decide stacking order with care: FirstTimeUserFlow is shown to first-run users at a higher z-index (10000) than Sidebar but must take precedence over WelcomeBack. I gate WelcomeBack with `!showFirstTimeFlow` so first-time users never see both.
 - For Electron-only projects with UI acceptance criteria, "verify in browser" in a PRD is aspirational unless the project has an explicit web-renderer mode. Document when skipped — don't silently claim browser verification that didn't happen.
 ---
+
+## 2026-04-21 19:55 PDT - US-006
+- Added IPC handlers in `src/main/main.ts`: `db:getSnoozedTasks`, `db:snoozeTask`, `db:bringBackTask`, `db:bringBackAllTasks` (the last iterates snoozed tasks and calls `bringBackTask` per id, returning `{ count }`). Imported `getSnoozedTasks`, `snoozeTask`, `bringBackTask` from database.ts.
+- Exposed wrappers in `src/main/preload.ts`: `getSnoozedTasks`, `snoozeTask(id, reason)`, `bringBackTask(id)`, `bringBackAllTasks()` — all invoke-style (no `allowed[]` push-channel update needed).
+- Mirrored wrappers in `src/renderer/api.ts` so components use `api.getSnoozedTasks()` / `api.bringBackTask(id)` / `api.bringBackAllTasks()`.
+- Extended `src/renderer/MyTasks.tsx`:
+  - Added `SnoozedTask` type alias + `SnoozedRow` sub-component (title, due date, relative `snoozedAt` via local `formatRelative`, human-readable `snoozedReason` via `humanSnoozedReason` — 'stale-30d' → 'auto-snoozed — no activity for 30+ days').
+  - New `filter` state (`'board' | 'snoozed'`) with pill-style buttons at the top of the dashboard. Snoozed pill shows a count badge when snoozedTasks.length > 0 (hidden otherwise per PRD).
+  - Fetches snoozed tasks on mount (for the badge) and re-fetches whenever entering the Snoozed view.
+  - `handleBringBack` removes the row optimistically, fires a 3-second success toast ('Brought back — back in your active list.'), and re-fetches active tasks so the brought-back task shows up on the board.
+  - `handleBringBackAll` calls the new IPC, empties the local list, toasts `Brought back N task(s)`, and re-fetches active.
+  - Empty-state: friendly copy explaining that the staleness sweep will populate this view.
+  - Kanban board and pending-approval banner are wrapped in `filter === 'board'` so they hide when Snoozed is active.
+
+Files changed:
+- src/main/main.ts (imports + 4 new IPC handlers)
+- src/main/preload.ts (4 new invoke wrappers)
+- src/renderer/api.ts (4 new method wrappers)
+- src/renderer/MyTasks.tsx (type + row + filter-pill UI + handlers + conditional rendering)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `npx webpack --config webpack.renderer.config.js` — bundle compiled successfully.
+- `node dist/main/{config,database,staleness-sweep,welcome-back,self-identity}.test.js` — regression green.
+
+Browser verification:
+- **Dev-browser skill was NOT available in this session** (same as US-005). Verification relied on: (a) main + renderer typecheck clean, (b) full webpack bundle passes, (c) structural inspection of JSX against PRD copy spec, (d) unit-test regression across all 5 pre-existing suites. Recommended follow-up human smoke: launch Electron, seed 3 snoozed tasks via `snoozeTask(id, 'stale-30d')` in the main-process console, navigate to Tasks → Snoozed, confirm rows render with reason copy and relative `snoozedAt`, click [Bring back] on one and [Bring back all] on the rest.
+
+Learnings for future iterations:
+- The existing `MyTasks.tsx` had NO pre-existing filter-pill system — tasks render as a 3-column kanban. PRD wording "alongside existing filters" was aspirational; the pragmatic interpretation is to ADD pill-style toggles at the top that switch the entire view mode (Board ↔ Snoozed). Future stories that add more list-style filters (e.g., US-007 likely-done pill) can reuse this pattern.
+- When adding a new IPC channel that just wraps an existing DB helper, the boilerplate spans 3 files: `main.ts` (handler), `preload.ts` (invoke wrapper), `api.ts` (typed method). Keep the 3 in lockstep — if any one is missing, the renderer gets `undefined is not a function` at runtime. None of these need entry in the `allowed[]` allowlist (that list is ONLY for `ipcRenderer.on` push channels — reiterated from US-004/US-005).
+- `bringBackAllTasks` on the main side iterates snoozed tasks and calls `bringBackTask` per id. A future optimisation could batch this as a single DB update if performance matters (NeDB doesn't support `$set` across many docs as atomically, so the per-doc loop is fine for now).
+- Relative-time formatting: I wrote a local `formatRelative(iso)` rather than pulling in a date-fns-style dep. The codebase already inlines `toLocaleDateString()` for absolute dates (see existing TaskCard) — local helper matches that style.
+- `handleBringBack` calls `fetchTasks()` after every bring-back so that when the user flips back to the Board view, the restored task is already visible. Otherwise the user would see stale state until the next render-refresh.
+- Badge count on the Snoozed pill: fetching `getSnoozedTasks` once on mount keeps it live for the badge even before the user clicks the pill. If a later story adds real-time staleness-sweep events from main, wire a push channel and call `fetchSnoozedTasks` in the handler (mirror the `tasks:reprioritized` pattern).
+---

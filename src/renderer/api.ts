@@ -38,6 +38,12 @@ export const api = {
   updateTask: (id: string, updates: any) => inwiseAPI.updateTask(id, updates),
   deleteTask: (id: string) => inwiseAPI.deleteTask(id),
 
+  // ── Snoozed Tasks (US-006) ───────────────────────────────────────────────
+  getSnoozedTasks: () => inwiseAPI.getSnoozedTasks(),
+  snoozeTask: (id: string, reason: string) => inwiseAPI.snoozeTask(id, reason),
+  bringBackTask: (id: string) => inwiseAPI.bringBackTask(id),
+  bringBackAllTasks: () => inwiseAPI.bringBackAllTasks(),
+
   // ── People ───────────────────────────────────────────────────────────────
   getPeople: (search?: string) => inwiseAPI.getPeople(search),
   getArchivedPeople: () => inwiseAPI.getArchivedPeople(),

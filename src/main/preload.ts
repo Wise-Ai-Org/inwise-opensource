@@ -34,6 +34,12 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   updateTask: (id: string, updates: any) => ipcRenderer.invoke('db:updateTask', id, updates),
   deleteTask: (id: string) => ipcRenderer.invoke('db:deleteTask', id),
 
+  // Snoozed tasks (US-006)
+  getSnoozedTasks: () => ipcRenderer.invoke('db:getSnoozedTasks'),
+  snoozeTask: (id: string, reason: string) => ipcRenderer.invoke('db:snoozeTask', id, reason),
+  bringBackTask: (id: string) => ipcRenderer.invoke('db:bringBackTask', id),
+  bringBackAllTasks: () => ipcRenderer.invoke('db:bringBackAllTasks'),
+
   // People
   getPeople: (search?: string) => ipcRenderer.invoke('db:getPeople', search),
   getArchivedPeople: () => ipcRenderer.invoke('db:getArchivedPeople'),

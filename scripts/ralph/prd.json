@@ -118,7 +118,7 @@
         "Verify in browser using dev-browser skill: seed 3 snoozed tasks, navigate to Snoozed filter, confirm all 3 render with reasons; bring one back, confirm it disappears from Snoozed and appears in Active; bring back all, confirm empty state"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

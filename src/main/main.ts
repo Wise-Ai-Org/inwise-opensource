@@ -15,6 +15,7 @@ import {
   getMeetings, getMeeting, deleteMeeting, getAllPastDecisions, getOverdueCommitments,
   createMeetingFromTranscript,
   getTasks, createTask, updateTask, deleteTask,
+  getSnoozedTasks, snoozeTask, bringBackTask,
   getPeople, getArchivedPeople, getPerson, addPerson, addTrackedPeople,
   archivePerson, unarchivePerson, getSuggestedPeople, updatePersonProfile,
   getPersonAgendaContext, getMeetingAgendaContext,
@@ -811,6 +812,22 @@ ipcMain.handle('db:updateTask', async (_e, id, updates) => {
   return result;
 });
 ipcMain.handle('db:deleteTask', async (_e, id) => { await deleteTask(id); return true; });
+
+// Snoozed tasks (US-006)
+ipcMain.handle('db:getSnoozedTasks', async () => getSnoozedTasks());
+ipcMain.handle('db:snoozeTask', async (_e, id: string, reason: string) => {
+  await snoozeTask(id, reason || 'manual');
+  return true;
+});
+ipcMain.handle('db:bringBackTask', async (_e, id: string) => {
+  await bringBackTask(id);
+  return true;
+});
+ipcMain.handle('db:bringBackAllTasks', async () => {
+  const snoozed = await getSnoozedTasks();
+  for (const t of snoozed) await bringBackTask(t._id);
+  return { count: snoozed.length };
+});
 
 // People
 ipcMain.handle('db:getPeople', async (_e, search) => getPeople(search));
