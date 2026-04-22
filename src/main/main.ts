@@ -1338,6 +1338,17 @@ ipcMain.handle('welcomeBack:liveMeeting', () => {
   });
 });
 
+ipcMain.handle('app:setLoginItemOpenAtLogin', (_e, enabled: boolean) => {
+  try {
+    app.setLoginItemSettings({ openAtLogin: !!enabled });
+    log('info', 'login-item', `openAtLogin=${!!enabled}`);
+    return { ok: true };
+  } catch (err) {
+    log('error', 'login-item', `setLoginItemSettings failed: ${String(err)}`);
+    return { ok: false, error: String(err) };
+  }
+});
+
 ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; message?: string; stack?: string; source?: string }) => {
   const name = payload?.name || 'UnhandledRejection';
   const message = payload?.message || '(no message)';

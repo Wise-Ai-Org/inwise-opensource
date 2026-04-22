@@ -176,7 +176,7 @@
         "Verify in browser using dev-browser skill: with openAtLogin=false and 3+ simulated missed events, confirm offer renders; click Turn on, confirm success state; re-open app, confirm openAtLogin is now true and offer no longer shows"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]

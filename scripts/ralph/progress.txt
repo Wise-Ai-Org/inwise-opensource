@@ -15,6 +15,8 @@ Started: Tue Apr 21 13:19:47 PDT 2026
 - LLM responses that include IDs MUST be filtered against the set of IDs passed in. Models hallucinate. See `parseInferenceResponse(text, validIds)` as the reference.
 - Renderer "session-local" state that must survive re-renders without causing them (e.g. dismissed-id sets) uses `useRef<Set<string>>(new Set())`, not `useState`. Pair with a separate visible-state flag that IS `useState`-driven.
 - Pre-check IPCs that gate primary UI (e.g. `welcomeBack:liveMeeting` before WelcomeBack renders) must be fail-open — catch/swallow errors and fall back to the default render path rather than breaking the screen.
+- Ask-cards that trigger a side effect AND morph in place (e.g. launchAtStartupOffer → "Done…" confirmation) should own their state in a dedicated sub-component; the parent dispatcher stays dumb and just routes on `ask.kind`. Parent-owned `onLocalDismiss` is reused so `[Not now]` hides the card without dismissing the whole screen.
+- Main-process side effects triggered by the renderer (e.g. `app.setLoginItemSettings`) should be wrapped in try/catch and return `{ ok: boolean, error?: string }` so the renderer can present a recovery state without leaking the raw exception.
 
 ---
 
@@ -294,4 +296,32 @@ Learnings for future iterations:
 - React render-order gotcha: **do not render `WelcomeBack` before `liveMeetingChecked` is true**. If you do, WelcomeBack may mount, fire its compute IPC, and flash on screen before the live-meeting check resolves. Gate the render on `liveMeetingChecked` like this story does.
 - The **banner mounts inside `.main-content`** (not as a fixed overlay) so it scrolls with content, doesn't obscure the Sidebar, and doesn't need its own z-index. Full-screen overlays (FirstTimeUserFlow, WelcomeBack) live outside `.main-content`. Match the pattern: inline-banner = in the content flow; modal = outside, fixed-positioned.
 - `startRecording(title, eventId)` is the canonical recording-kick-off entry point from the renderer (preload exposes it as `inwiseAPI.startRecording`). The Sidebar and now LiveMeetingBanner both use it — that's 2 call sites. If any future story adds a 3rd, consider moving the "pick title, pick eventId, call IPC" logic into a shared helper in `src/renderer/api.ts`.
+---
+
+## 2026-04-21 20:24 PDT - US-009
+- Added IPC handler `app:setLoginItemOpenAtLogin(enabled: boolean)` in `src/main/main.ts` — calls `app.setLoginItemSettings({ openAtLogin })`, logs outcome, returns `{ ok: true }` on success or `{ ok: false, error }` on failure.
+- Exposed `setLoginItemOpenAtLogin(enabled)` in `src/main/preload.ts` (invoke-style; no `allowed[]` update needed — that list is for main→renderer push channels only).
+- Extracted a new internal `LaunchAtStartupCard` sub-component in `src/renderer/WelcomeBack.tsx` that owns local state (`offer` → `enabling` → `enabled` | `failed`). On `[Turn on]`, it calls `inwiseAPI.setLoginItemOpenAtLogin(true)`; on success, the card morphs to the confirmation line "Done. Inwise will start automatically next time you log in." — the welcome-back screen stays open so the user isn't whisked away. On failure, shows an inline recovery message without leaving the offer state. `[Not now]` still calls `onLocalDismiss` (inherited from the ask-dismiss plumbing) which hides just the card, not the whole screen — matches PRD.
+- Compute-side guard (`openAtLogin === true` ⇒ no launchAtStartupOffer) was already present from US-004 in `computeWelcomeBack`; verified via the existing `welcome-back.test.ts` case "openAtLogin=true suppresses launch offer". Missed-meetings detection (`startTime > priorOpen && startTime < now && (no meetings row || row.status === 'calendar_sync')`) was also already implemented in US-004.
+- PRD note about `ask.kind === 'launchAtStartupOffer'` rendering the offer card described in US-005 — already wired via the `AskCard` dispatcher, now delegates to the new stateful sub-component.
+
+Files changed:
+- src/main/main.ts (1 new IPC handler)
+- src/main/preload.ts (1 new invoke wrapper)
+- src/renderer/WelcomeBack.tsx (new LaunchAtStartupCard sub-component with local state machine)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `npx webpack --config webpack.renderer.config.js` — both bundles compiled successfully.
+- `node dist/main/{config,database,staleness-sweep,welcome-back,live-meeting-banner,task-completion-inference}.test.js` — all regression suites pass.
+
+Browser verification:
+- **Dev-browser skill was NOT available in this session** (same as US-005–US-008). Verification relied on: (a) main + renderer typecheck clean, (b) full webpack bundle passes, (c) reuse of already-tested compute guards from US-004, (d) structural inspection of JSX against PRD copy spec. Recommended follow-up human smoke: launch Electron with `openAtLogin=false` and inject a welcomeBack:compute payload with `ask.kind = 'launchAtStartupOffer'`; confirm the offer card renders with the correct copy; click `[Turn on]` and confirm the card morphs to the "Done. Inwise will start automatically next time you log in." confirmation; re-open the app and confirm `app.getLoginItemSettings().openAtLogin === true` (and therefore the compute now suppresses the offer permanently).
+
+Learnings for future iterations:
+- For ask-cards in WelcomeBack that trigger a side effect AND transform in-place after success (rather than dismissing the screen), **own the state inside a dedicated sub-component** — don't lift it to the parent. `LaunchAtStartupCard` is the reference pattern: the parent just knows about `ask.kind === 'launchAtStartupOffer'`, and the card runs its own state machine (offer → enabling → enabled | failed) internally. Keeps the dispatcher AskCard dumb.
+- `app.setLoginItemSettings` is platform-aware in Electron (darwin/win32 only). Wrap in try/catch and return a structured result (`{ ok, error }`) so the renderer can show a recovery message without leaking the raw exception.
+- The compute-side guard for this ask (`!openAtLogin`) was already in US-004. When you plan a "one-tap side-effect" ask, bake the corresponding `off/on` guard into compute up-front — otherwise the ask keeps rendering on every future open even after the user already said yes.
+- PRD's "[Not now] dismisses the card only" naturally falls out of reusing the parent's `onLocalDismiss` (which sets `askDismissed=true` → AskCard unmounts, rest of WelcomeBack stays). No new plumbing needed, but note this when adding future asks: the local-dismiss contract is already there.
 ---

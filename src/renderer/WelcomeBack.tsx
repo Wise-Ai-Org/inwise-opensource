@@ -102,6 +102,53 @@ function GhostButton({ children, onClick }: { children: React.ReactNode; onClick
   );
 }
 
+function LaunchAtStartupCard({ onLocalDismiss }: { onLocalDismiss: () => void }) {
+  const [state, setState] = useState<'offer' | 'enabling' | 'enabled' | 'failed'>('offer');
+
+  const handleTurnOn = useCallback(async () => {
+    setState('enabling');
+    try {
+      const api = (window as any).inwiseAPI;
+      const res = await api?.setLoginItemOpenAtLogin?.(true);
+      if (res && res.ok) {
+        setState('enabled');
+      } else {
+        setState('failed');
+      }
+    } catch {
+      setState('failed');
+    }
+  }, []);
+
+  if (state === 'enabled') {
+    return (
+      <div style={askCardStyle} data-testid="welcome-back-ask-launch-confirmed">
+        <div style={{ ...askBodyStyle, marginBottom: 0 }}>
+          Done. Inwise will start automatically next time you log in.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={askCardStyle} data-testid="welcome-back-ask-launch">
+      <div style={askLeadStyle}>Want Inwise to start automatically when you log in?</div>
+      <div style={askBodyStyle}>You missed a few meetings while it was closed.</div>
+      {state === 'failed' && (
+        <div style={{ ...askBodyStyle, color: '#b91c1c', marginBottom: 12 }}>
+          Couldn't change that setting. You can toggle it from your OS login items.
+        </div>
+      )}
+      <div style={askActionsStyle}>
+        <PrimaryButton onClick={handleTurnOn}>
+          {state === 'enabling' ? 'Turning on…' : 'Turn on'}
+        </PrimaryButton>
+        <GhostButton onClick={onLocalDismiss}>Not now</GhostButton>
+      </div>
+    </div>
+  );
+}
+
 function AskCard({
   ask,
   onLocalDismiss,
@@ -141,16 +188,7 @@ function AskCard({
     );
   }
   if (ask.kind === 'launchAtStartupOffer') {
-    return (
-      <div style={askCardStyle} data-testid="welcome-back-ask-launch">
-        <div style={askLeadStyle}>Want Inwise to start automatically when you log in?</div>
-        <div style={askBodyStyle}>You missed a few meetings while it was closed.</div>
-        <div style={askActionsStyle}>
-          <PrimaryButton onClick={onLocalDismiss}>Turn on</PrimaryButton>
-          <GhostButton onClick={onLocalDismiss}>Not now</GhostButton>
-        </div>
-      </div>
-    );
+    return <LaunchAtStartupCard onLocalDismiss={onLocalDismiss} />;
   }
   return null;
 }
