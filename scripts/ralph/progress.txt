@@ -11,6 +11,8 @@ Started: Tue Apr 21 13:19:47 PDT 2026
 - `import { app } from 'electron'` in plain node is safe at load-time (`app` is `undefined`); it only fails when you actually call an `app.*` method. This means tests can import modules that import electron without booting electron.
 - NeDB (`@seald-io/nedb`) without a `filename` option is pure in-memory — perfect for unit tests. `{ field: null }` matches documents where the field is null OR missing (Mongo-compatible), so additive schema changes need no migration.
 - For testable DB helpers on `database.ts`, use the `__setTasksDbForTests(db)` injection hook. Follow the same pattern if future stories need to exercise meetings/people DBs in unit tests.
+- LLM-calling modules follow the `task-completion-inference.ts` pattern: a pure `fooWith(args, llmCaller)` for tests + a production wrapper `foo(args)` that injects the real Claude/OpenAI fetch caller. Do NOT replicate `extractor.ts` (inline `getConfig()` + fetch in the same function) for new stories — it's not unit-testable.
+- LLM responses that include IDs MUST be filtered against the set of IDs passed in. Models hallucinate. See `parseInferenceResponse(text, validIds)` as the reference.
 
 ---
 
@@ -204,4 +206,49 @@ Learnings for future iterations:
 - Relative-time formatting: I wrote a local `formatRelative(iso)` rather than pulling in a date-fns-style dep. The codebase already inlines `toLocaleDateString()` for absolute dates (see existing TaskCard) — local helper matches that style.
 - `handleBringBack` calls `fetchTasks()` after every bring-back so that when the user flips back to the Board view, the restored task is already visible. Otherwise the user would see stale state until the next render-refresh.
 - Badge count on the Snoozed pill: fetching `getSnoozedTasks` once on mount keeps it live for the badge even before the user clicks the pill. If a later story adds real-time staleness-sweep events from main, wire a push channel and call `fetchSnoozedTasks` in the handler (mirror the `tasks:reprioritized` pattern).
+---
+
+## 2026-04-21 20:05 PDT - US-007
+- Added new module `src/main/task-completion-inference.ts` with pure `inferCompletedTaskIdsWith(transcript, openTasks, llm)` (DI-friendly, testable) + `inferCompletedTaskIds(transcript, openTasks)` production wrapper that injects the real Claude/OpenAI caller via `getConfig()`.
+- Prompt requires high-confidence, past-tense, definitive completion signals; instructs model to prefer false negatives. Response schema: `{"completedTaskIds": ["id1", ...]}`. Returned IDs are filtered against the set of IDs the model was given — hallucinated or stray IDs are silently dropped.
+- LLM errors never bubble — the wrapper catches and returns `[]`, so a flaky API key never breaks the recording pipeline.
+- Extended `src/main/database.ts`:
+  - `createTask` now initializes `likelyDone: false` on every new task record.
+  - New helpers: `markLikelyDone(id)` (sets flag, bumps updatedAt — never touches status), `confirmLikelyDone(id)` (clears flag + sets status='done'), `rejectLikelyDone(id)` (clears flag only, preserves status).
+- Wired the inference step into `runRecordingPipeline` in `src/main/main.ts` — placed AFTER the jira-auto-push block and BEFORE `pipeline:done`, per PRD. Flow: fetch active/non-snoozed tasks → call `inferCompletedTaskIds` → for each returned ID call `markLikelyDone` → log `pipeline:likely-done | flagged=N tasks` → send `tasks:likely-done-updated` push to renderer.
+- Added IPC handlers `db:confirmLikelyDone` and `db:rejectLikelyDone`; exposed wrappers in `src/main/preload.ts` (invoke-style, no allowed[] update needed) and `src/renderer/api.ts`.
+- Added `tasks:likely-done-updated` to preload's `allowed[]` push-channel allowlist — MyTasks.tsx subscribes to it and refreshes so the pill appears without requiring the user to reload.
+- Extended `Task` interface in `MyTasks.tsx` with `likelyDone?: boolean`.
+- `TaskCard` now renders a green "Done?" pill with [Yes]/[No] buttons when `task.likelyDone === true`, positioned right under the title. [Yes] calls `handleConfirmLikelyDone` → `api.confirmLikelyDone` → optimistically sets status='completed' + clears pill. [No] calls `handleRejectLikelyDone` → `api.rejectLikelyDone` → just clears the pill. Both show 2-second toasts.
+- Handlers are plumbed through `TaskColumn` → `TaskCard` via new optional `onConfirmLikelyDone`/`onRejectLikelyDone` props.
+- Added `task-completion-inference.test.ts` covering all acceptance gates: parseInferenceResponse (valid / fenced / hallucinated-filter / empty / malformed / wrong-shape), buildUserMessage sanity, early-return gates (empty transcript, no open tasks), inference with mocked LLM (empty, single match, multi match, hallucinated-filter, throws→empty), and DB helpers (markLikelyDone never sets status=done; confirmLikelyDone sets status=done; rejectLikelyDone preserves status).
+
+Files changed:
+- src/main/database.ts (likelyDone default + 3 new helpers)
+- src/main/task-completion-inference.ts (new)
+- src/main/task-completion-inference.test.ts (new)
+- src/main/main.ts (import + inference step + 2 new IPC handlers)
+- src/main/preload.ts (2 new invoke wrappers + 1 new push channel in allowed[])
+- src/renderer/api.ts (2 new method wrappers)
+- src/renderer/MyTasks.tsx (Task schema + TaskCard/TaskColumn props + handlers + pill UI + push-channel subscription)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `npx webpack --config webpack.renderer.config.js` — bundle compiled successfully.
+- `node dist/main/task-completion-inference.test.js` — all tests pass.
+- `node dist/main/{config,database,staleness-sweep,welcome-back,self-identity}.test.js` — regression green.
+
+Browser verification:
+- **Dev-browser skill was NOT available in this session** (same as US-005 and US-006). Verification relied on: (a) main + renderer typecheck clean, (b) full webpack bundle passes, (c) structural inspection of JSX against PRD copy spec, (d) unit-test coverage of inference + DB helpers. Recommended follow-up human smoke: launch Electron, seed a task via `createTask({ title: 'ship feature X' })`, run a meeting whose transcript says "we shipped feature X yesterday", confirm the Done? pill appears on the task card, click [Yes] and confirm task moves to Completed column, create another likelyDone task and click [No] to confirm pill disappears without status change.
+
+Learnings for future iterations:
+- The **DI pattern** established in `welcome-back.ts` (inject all deps; pure function is the testable surface) was reused here with an extra twist: the LLM call is abstracted as a `LlmCaller` function type, and tests provide mock callers. This is the cleanest pattern in this codebase for anything that makes an external API call — future stories that call an LLM should follow `task-completion-inference.ts` as the reference (NOT `extractor.ts`, which hard-codes `getConfig()` inline).
+- **LLM-returned IDs must be validated against a known set.** Models hallucinate IDs. The `validTaskIds` Set filter in `parseInferenceResponse` is non-negotiable — without it, a typo'd ID in the model's response would fail silently at `markLikelyDone` (NeDB `updateAsync` with a non-matching `_id` is a no-op) but corrupt the log line counts.
+- **LLM errors in the pipeline must be caught at the boundary.** The pipeline has its own try/catch around the inference step AND the inference function catches internally. Defense-in-depth — a failure in this step cannot abort the pipeline because `pipeline:done` is what triggers the overlay close + toast.
+- `markLikelyDone` is **strictly additive** — it does not touch `status`. The PRD is emphatic: never auto-close. Only `confirmLikelyDone` is allowed to set `status='done'`. If a future story adds more "inferred state" fields (e.g., `likelyBlocked`), follow the same 3-helper pattern: `markX`, `confirmX`, `rejectX`, where `markX` NEVER mutates user-owned fields.
+- The **push channel `tasks:likely-done-updated`** is sent with no payload — the renderer just knows to re-fetch. If we ever need to tell the UI which specific task was flagged, extend the payload shape; but for now, the simple "something changed, refetch" pattern aligns with how `tasks:reprioritized` already works.
+- The PRD's "only evaluate transcripts within 24h" clause is **guaranteed by position in the pipeline** — `runRecordingPipeline` runs seconds after meeting creation, so the transcript is always fresh. No explicit date-check needed in code. If inference is ever run against historical meetings (e.g., a backfill job), that code path needs its own 24h guard.
+- Chakra UI's `Button` inside a draggable `Card` needs `e.stopPropagation()` on onClick — otherwise the drag listeners on the card swallow the click. This pattern was already used for the archive/delete buttons; the Done?/No buttons follow the same idiom.
+- When adding new `TaskCard` or `TaskColumn` props, **both parent and child must accept them as optional** so that the DragOverlay `<TaskCard>` (rendered outside the Column) doesn't need to plumb every prop. The DragOverlay's TaskCard is a static snapshot — pills/actions won't fire there.
 ---

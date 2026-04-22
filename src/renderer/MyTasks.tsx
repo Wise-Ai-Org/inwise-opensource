@@ -401,6 +401,7 @@ interface Task {
   teamId?: string;
   blockerId?: string | null;
   actualHours?: number | null;
+  likelyDone?: boolean;
 }
 
 const priorityColors: Record<string, string> = {
@@ -426,6 +427,8 @@ function TaskCard({
   onClick,
   onArchive,
   onDelete,
+  onConfirmLikelyDone,
+  onRejectLikelyDone,
   isOverlay = false
 }: {
   task: Task;
@@ -435,6 +438,8 @@ function TaskCard({
   onClick?: (task: Task) => void;
   onArchive?: (taskId: string) => void;
   onDelete?: (taskId: string) => void;
+  onConfirmLikelyDone?: (taskId: string) => void;
+  onRejectLikelyDone?: (taskId: string) => void;
   isOverlay?: boolean;
 }) {
   const cardBg = useColorModeValue('white', 'gray.700');
@@ -548,6 +553,37 @@ function TaskCard({
         <Text fontWeight="semibold" fontSize="sm" noOfLines={2}>
           {task.title}
         </Text>
+
+        {task.likelyDone && (
+          <HStack
+            spacing={2}
+            p={2}
+            bg="green.50"
+            borderRadius="md"
+            borderLeftWidth="3px"
+            borderLeftColor="green.400"
+            data-testid="likely-done-pill"
+          >
+            <Badge colorScheme="green" fontSize="xs">Done?</Badge>
+            <Text fontSize="xs" color="gray.700" flex={1}>
+              Transcript suggests this is completed.
+            </Text>
+            <Button
+              size="xs"
+              colorScheme="green"
+              onClick={(e) => { e.stopPropagation(); onConfirmLikelyDone?.(task._id); }}
+            >
+              Yes
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={(e) => { e.stopPropagation(); onRejectLikelyDone?.(task._id); }}
+            >
+              No
+            </Button>
+          </HStack>
+        )}
 
         {task.priorityReasoning && task.priorityReasoning !== 'Standard priority' && (
           <Text fontSize="xs" color="orange.500" noOfLines={1}>{task.priorityReasoning}</Text>
@@ -698,7 +734,9 @@ function TaskColumn({
   onReject,
   onTaskClick,
   onArchive,
-  onDelete
+  onDelete,
+  onConfirmLikelyDone,
+  onRejectLikelyDone
 }: {
   title: string;
   tasks: Task[];
@@ -711,6 +749,8 @@ function TaskColumn({
   onTaskClick?: (task: Task) => void;
   onArchive?: (taskId: string) => void;
   onDelete?: (taskId: string) => void;
+  onConfirmLikelyDone?: (taskId: string) => void;
+  onRejectLikelyDone?: (taskId: string) => void;
 }) {
   const columnBg = useColorModeValue('gray.50', 'gray.800');
   const overBg = useColorModeValue('blue.50', 'blue.900');
@@ -764,6 +804,8 @@ function TaskColumn({
             onClick={onTaskClick}
             onArchive={onArchive}
             onDelete={onDelete}
+            onConfirmLikelyDone={onConfirmLikelyDone}
+            onRejectLikelyDone={onRejectLikelyDone}
           />
         ))}
         {tasks.length === 0 && (
@@ -959,6 +1001,13 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
     return () => { api.off?.('tasks:reprioritized', onReprioritized); };
   }, []);
 
+  // Auto-refresh when the inference pipeline flags tasks as likely-done
+  useEffect(() => {
+    const onLikelyDoneUpdated = () => fetchTasks();
+    api.on?.('tasks:likely-done-updated', onLikelyDoneUpdated);
+    return () => { api.off?.('tasks:likely-done-updated', onLikelyDoneUpdated); };
+  }, []);
+
   // Jira sync details modal
   const [jiraSyncDetails, setJiraSyncDetails] = useState<{ created?: number; linked?: number; total?: number; updated?: number; pulled?: number; items?: any[] } | null>(null);
   const { isOpen: isJiraSyncOpen, onOpen: onJiraSyncOpen, onClose: onJiraSyncClose } = useDisclosure();
@@ -1046,6 +1095,32 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
     if (pending.length === 0) return;
     for (const t of pending) {
       await handleApprove(t._id);
+    }
+  };
+
+  const handleConfirmLikelyDone = async (taskId: string) => {
+    try {
+      await api.confirmLikelyDone(taskId);
+      setTasks(prev => prev.map(t =>
+        t._id === taskId
+          ? { ...t, likelyDone: false, status: 'completed' as Task['status'] }
+          : t
+      ));
+      toast({ title: 'Marked done', status: 'success', duration: 2000 });
+    } catch {
+      toast({ title: 'Failed to mark done', status: 'error', duration: 3000 });
+    }
+  };
+
+  const handleRejectLikelyDone = async (taskId: string) => {
+    try {
+      await api.rejectLikelyDone(taskId);
+      setTasks(prev => prev.map(t =>
+        t._id === taskId ? { ...t, likelyDone: false } : t
+      ));
+      toast({ title: 'Kept as-is', status: 'info', duration: 2000 });
+    } catch {
+      toast({ title: 'Failed to update', status: 'error', duration: 3000 });
     }
   };
 
@@ -1271,6 +1346,8 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
             onTaskClick={handleTaskClick}
             onArchive={handleArchive}
             onDelete={handleDeleteRequest}
+            onConfirmLikelyDone={handleConfirmLikelyDone}
+            onRejectLikelyDone={handleRejectLikelyDone}
           />
           <TaskColumn
             title="In Progress"
@@ -1284,6 +1361,8 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
             onTaskClick={handleTaskClick}
             onArchive={handleArchive}
             onDelete={handleDeleteRequest}
+            onConfirmLikelyDone={handleConfirmLikelyDone}
+            onRejectLikelyDone={handleRejectLikelyDone}
           />
           <TaskColumn
             title="Completed"
@@ -1297,6 +1376,8 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
             onTaskClick={handleTaskClick}
             onArchive={handleArchive}
             onDelete={handleDeleteRequest}
+            onConfirmLikelyDone={handleConfirmLikelyDone}
+            onRejectLikelyDone={handleRejectLikelyDone}
           />
         </SimpleGrid>
 

@@ -294,10 +294,38 @@ export async function createTask(data: {
     snoozedAt: null,
     snoozedReason: null,
     lastMentionedAt: null,
+    likelyDone: false,
     createdAt: now,
     updatedAt: now,
   });
   return doc;
+}
+
+export async function markLikelyDone(taskId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await tasksDb.updateAsync(
+    { _id: taskId },
+    { $set: { likelyDone: true, updatedAt: now } },
+    {},
+  );
+}
+
+export async function confirmLikelyDone(taskId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await tasksDb.updateAsync(
+    { _id: taskId },
+    { $set: { likelyDone: false, status: 'done', updatedAt: now } },
+    {},
+  );
+}
+
+export async function rejectLikelyDone(taskId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await tasksDb.updateAsync(
+    { _id: taskId },
+    { $set: { likelyDone: false, updatedAt: now } },
+    {},
+  );
 }
 
 export async function updateTask(id: string, updates: Record<string, any>): Promise<any> {

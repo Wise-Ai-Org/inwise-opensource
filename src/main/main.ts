@@ -16,6 +16,7 @@ import {
   createMeetingFromTranscript,
   getTasks, createTask, updateTask, deleteTask,
   getSnoozedTasks, snoozeTask, bringBackTask,
+  markLikelyDone, confirmLikelyDone, rejectLikelyDone,
   getPeople, getArchivedPeople, getPerson, addPerson, addTrackedPeople,
   archivePerson, unarchivePerson, getSuggestedPeople, updatePersonProfile,
   getPersonAgendaContext, getMeetingAgendaContext,
@@ -35,6 +36,7 @@ import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from 
 import { createTray, updateTrayMenu, destroyTray } from './tray';
 import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
 import { computeWelcomeBack } from './welcome-back';
+import { inferCompletedTaskIds } from './task-completion-inference';
 
 Menu.setApplicationMenu(null);
 
@@ -480,6 +482,26 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       log('error', 'pipeline:reprioritize-failed', scoreErr.message);
     }
 
+    // Task completion inference — flag tasks the transcript strongly implies are done.
+    // Never auto-completes; user confirms via the 'Done?' pill in the Tasks view.
+    try {
+      const openTasks = await getTasks();
+      const candidates = openTasks
+        .filter((t: any) => t.status !== 'done' && t.status !== 'completed')
+        .map((t: any) => ({ _id: t._id, title: t.title, description: t.description }));
+      const flaggedIds = await inferCompletedTaskIds(transcript, candidates);
+      for (const id of flaggedIds) {
+        await markLikelyDone(id);
+      }
+      log('info', 'pipeline:likely-done', `flagged=${flaggedIds.length} tasks`);
+      if (flaggedIds.length > 0) {
+        log('info', 'pipeline:likely-done-ids', flaggedIds.join(','));
+        mainWindow?.webContents.send('tasks:likely-done-updated');
+      }
+    } catch (inferErr: any) {
+      log('error', 'pipeline:likely-done-failed', inferErr.message);
+    }
+
     sendToOverlay({ status: 'done' });
     mainWindow?.webContents.send('recording:status', { status: 'done' });
     log('info', 'pipeline:done', meetingId);
@@ -827,6 +849,16 @@ ipcMain.handle('db:bringBackAllTasks', async () => {
   const snoozed = await getSnoozedTasks();
   for (const t of snoozed) await bringBackTask(t._id);
   return { count: snoozed.length };
+});
+
+// Likely-done task confirmation (US-007)
+ipcMain.handle('db:confirmLikelyDone', async (_e, id: string) => {
+  await confirmLikelyDone(id);
+  return true;
+});
+ipcMain.handle('db:rejectLikelyDone', async (_e, id: string) => {
+  await rejectLikelyDone(id);
+  return true;
 });
 
 // People

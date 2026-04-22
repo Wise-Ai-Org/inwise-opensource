@@ -140,7 +140,7 @@
         "Tests pass: unit tests for the inference call with mocked LLM responses covering (a) empty list, (b) single match, (c) multi-match; UI test that the Done? pill renders when likelyDone === true and clears on [Yes]/[No]"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

@@ -40,6 +40,10 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   bringBackTask: (id: string) => ipcRenderer.invoke('db:bringBackTask', id),
   bringBackAllTasks: () => ipcRenderer.invoke('db:bringBackAllTasks'),
 
+  // Likely-done task confirmation (US-007)
+  confirmLikelyDone: (id: string) => ipcRenderer.invoke('db:confirmLikelyDone', id),
+  rejectLikelyDone: (id: string) => ipcRenderer.invoke('db:rejectLikelyDone', id),
+
   // People
   getPeople: (search?: string) => ipcRenderer.invoke('db:getPeople', search),
   getArchivedPeople: () => ipcRenderer.invoke('db:getArchivedPeople'),
@@ -114,7 +118,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 
   // Events from main → renderer
   on: (channel: string, cb: (...args: any[]) => void) => {
-    const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'jira:auto-synced', 'pipeline:error', 'audio:health'];
+    const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'tasks:likely-done-updated', 'jira:auto-synced', 'pipeline:error', 'audio:health'];
     if (allowed.includes(channel)) {
       ipcRenderer.on(channel, (_event, ...args) => cb(...args));
     }

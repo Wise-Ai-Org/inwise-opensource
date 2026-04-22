@@ -44,6 +44,10 @@ export const api = {
   bringBackTask: (id: string) => inwiseAPI.bringBackTask(id),
   bringBackAllTasks: () => inwiseAPI.bringBackAllTasks(),
 
+  // ── Likely-done task confirmation (US-007) ───────────────────────────────
+  confirmLikelyDone: (id: string) => inwiseAPI.confirmLikelyDone(id),
+  rejectLikelyDone: (id: string) => inwiseAPI.rejectLikelyDone(id),
+
   // ── People ───────────────────────────────────────────────────────────────
   getPeople: (search?: string) => inwiseAPI.getPeople(search),
   getArchivedPeople: () => inwiseAPI.getArchivedPeople(),
