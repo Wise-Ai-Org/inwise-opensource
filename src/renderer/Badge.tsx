@@ -182,13 +182,49 @@ export default function Badge() {
         sysStream = null;
       }
 
+      // Windows desktopCapturer can hand back a "successful" stream that produces
+      // silence when no app is actively routing audio to the captured source.
+      // Probe the stream for real content before trusting it — otherwise we write
+      // fake-stereo WAVs with a silent right channel and whisper hallucinates.
+      let sysAudioSilent = false;
+      if (sysStream) {
+        const probeCtx = new AudioContext();
+        const probeSrc = probeCtx.createMediaStreamSource(sysStream);
+        const analyser = probeCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        probeSrc.connect(analyser);
+        const buf = new Float32Array(analyser.fftSize);
+        let maxRms = 0;
+        const probeStart = Date.now();
+        while (Date.now() - probeStart < 1500) {
+          analyser.getFloatTimeDomainData(buf);
+          let sumSq = 0;
+          for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
+          const rms = Math.sqrt(sumSq / buf.length);
+          if (rms > maxRms) maxRms = rms;
+          if (maxRms > 0.001) break;
+          await new Promise(r => setTimeout(r, 50));
+        }
+        probeSrc.disconnect();
+        await probeCtx.close();
+        if (maxRms <= 0.001) {
+          sysStream.getTracks().forEach(t => t.stop());
+          sysStream = null;
+          sysAudioSilent = true;
+        }
+      }
+
       if (!sysStream) setSysAudioWarning(true);
       hasStereoRef.current = !!sysStream;
 
       reportHealth({
         micOk: true,
         systemAudioOk: !!sysStream,
-        message: sysStream ? undefined : 'System audio unavailable — only your voice will be recorded',
+        message: sysStream
+          ? undefined
+          : sysAudioSilent
+            ? 'System audio source is silent — check your meeting app is actively playing audio'
+            : 'System audio unavailable — only your voice will be recorded',
       });
 
       const audioCtx = new AudioContext({ sampleRate: 16000 });
