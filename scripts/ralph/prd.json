@@ -1,182 +1,94 @@
 {
   "project": "inwise-opensource",
-  "branchName": "ralph/welcome-back-task-lifecycle",
-  "description": "Helper-voice welcome-back screen for returning users + task lifecycle (auto-snooze, bring-back, completion inference). Leads with what the app did for the user, surfaces at most one ask, suppresses entirely during live meetings. Built around the principle: a returning user should feel helped, not nagged.",
+  "branchName": "ralph/action-item-lifecycle",
+  "description": "Fix the hidden bug where Create-task doesn't persist convertedToTaskId, add a Reject button next to the Create-task button (same approve/reject pattern as Communications), rename 'PENDING ACTION ITEMS' to 'Action items pending review', and add a second 'Active action items' section with a collapsed 'Show N completed' toggle on the Person drawer. Extend seed:demo to populate all three lifecycle tiers so the UI is visibly exercised.",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Persist lastOpenedAt + welcomeBackLastSeenAt timestamps in config",
-      "description": "As a developer, I need two timestamps tracked in config so welcome-back logic has reliable gap-since-last-open and last-dismissed signals.",
+      "title": "Persist convertedToTaskId + dismissed on insight action items; partition getPerson into pending/active/done",
+      "description": "As a developer, I need writes to the source insight record so action items have durable lifecycle state instead of stateless projections that always look pending.",
       "acceptanceCriteria": [
-        "Extend Config in src/main/config.ts with lastOpenedAt: string | null and welcomeBackLastSeenAt: string | null; defaults null",
-        "Write lastOpenedAt = new Date().toISOString() on BOTH mainWindow 'ready-to-show' and mainWindow 'show' events (covers first open AND tray → show)",
-        "Export helper getDaysSinceLastOpen(): number | null — returns null when lastOpenedAt is null (first-ever launch)",
-        "Export helper markWelcomeBackSeen(): void that writes welcomeBackLastSeenAt = new Date().toISOString()",
-        "On fresh install with no prior lastOpenedAt, downstream code treats as first-ever open (no welcome-back)",
+        "Action items in meeting.insights.actionItems gain two optional fields: convertedToTaskId?: string | null and dismissed?: boolean (default absent — no migration)",
+        "Add src/main/database.ts export convertActionItemToTask(meetingId, actionItemIndex, taskFields) that creates a Task AND updates insights.actionItems[actionItemIndex].convertedToTaskId atomically, returning {taskId}",
+        "Add src/main/database.ts export dismissActionItem(meetingId, actionItemIndex) that sets insights.actionItems[actionItemIndex].dismissed = true",
+        "Add src/main/database.ts export undismissActionItem(meetingId, actionItemIndex) that clears the dismissed flag",
+        "Update getPerson() pending filter at database.ts:478-487 to exclude BOTH convertedToTaskId set AND dismissed === true",
+        "getPerson() returns a new activeActionItems array: items with convertedToTaskId set AND linked task status NOT IN ('completed','cancelled'). Join on tasks collection to populate current status, updatedAt, dueDate on each item",
+        "getPerson() returns a new doneActionItems array: items with convertedToTaskId set AND linked task status IN ('completed','cancelled')",
+        "The ActionItem interface in src/renderer/People.tsx:59-70 mirrors the new fields (dismissed?, updated taskStatus source)",
         "Typecheck passes",
-        "Tests pass"
+        "Tests pass: unit tests for convertActionItemToTask (task created + back-reference written), dismissActionItem (flag set), getPerson partitioning (pending vs active vs done vs dismissed-excluded)"
       ],
       "priority": 1,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
       "id": "US-002",
-      "title": "Task snooze schema + helpers (snoozedAt, snoozedReason, lastMentionedAt)",
-      "description": "As a developer, I need task records to support a soft snoozed state with full reversibility so the staleness sweep and filter UI have a stable substrate.",
+      "title": "IPC + preload bridge for actionItem:convert / :dismiss / :undismiss",
+      "description": "As a developer, I need renderer-facing IPC wrappers so the UI can call the new helpers cleanly.",
       "acceptanceCriteria": [
-        "Extend task records in src/main/database.ts with three new fields: snoozedAt: string | null, snoozedReason: string | null, lastMentionedAt: string | null",
-        "Add helper snoozeTask(taskId: string, reason: string): Promise<void> — sets snoozedAt=now, snoozedReason=reason, bumps updatedAt",
-        "Add helper bringBackTask(taskId: string): Promise<void> — clears snoozedAt and snoozedReason, bumps updatedAt",
-        "Add helper getSnoozedTasks(): Promise<Task[]>",
-        "Add helper touchLastMentioned(taskId: string, when: string): Promise<void>",
-        "Add utility isSnoozed(t: Task): boolean (snoozedAt != null)",
-        "Modify existing getTasks() to filter out snoozed tasks by default",
-        "Add getTasks({ includeSnoozed: true }) overload that returns all (snoozed + active)",
+        "Add ipcMain.handle('actionItem:convert', ...) in src/main/main.ts that calls convertActionItemToTask(meetingId, actionItemIndex, taskFields)",
+        "Add ipcMain.handle('actionItem:dismiss', ...) in src/main/main.ts that calls dismissActionItem(meetingId, actionItemIndex)",
+        "Add ipcMain.handle('actionItem:undismiss', ...) in src/main/main.ts that calls undismissActionItem(meetingId, actionItemIndex)",
+        "Expose convertActionItem, dismissActionItem, undismissActionItem on inwiseAPI in src/main/preload.ts",
+        "Mirror the three methods in src/renderer/api.ts so components can call api.convertActionItem(...), api.dismissActionItem(...), api.undismissActionItem(...)",
         "Typecheck passes",
-        "Tests pass: unit tests for snooze → default getTasks excludes it; bringBack → reappears; touchLastMentioned persists; getSnoozedTasks returns only snoozed"
+        "Tests pass"
       ],
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
       "id": "US-003",
-      "title": "Staleness sweep service — auto-snooze low-priority inactive tasks",
-      "description": "As a user, when I come back after a long gap, I want the app to have quietly cleared tasks that clearly aren't relevant anymore so my active list isn't cluttered with ghosts.",
+      "title": "Rename 'PENDING ACTION ITEMS' to 'Action items pending review' and add Reject (×) button with Undo toast",
+      "description": "As a user, I want to reject an action item with one click when it's not worth tracking, matching the approve/reject pattern used in Communications.",
       "acceptanceCriteria": [
-        "New module src/main/staleness-sweep.ts exporting sweepStaleTasks(): Promise<{ snoozed: Task[] }>",
-        "Eligibility criteria (ALL must be true): status === 'active', !isSnoozed(t), updatedAt < now - 30 days, (!lastMentionedAt || lastMentionedAt < now - 14 days), priority !== 'high'",
-        "For each eligible task, call snoozeTask(t.id, 'stale-30d')",
-        "Return { snoozed: [...just-snoozed tasks...] } for downstream consumption",
-        "Call from app.whenReady() AFTER calendar sync finishes (non-blocking — not awaited inside whenReady)",
-        "Stash result on module-local lastSweepResult with timestamp so US-004 can read without re-running",
-        "Log line: 'staleness-sweep | snoozed=N eligible=E of total active tasks=T'",
+        "Rename the section heading in src/renderer/People.tsx from 'PENDING ACTION ITEMS' (or equivalent existing label) to 'Action items pending review'. Preserve neighboring small-caps styling",
+        "In ActionItemRow (People.tsx:188-247), add a second IconButton next to the existing + Create-task button: a small × using MdClose from react-icons (matches TranscriptReviewModal dismiss style). aria-label='Reject' and a tooltip",
+        "Extend ActionItemRow props with onReject: (item: ActionItem) => Promise<void>",
+        "Clicking × calls onReject(item) which invokes api.dismissActionItem({ meetingId: item.meetingId, actionItemIndex: item.actionItemIndex }) and refreshes person drawer data — the rejected item vanishes from the pending list",
+        "Show a toast: 'Rejected — won\\'t show again' with an [Undo] action that calls api.undismissActionItem with the same args. Undo window: 5 seconds",
+        "Clicking the existing + now calls api.convertActionItem (not raw api.createTask) so convertedToTaskId is persisted",
         "Typecheck passes",
-        "Tests pass: one unit test per eligibility gate (age, mention, priority, already-snoozed) — each returns empty when gate fails"
+        "Verify in browser using dev-browser skill: with seeded demo data, open a Person drawer with pending items; click Reject on one → it disappears from the pending list; toast appears; clicking Undo within 5s restores it; click + on another → it moves from pending to Active (after US-004 ships)"
       ],
       "priority": 3,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
       "id": "US-004",
-      "title": "Welcome-back compute IPC — returns ranked buckets for the UI",
-      "description": "As a developer, I need a single IPC that returns the entire ranked bucket list so the welcome-back UI component is presentation-only and testable against fixtures.",
+      "title": "Render 'Active action items' section + collapsed 'Show N completed' toggle",
+      "description": "As a user, I want to see on a person's page which of their action items became real tasks and where those tasks stand, without leaving the drawer.",
       "acceptanceCriteria": [
-        "Add IPC handler welcomeBack:compute in src/main/main.ts returning either null (don't show) or an object with shape: { gapDays, wins: { cleared?, jiraProgress?, meetingsMatched?, calendarHealthy? }, ask?: { kind: 'contradiction' | 'overdueWithSignal' | 'launchAtStartupOffer', payload } }",
-        "Return null when getDaysSinceLastOpen() < 2 OR (welcomeBackLastSeenAt !== null && welcomeBackLastSeenAt >= lastOpenedAt)",
-        "wins.cleared pulls from staleness-sweep's lastSweepResult: { count, sampleTitles (up to 3) }",
-        "wins.jiraProgress counts Jira stories whose status moved forward (to Done or later-stage) in the gap window: { count, doneCount }",
-        "wins.meetingsMatched: number of meetings automatically linked to Jira issues in the gap (from task records or pipeline:jira-auto-push log correlation)",
-        "wins.calendarHealthy: upcomingCount for the next 7 days from calendarWatcher.getUpcomingEvents()",
-        "Ask-selection priority (pick first that qualifies): (1) kind='contradiction' if detectContradictions has any with createdAt > lastOpenedAt; (2) kind='overdueWithSignal' if an overdue task has lastMentionedAt within 14 days; (3) kind='launchAtStartupOffer' if app.getLoginItemSettings().openAtLogin is false AND gap >= 3 days AND missedMeetingsCount >= 3",
-        "If no ask qualifies, ask is omitted",
-        "Add IPC welcomeBack:dismiss that calls markWelcomeBackSeen()",
+        "Below the 'Action items pending review' section in People.tsx, add a new section titled 'Active action items'",
+        "Render person.activeActionItems (from US-001): each row shows title, owner, due date, status badge (todo / inProgress / etc.), and 'from {meeting title}' as a subtle secondary line",
+        "Clicking an active row opens the underlying Task — reuse the existing TaskDetailSidebar drawer from MyTasks if it is importable; otherwise open a minimal read-only popover with title, description, status, due, linked meeting",
+        "Below Active, render a collapsed toggle labeled 'Show N completed' where N = person.doneActionItems.length. Hide the toggle when N === 0",
+        "Clicking the toggle expands a list of done items: strikethrough title, dim gray, with completion date. Click a row to re-open the task",
+        "Empty state for Active section shows 'No active action items for this person' only when both activeActionItems.length === 0 AND doneActionItems.length === 0; otherwise render nothing above the Show-N-completed toggle",
         "Typecheck passes",
-        "Tests pass: unit tests for each ask-selection branch + for each null-return condition"
+        "Verify in browser using dev-browser skill: after US-005 seeds demo data, open a Person drawer with 2+ meetings → confirm all three tiers (pending / active / done) render with realistic data and the Show-N-completed toggle expands/collapses"
       ],
       "priority": 4,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
       "id": "US-005",
-      "title": "Welcome-back UI component — helper-voice rendering, one ask max",
-      "description": "As a returning user, I want one scannable screen that shows what the app did for me, with at most one thing I need to act on, phrased as help rather than homework.",
+      "title": "Extend seed:demo to populate all three action-item lifecycle tiers",
+      "description": "As a demo user, the seeded demo data should include action items in each state (pending, active, done, dismissed) so the three sections on the Person drawer are visibly populated.",
       "acceptanceCriteria": [
-        "New component src/renderer/WelcomeBack.tsx rendered conditionally from App.tsx on app start",
-        "On mount: call inwiseAPI.welcomeBackCompute(). If null, render nothing. If non-null, render the screen",
-        "Wins copy (helper voice, count-not-list): cleared → 'Cleared N tasks you hadn\\'t touched recently (bring any back anytime)'; jiraProgress → 'N Jira stories moved forward while you were out — M are now Done'; meetingsMatched → 'Matched N new meetings to Jira issues automatically'; calendarHealthy → 'Calendar in sync; N upcoming this week'",
-        "ask.contradiction renders: 'One thing worth a look. [summary]. [Review] [Dismiss]'",
-        "ask.overdueWithSignal renders: 'One task is past due and you\\'ve mentioned it recently: {title}. [Snooze to next week] [Mark done] [Keep as-is]'",
-        "ask.launchAtStartupOffer renders: 'Want Inwise to start automatically when you log in? You missed a few meetings while it was closed. [Turn on] [Not now]' (action logic wired in US-009)",
-        "When ask is absent, render single line: 'Nothing urgent while you were out — everything\\'s where you left it.'",
-        "Chip row at bottom: Tasks, Meetings, Jira, Calendar — each navigates to the respective view",
-        "[Done] button top-right calls inwiseAPI.welcomeBackDismiss() and unmounts the component",
-        "NEVER render more than one ask; NEVER render a list of task/meeting titles (count is the message, detail on-demand via chips)",
+        "In ipcMain.handle('seed:demo', ...) in src/main/main.ts, after creating the existing meetings and their insights, programmatically: convert 2 action items (across different meetings) whose linked Tasks are in status 'todo' or 'inProgress'; convert 2 more whose linked Tasks are in status 'completed'; leave 3-4 in default pending state; mark 1 as dismissed",
+        "Use the new convertActionItemToTask helper (not a raw DB write) so the real code path is exercised",
+        "Update the seed completion log line and return value to include pending / active / done / dismissed counts",
         "Typecheck passes",
-        "Verify in browser using dev-browser skill: launch app with synthetic welcomeBack:compute payloads covering (a) wins-only, (b) ask.contradiction, (c) empty-state (no wins, no ask); confirm copy matches; confirm dismiss persists welcomeBackLastSeenAt"
+        "Verify in browser using dev-browser skill: reset the user profile, run the seed, open any Person drawer with 2+ meetings → confirm pending / active / done sections all populated and the dismissed item appears in none of them"
       ],
       "priority": 5,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-006",
-      "title": "Snoozed tasks filter + [Bring back] UI in the Tasks view",
-      "description": "As a user, when I want to review what the app auto-snoozed, I can see those tasks under a filter and bring any back with one click.",
-      "acceptanceCriteria": [
-        "In src/renderer/MyTasks.tsx add a filter pill/tab labeled 'Snoozed' alongside existing filters",
-        "Selecting Snoozed calls inwiseAPI.getSnoozedTasks() (new IPC wrapper) and renders the returned tasks",
-        "Each snoozed row displays: title, original due date (if any), snoozedAt (formatted relative, e.g. '3 days ago'), snoozedReason in human form (e.g., 'auto-snoozed — no activity for 30+ days')",
-        "[Bring back] button per row calls inwiseAPI.bringBackTask(id); row disappears from the Snoozed list and reappears in Active",
-        "[Bring back all] button at the top of the Snoozed view; confirms with a quick inline summary ('Brought back 5 tasks')",
-        "Inline confirmation toast/flash for 3 seconds after each bring-back: 'Brought back — back in your active list.'",
-        "Badge on the Snoozed filter pill shows the count when > 0; hidden when 0",
-        "Typecheck passes",
-        "Verify in browser using dev-browser skill: seed 3 snoozed tasks, navigate to Snoozed filter, confirm all 3 render with reasons; bring one back, confirm it disappears from Snoozed and appears in Active; bring back all, confirm empty state"
-      ],
-      "priority": 6,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-007",
-      "title": "Task completion inference from transcripts (flag likely-done, never auto-complete)",
-      "description": "As a user, after a meeting is transcribed, I want the app to flag tasks it thinks I completed based on what I said, so I can confirm with one click — but it never auto-closes a task.",
-      "acceptanceCriteria": [
-        "In runRecordingPipeline in src/main/main.ts, after saveInsights and before pipeline:done, add step inferCompletedTasks(transcript, openTasks)",
-        "The step takes the meeting transcript and the current user's active, non-snoozed tasks, makes ONE LLM call via the configured apiProvider (existing extractor pattern)",
-        "LLM prompt must require high confidence — prefer false negatives over false positives; return only task IDs whose completion the transcript strongly implies",
-        "For each returned task ID, set likelyDone: true on the task (extend schema with new boolean field, default false)",
-        "DO NOT set status: 'done' automatically",
-        "Log line: pipeline:likely-done | flagged=N tasks (list task IDs at debug level)",
-        "In the Tasks view (MyTasks.tsx), tasks with likelyDone === true render a 'Done?' pill beside the title with [Yes] [No] inline actions",
-        "[Yes] sets status='done', clears likelyDone, bumps updatedAt",
-        "[No] clears likelyDone only, bumps updatedAt (signals user-rejection)",
-        "Only evaluate transcripts within 24h of their creation; skip for older ones",
-        "Typecheck passes",
-        "Tests pass: unit tests for the inference call with mocked LLM responses covering (a) empty list, (b) single match, (c) multi-match; UI test that the Done? pill renders when likelyDone === true and clears on [Yes]/[No]"
-      ],
-      "priority": 7,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-008",
-      "title": "Live-meeting suppression: banner instead of welcome-back when app opens mid-meeting",
-      "description": "As a user, if I open the app while I'm currently in a scheduled meeting, I want the app to offer to start recording instead of showing a retrospective welcome screen.",
-      "acceptanceCriteria": [
-        "On app show, BEFORE rendering WelcomeBack, check calendarWatcher.getUpcomingEvents() for an event where startTime <= now <= (endTime || startTime + 90min) AND !isRecordingActive AND overlayWindow is null/destroyed",
-        "If such an event exists, suppress WelcomeBack for this session",
-        "Render a compact banner at the top of Home (new src/renderer/LiveMeetingBanner.tsx or inline in App.tsx): 'This looks like your meeting with {attendee or event title} — want me to start recording? [Start recording] [Not now]'",
-        "[Start recording] triggers existing recording:start IPC with the event's calendarEventId and title",
-        "[Not now] dismisses the banner for this specific event id (store in a session-local Set of dismissed event ids); reopening the app later in the same event window does not re-prompt",
-        "WelcomeBack becomes eligible again on the NEXT app open after the event ends, not this one",
-        "Typecheck passes",
-        "Verify in browser using dev-browser skill: inject a synthetic in-progress calendar event via test IPC, confirm banner appears and WelcomeBack is suppressed; click Start, confirm overlay opens; dismiss, confirm banner disappears and does not re-appear for that event id"
-      ],
-      "priority": 8,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-009",
-      "title": "Launch-at-startup offer (wires ask.launchAtStartupOffer into a one-tap action)",
-      "description": "As a user, if I've missed meetings because the app wasn't running, I want a one-tap way to have it launch at login so I don't miss them next time.",
-      "acceptanceCriteria": [
-        "In src/main/main.ts add IPC app:setLoginItemOpenAtLogin(enabled: boolean) that calls app.setLoginItemSettings({ openAtLogin: enabled }) and returns { ok: true } on success",
-        "In WelcomeBack.tsx (US-005), when ask.kind === 'launchAtStartupOffer', render the offer card described in US-005",
-        "[Turn on] calls inwiseAPI.setLoginItemOpenAtLogin(true); on success, card morphs into a confirmation line: 'Done. Inwise will start automatically next time you log in.'",
-        "[Not now] dismisses the card only (sets a component-local flag); it doesn't dismiss the entire welcome-back screen",
-        "Missed-meetings detection for US-004's compute: calendar events with startTime > lastOpenedAt AND startTime < now that have NO corresponding row in meetings.db (or only a row with status === 'calendar_sync' — meaning nothing was recorded)",
-        "Guard in US-004: if app.getLoginItemSettings().openAtLogin is already true, never return ask.launchAtStartupOffer regardless of missed-meeting count",
-        "Typecheck passes",
-        "Verify in browser using dev-browser skill: with openAtLogin=false and 3+ simulated missed events, confirm offer renders; click Turn on, confirm success state; re-open app, confirm openAtLogin is now true and offer no longer shows"
-      ],
-      "priority": 9,
-      "passes": true,
+      "passes": false,
       "notes": ""
     }
   ]
