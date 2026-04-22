@@ -44,6 +44,17 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   confirmLikelyDone: (id: string) => ipcRenderer.invoke('db:confirmLikelyDone', id),
   rejectLikelyDone: (id: string) => ipcRenderer.invoke('db:rejectLikelyDone', id),
 
+  // Action item lifecycle (US-002)
+  convertActionItem: (args: {
+    meetingId: string;
+    actionItemIndex: number;
+    taskFields: { title: string; description?: string; priority?: string; dueDate?: string; status?: string };
+  }) => ipcRenderer.invoke('actionItem:convert', args.meetingId, args.actionItemIndex, args.taskFields),
+  dismissActionItem: (args: { meetingId: string; actionItemIndex: number }) =>
+    ipcRenderer.invoke('actionItem:dismiss', args.meetingId, args.actionItemIndex),
+  undismissActionItem: (args: { meetingId: string; actionItemIndex: number }) =>
+    ipcRenderer.invoke('actionItem:undismiss', args.meetingId, args.actionItemIndex),
+
   // People
   getPeople: (search?: string) => ipcRenderer.invoke('db:getPeople', search),
   getArchivedPeople: () => ipcRenderer.invoke('db:getArchivedPeople'),

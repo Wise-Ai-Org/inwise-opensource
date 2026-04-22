@@ -26,3 +26,16 @@ Started: Wed Apr 22 12:38:22 PDT 2026
   - Summary counts `summary.activeActionItems` / `summary.doneActionItems` are new fields — downstream components that destructure `summary` should be treated as additive consumers.
 ---
 
+
+## 2026-04-22 12:52 PDT — US-002
+- Imported `convertActionItemToTask`, `dismissActionItem`, `undismissActionItem` in src/main/main.ts
+- Registered three `ipcMain.handle` channels: `actionItem:convert`, `actionItem:dismiss`, `actionItem:undismiss`
+- Exposed `convertActionItem`, `dismissActionItem`, `undismissActionItem` on `inwiseAPI` in src/main/preload.ts
+- Mirrored the three methods on `api` in src/renderer/api.ts with typed `{ taskId }` / `boolean` return signatures
+- Main and renderer builds pass; all 7 main-process test suites green (config, database, live-meeting-banner, self-identity, staleness-sweep, task-completion-inference, welcome-back)
+- Files changed: src/main/main.ts, src/main/preload.ts, src/renderer/api.ts
+- **Learnings for future iterations:**
+  - Preload bridges can normalize IPC ergonomics: here the DB helpers take positional `(meetingId, actionItemIndex, taskFields)` but the renderer call sites (per US-003) want an object-arg shape `{ meetingId, actionItemIndex, taskFields }`. The preload wrapper is the right place to unpack — keeps the IPC contract positional (one handler, one arg list) while giving UI a named-arg API.
+  - `ipcMain.handle` handlers that return `void` from the underlying helper should explicitly `return true` (or the actual result) — a `return undefined` through IPC is harmless but the pattern in this codebase (see `db:reviewMeeting`, `db:archivePerson`) is to return `true` for successful fire-and-forget ops, which gives UI a predictable truthy value to await.
+  - Import order in main.ts for `./database`: the named-imports block is alphabetical-ish but grouped by domain (meetings, tasks, snoozed, likely-done, people, …). New DB helpers slot in next to the helpers they logically sit beside — keeps diffs small and the import block scannable.
+---

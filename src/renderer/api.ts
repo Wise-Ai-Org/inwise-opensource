@@ -48,6 +48,17 @@ export const api = {
   confirmLikelyDone: (id: string) => inwiseAPI.confirmLikelyDone(id),
   rejectLikelyDone: (id: string) => inwiseAPI.rejectLikelyDone(id),
 
+  // ── Action item lifecycle (US-002) ───────────────────────────────────────
+  convertActionItem: (args: {
+    meetingId: string;
+    actionItemIndex: number;
+    taskFields: { title: string; description?: string; priority?: string; dueDate?: string; status?: string };
+  }): Promise<{ taskId: string }> => inwiseAPI.convertActionItem(args),
+  dismissActionItem: (args: { meetingId: string; actionItemIndex: number }): Promise<boolean> =>
+    inwiseAPI.dismissActionItem(args),
+  undismissActionItem: (args: { meetingId: string; actionItemIndex: number }): Promise<boolean> =>
+    inwiseAPI.undismissActionItem(args),
+
   // ── People ───────────────────────────────────────────────────────────────
   getPeople: (search?: string) => inwiseAPI.getPeople(search),
   getArchivedPeople: () => inwiseAPI.getArchivedPeople(),

@@ -17,6 +17,7 @@ import {
   getTasks, createTask, updateTask, deleteTask,
   getSnoozedTasks, snoozeTask, bringBackTask,
   markLikelyDone, confirmLikelyDone, rejectLikelyDone,
+  convertActionItemToTask, dismissActionItem, undismissActionItem,
   getPeople, getArchivedPeople, getPerson, addPerson, addTrackedPeople,
   archivePerson, unarchivePerson, getSuggestedPeople, updatePersonProfile,
   getPersonAgendaContext, getMeetingAgendaContext,
@@ -983,6 +984,25 @@ ipcMain.handle('db:addTrackedPeople', async (_e, names) => addTrackedPeople(name
 ipcMain.handle('db:archivePerson', async (_e, id) => { await archivePerson(id); return true; });
 ipcMain.handle('db:unarchivePerson', async (_e, id) => { await unarchivePerson(id); return true; });
 ipcMain.handle('db:getSuggestedPeople', async () => getSuggestedPeople());
+
+// Action item lifecycle (US-002)
+ipcMain.handle(
+  'actionItem:convert',
+  async (
+    _e,
+    meetingId: string,
+    actionItemIndex: number,
+    taskFields: { title: string; description?: string; priority?: string; dueDate?: string; status?: string },
+  ) => convertActionItemToTask(meetingId, actionItemIndex, taskFields),
+);
+ipcMain.handle('actionItem:dismiss', async (_e, meetingId: string, actionItemIndex: number) => {
+  await dismissActionItem(meetingId, actionItemIndex);
+  return true;
+});
+ipcMain.handle('actionItem:undismiss', async (_e, meetingId: string, actionItemIndex: number) => {
+  await undismissActionItem(meetingId, actionItemIndex);
+  return true;
+});
 
 // AI features
 ipcMain.handle('ai:generatePersonInsights', async (_e, personId: string) => {
