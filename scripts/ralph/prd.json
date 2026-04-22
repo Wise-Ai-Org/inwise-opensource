@@ -158,7 +158,7 @@
         "Verify in browser using dev-browser skill: inject a synthetic in-progress calendar event via test IPC, confirm banner appears and WelcomeBack is suppressed; click Start, confirm overlay opens; dismiss, confirm banner disappears and does not re-appear for that event id"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

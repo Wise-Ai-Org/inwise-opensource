@@ -36,6 +36,7 @@ import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from 
 import { createTray, updateTrayMenu, destroyTray } from './tray';
 import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
 import { computeWelcomeBack } from './welcome-back';
+import { findLiveMeetingForBanner } from './live-meeting-banner';
 import { inferCompletedTaskIds } from './task-completion-inference';
 
 Menu.setApplicationMenu(null);
@@ -1326,6 +1327,15 @@ ipcMain.handle('welcomeBack:compute', async () => {
 ipcMain.handle('welcomeBack:dismiss', () => {
   markWelcomeBackSeen();
   return true;
+});
+
+ipcMain.handle('welcomeBack:liveMeeting', () => {
+  return findLiveMeetingForBanner({
+    events: calendarWatcher.getUpcomingEvents(),
+    now: new Date(),
+    isRecordingActive,
+    overlayWindowOpen: !!(overlayWindow && !overlayWindow.isDestroyed()),
+  });
 });
 
 ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; message?: string; stack?: string; source?: string }) => {

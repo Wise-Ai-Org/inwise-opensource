@@ -13,6 +13,8 @@ Started: Tue Apr 21 13:19:47 PDT 2026
 - For testable DB helpers on `database.ts`, use the `__setTasksDbForTests(db)` injection hook. Follow the same pattern if future stories need to exercise meetings/people DBs in unit tests.
 - LLM-calling modules follow the `task-completion-inference.ts` pattern: a pure `fooWith(args, llmCaller)` for tests + a production wrapper `foo(args)` that injects the real Claude/OpenAI fetch caller. Do NOT replicate `extractor.ts` (inline `getConfig()` + fetch in the same function) for new stories — it's not unit-testable.
 - LLM responses that include IDs MUST be filtered against the set of IDs passed in. Models hallucinate. See `parseInferenceResponse(text, validIds)` as the reference.
+- Renderer "session-local" state that must survive re-renders without causing them (e.g. dismissed-id sets) uses `useRef<Set<string>>(new Set())`, not `useState`. Pair with a separate visible-state flag that IS `useState`-driven.
+- Pre-check IPCs that gate primary UI (e.g. `welcomeBack:liveMeeting` before WelcomeBack renders) must be fail-open — catch/swallow errors and fall back to the default render path rather than breaking the screen.
 
 ---
 
@@ -251,4 +253,45 @@ Learnings for future iterations:
 - The PRD's "only evaluate transcripts within 24h" clause is **guaranteed by position in the pipeline** — `runRecordingPipeline` runs seconds after meeting creation, so the transcript is always fresh. No explicit date-check needed in code. If inference is ever run against historical meetings (e.g., a backfill job), that code path needs its own 24h guard.
 - Chakra UI's `Button` inside a draggable `Card` needs `e.stopPropagation()` on onClick — otherwise the drag listeners on the card swallow the click. This pattern was already used for the archive/delete buttons; the Done?/No buttons follow the same idiom.
 - When adding new `TaskCard` or `TaskColumn` props, **both parent and child must accept them as optional** so that the DragOverlay `<TaskCard>` (rendered outside the Column) doesn't need to plumb every prop. The DragOverlay's TaskCard is a static snapshot — pills/actions won't fire there.
+---
+
+## 2026-04-21 20:20 PDT - US-008
+- Added new pure compute module `src/main/live-meeting-banner.ts` exporting `findLiveMeetingForBanner({ events, now, isRecordingActive, overlayWindowOpen })`. Returns a compact payload (id, title, startTime/endTime epoch ms, attendees[]) when an in-progress event matches `startTime <= now <= (endTime || startTime + 90min)` and both suppressor flags are false; returns null otherwise. Zero electron imports so it's fully unit-testable.
+- Added IPC handler `welcomeBack:liveMeeting` in `src/main/main.ts` — wires `calendarWatcher.getUpcomingEvents()`, `isRecordingActive`, and `overlayWindow && !overlayWindow.isDestroyed()` into the pure compute. Invoke-style, no `allowed[]` update needed.
+- Exposed `welcomeBackLiveMeeting` in `src/main/preload.ts` alongside the other welcome-back invoke wrappers.
+- Added new component `src/renderer/LiveMeetingBanner.tsx` — compact teal banner rendered at the top of `.main-content`. Copy matches PRD: "This looks like your meeting with {subject} — want me to start recording?" with `[Start recording]` and `[Not now]` buttons. Subject prefers the first non-empty attendee name, falling back to the event title.
+- Wired into `src/renderer/App.tsx`:
+  - New state: `liveMeetingChecked`, `liveMeeting`, `liveMeetingSuppressesWelcomeBack`; ref-based `dismissedLiveMeetingIds: Set<string>` so the dismissed-ids set survives re-renders without triggering them.
+  - On mount: call `welcomeBackLiveMeeting()`. If it returns a payload, flip `liveMeetingSuppressesWelcomeBack` (guarantees WelcomeBack is suppressed for the rest of this renderer session) AND — if the id isn't already in the dismissed Set — set `liveMeeting` so the banner renders. `.finally()` sets `liveMeetingChecked=true`.
+  - WelcomeBack render guard extended: `welcomeBackVisible && !showFirstTimeFlow && liveMeetingChecked && !liveMeetingSuppressesWelcomeBack`. This ensures we don't flash WelcomeBack before the check resolves.
+  - `[Start recording]` calls `inwiseAPI.startRecording(title, eventId)` via existing IPC, then adds the event id to the dismissed Set and hides the banner. Failure is swallowed — user can retry from the sidebar.
+  - `[Not now]` adds the id to the dismissed Set and hides the banner without triggering any IPC.
+- Added `src/main/live-meeting-banner.test.ts` covering: empty list, happy path, not-yet-started, already-ended, missing endTime (90min fallback), malformed endTime<=startTime (fallback), isRecordingActive suppressor, overlayWindowOpen suppressor, first-match-wins, attendees-default-to-empty.
+
+Files changed:
+- src/main/live-meeting-banner.ts (new)
+- src/main/live-meeting-banner.test.ts (new)
+- src/main/main.ts (import + 1 new IPC handler)
+- src/main/preload.ts (1 new invoke wrapper)
+- src/renderer/LiveMeetingBanner.tsx (new)
+- src/renderer/App.tsx (import + state + effect + handlers + conditional render + WelcomeBack suppression guard)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `npx webpack --config webpack.renderer.config.js` — both bundles compiled successfully.
+- `node dist/main/live-meeting-banner.test.js` — all tests pass.
+- `node dist/main/{config,database,staleness-sweep,welcome-back,task-completion-inference,self-identity}.test.js` — regression green.
+
+Browser verification:
+- **Dev-browser skill was NOT available in this session** (same as US-005/US-006/US-007). Verification relied on: (a) main + renderer typecheck clean, (b) full webpack bundle passes, (c) unit-test coverage of the core eligibility logic, (d) structural inspection of JSX and banner copy against PRD spec. Recommended follow-up human smoke: launch Electron with a synthetic calendar event whose start/end span the current time, confirm the teal banner appears at the top of Home and WelcomeBack is suppressed; click Start recording and confirm the overlay opens with the event title/id; click Not now and confirm the banner disappears and does not re-appear after hide/show of the main window.
+
+Learnings for future iterations:
+- The **session-local dismissed Set** for banner event ids uses `useRef<Set<string>>(new Set())` — not `useState` — because updates to the set don't need to trigger a re-render (the visible state is controlled by `liveMeeting` itself). Using `useState` with a new Set each update would also work but would thrash reference identity. `useRef` is idiomatic for "persistent mutable bag" in React.
+- The live-meeting check is a **fire-and-fail-open pattern**: if the IPC throws, the user still sees WelcomeBack normally rather than a broken state. Mirror this for any future "pre-check" IPCs that gate primary UI.
+- WelcomeBack suppression is a ONE-WAY flag (`liveMeetingSuppressesWelcomeBack`). Once the app detects an in-progress meeting at mount, WelcomeBack stays suppressed for the rest of the renderer lifetime, even if the user dismisses the banner. This matches the PRD's "suppress WelcomeBack for this session" semantics. Re-enabling happens naturally on next renderer boot.
+- The `calendar:active-event` IPC already existed for the Sidebar's manual-start flow and uses similar 90min fallback logic — we did NOT reuse it because the banner needs the additional `!isRecordingActive && !overlayWindow` gates AND the attendees field (the Sidebar version doesn't return attendees). If a future story needs a unified "am I in a meeting right now?" helper, extract `findLiveMeetingForBanner` further or replace the existing handler with a thin wrapper.
+- React render-order gotcha: **do not render `WelcomeBack` before `liveMeetingChecked` is true**. If you do, WelcomeBack may mount, fire its compute IPC, and flash on screen before the live-meeting check resolves. Gate the render on `liveMeetingChecked` like this story does.
+- The **banner mounts inside `.main-content`** (not as a fixed overlay) so it scrolls with content, doesn't obscure the Sidebar, and doesn't need its own z-index. Full-screen overlays (FirstTimeUserFlow, WelcomeBack) live outside `.main-content`. Match the pattern: inline-banner = in the content flow; modal = outside, fixed-positioned.
+- `startRecording(title, eventId)` is the canonical recording-kick-off entry point from the renderer (preload exposes it as `inwiseAPI.startRecording`). The Sidebar and now LiveMeetingBanner both use it — that's 2 call sites. If any future story adds a 3rd, consider moving the "pick title, pick eventId, call IPC" logic into a shared helper in `src/renderer/api.ts`.
 ---

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Onboarding from './Onboarding';
 import Sidebar from './Sidebar';
 import Communications from './Communications';
@@ -7,6 +7,7 @@ import MyTasks from './MyTasks';
 import Settings from './Settings';
 import FirstTimeUserFlow from './FirstTimeUserFlow';
 import WelcomeBack from './WelcomeBack';
+import LiveMeetingBanner, { LiveMeetingInfo } from './LiveMeetingBanner';
 import MeetingConflictModal, { ConflictMeeting } from './components/modal/MeetingConflictModal';
 
 type View = 'communications' | 'tasks' | 'people' | 'settings';
@@ -46,6 +47,29 @@ export default function App() {
     | null
   >(null);
   const [welcomeBackVisible, setWelcomeBackVisible] = useState(true);
+  const [liveMeetingChecked, setLiveMeetingChecked] = useState(false);
+  const [liveMeeting, setLiveMeeting] = useState<LiveMeetingInfo | null>(null);
+  const [liveMeetingSuppressesWelcomeBack, setLiveMeetingSuppressesWelcomeBack] = useState(false);
+  const dismissedLiveMeetingIds = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const api = (window as any).inwiseAPI;
+    if (!api?.welcomeBackLiveMeeting) {
+      setLiveMeetingChecked(true);
+      return;
+    }
+    api.welcomeBackLiveMeeting()
+      .then((m: LiveMeetingInfo | null) => {
+        if (m) {
+          setLiveMeetingSuppressesWelcomeBack(true);
+          if (!dismissedLiveMeetingIds.current.has(m.id)) {
+            setLiveMeeting(m);
+          }
+        }
+      })
+      .catch(() => { /* fail open — welcome-back renders normally */ })
+      .finally(() => setLiveMeetingChecked(true));
+  }, []);
 
   useEffect(() => {
     (window as any).inwiseAPI.getConfig().then((cfg: any) => {
@@ -84,6 +108,23 @@ export default function App() {
     setConflict(null);
   };
 
+  const handleStartLiveMeetingRecording = async () => {
+    if (!liveMeeting) return;
+    try {
+      await (window as any).inwiseAPI?.startRecording?.(liveMeeting.title, liveMeeting.id);
+    } catch {
+      // If start fails, still close the banner — the user can retry from the sidebar.
+    }
+    dismissedLiveMeetingIds.current.add(liveMeeting.id);
+    setLiveMeeting(null);
+  };
+
+  const handleDismissLiveMeeting = () => {
+    if (!liveMeeting) return;
+    dismissedLiveMeetingIds.current.add(liveMeeting.id);
+    setLiveMeeting(null);
+  };
+
   const handleFirstTimeFlowComplete = () => {
     setShowFirstTimeFlow(false);
   };
@@ -95,6 +136,13 @@ export default function App() {
     <div className="app-layout">
       <Sidebar activeView={view} onNavigate={setView} />
       <div className="main-content">
+        {liveMeeting && (
+          <LiveMeetingBanner
+            meeting={liveMeeting}
+            onStartRecording={handleStartLiveMeetingRecording}
+            onDismiss={handleDismissLiveMeeting}
+          />
+        )}
         <ErrorBoundary>
           {view === 'communications' && <Communications />}
           {view === 'tasks'          && <MyTasks onNavigate={(v: string) => setView(v as View)} />}
@@ -108,7 +156,7 @@ export default function App() {
           onComplete={handleFirstTimeFlowComplete}
         />
       )}
-      {welcomeBackVisible && !showFirstTimeFlow && (
+      {welcomeBackVisible && !showFirstTimeFlow && liveMeetingChecked && !liveMeetingSuppressesWelcomeBack && (
         <WelcomeBack
           onNavigate={setView}
           onDismiss={() => setWelcomeBackVisible(false)}
