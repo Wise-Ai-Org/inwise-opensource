@@ -30,6 +30,8 @@ interface Config {
   jiraTokens: any | null;
   jiraAutoPush: boolean;
   jiraDefaultProject: string;
+  lastOpenedAt: string | null;
+  welcomeBackLastSeenAt: string | null;
 }
 
 const store = new Store<Config>({
@@ -50,6 +52,8 @@ const store = new Store<Config>({
     jiraTokens: null,
     jiraAutoPush: false,
     jiraDefaultProject: '',
+    lastOpenedAt: null,
+    welcomeBackLastSeenAt: null,
   },
 });
 
@@ -94,6 +98,48 @@ export function removeCalendar(id: string): void {
 
 export function setSelfEmails(emails: string[]): void {
   store.set('selfEmails', emails);
+}
+
+// Snapshot the stored lastOpenedAt the first time this module is imported.
+// markAppOpened() overwrites the stored value with now(), but the gap-since-
+// last-open signal must reflect the PRIOR session, so we pin the prior value
+// here for the lifetime of the current process.
+const priorLastOpenedAtSnapshot: string | null = store.get('lastOpenedAt');
+
+export function markAppOpened(): void {
+  store.set('lastOpenedAt', new Date().toISOString());
+}
+
+/**
+ * Pure helper exposed for tests: given an ISO timestamp (or null) and a
+ * now-timestamp in ms, returns the gap in fractional days, or null when the
+ * input is null/invalid.
+ */
+export function computeDaysSince(iso: string | null, nowMs: number): number | null {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return null;
+  return (nowMs - then) / (1000 * 60 * 60 * 24);
+}
+
+export function getDaysSinceLastOpen(): number | null {
+  return computeDaysSince(priorLastOpenedAtSnapshot, Date.now());
+}
+
+// Exposes the pre-current-session lastOpenedAt snapshot. Welcome-back compute
+// compares this against welcomeBackLastSeenAt to detect "already dismissed for
+// this gap" — using the live store value would fail because markAppOpened()
+// overwrites it on every show event.
+export function getLastOpenedAtSnapshot(): string | null {
+  return priorLastOpenedAtSnapshot;
+}
+
+export function getWelcomeBackLastSeenAt(): string | null {
+  return store.get('welcomeBackLastSeenAt');
+}
+
+export function markWelcomeBackSeen(): void {
+  store.set('welcomeBackLastSeenAt', new Date().toISOString());
 }
 
 /**

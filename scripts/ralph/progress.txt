@@ -1,135 +1,327 @@
 # Ralph Progress Log
-Started: Tue Apr 21 11:44:25 PDT 2026
----
+Started: Tue Apr 21 13:19:47 PDT 2026
 
 ## Codebase Patterns
-- Config is a single electron-store instance in `src/main/config.ts`. `Config` interface doubles as the schema; `defaults` must list every field (electron-store will not materialize missing fields).
-- `getConfig()` returns the whole store snapshot; `setConfig(partial)` writes per-key. Prefer narrow, named helpers (e.g. `addCalendar`, `setSelfEmails`) over dumping partials through `setConfig` so call sites stay readable.
-- App start is a single `app.whenReady().then(() => { initDatabase(); ...; calendarWatcher.start(); })` block in `src/main/main.ts`. One-time migrations belong immediately after `initDatabase()` and before any consumer (watcher, windows) reads the migrated fields.
-- Logging in main uses the local `log(level, message, detail?)` helper from `src/main/logger.ts` — don't introduce `console.*` in main. Levels are limited to `'info' | 'warn' | 'error'` (no `'debug'`).
-- Main typecheck: `npx tsc -p tsconfig.main.json --noEmit`. Renderer typecheck: `npx tsc -p tsconfig.renderer.json --noEmit`. Project has no configured test runner, so "tests pass" means the typechecks stay green.
-- Deprecated-but-kept fields: annotate with `/** @deprecated */` on the interface and leave the default in place so existing stores still load; only the migration path should read them.
+- Tests live next to source as `X.test.ts` with a `run()` export and `if (require.main === module) run()`. Build via `npx tsc -p tsconfig.main.json`, then run `node dist/main/X.test.js`. No `npm test` script exists.
+- `src/main/config.ts` uses electron-store. `electron-store` cannot be imported from compiled JS at arbitrary locations — it must run from within the project's own `dist/main/` so node_modules resolves. Factor pure logic out of store-dependent helpers for unit tests.
+- Main-process typecheck: `npx tsc -p tsconfig.main.json --noEmit` (silent = success). Renderer: `npx tsc -p tsconfig.renderer.json --noEmit`.
+- `preload.ts` hardcodes an `allowed[]` channel allowlist — every new main→renderer push channel must be added or it's silently dropped.
+- Date→epoch-ms is the convention for main→renderer IPC payloads carrying Date objects.
+- `mainWindow` hides on close (preventDefault+hide); fallback UI-path checks must verify `mainWindow.isVisible()`, not just `!isDestroyed()`.
+- `import { app } from 'electron'` in plain node is safe at load-time (`app` is `undefined`); it only fails when you actually call an `app.*` method. This means tests can import modules that import electron without booting electron.
+- NeDB (`@seald-io/nedb`) without a `filename` option is pure in-memory — perfect for unit tests. `{ field: null }` matches documents where the field is null OR missing (Mongo-compatible), so additive schema changes need no migration.
+- For testable DB helpers on `database.ts`, use the `__setTasksDbForTests(db)` injection hook. Follow the same pattern if future stories need to exercise meetings/people DBs in unit tests.
+- LLM-calling modules follow the `task-completion-inference.ts` pattern: a pure `fooWith(args, llmCaller)` for tests + a production wrapper `foo(args)` that injects the real Claude/OpenAI fetch caller. Do NOT replicate `extractor.ts` (inline `getConfig()` + fetch in the same function) for new stories — it's not unit-testable.
+- LLM responses that include IDs MUST be filtered against the set of IDs passed in. Models hallucinate. See `parseInferenceResponse(text, validIds)` as the reference.
+- Renderer "session-local" state that must survive re-renders without causing them (e.g. dismissed-id sets) uses `useRef<Set<string>>(new Set())`, not `useState`. Pair with a separate visible-state flag that IS `useState`-driven.
+- Pre-check IPCs that gate primary UI (e.g. `welcomeBack:liveMeeting` before WelcomeBack renders) must be fail-open — catch/swallow errors and fall back to the default render path rather than breaking the screen.
+- Ask-cards that trigger a side effect AND morph in place (e.g. launchAtStartupOffer → "Done…" confirmation) should own their state in a dedicated sub-component; the parent dispatcher stays dumb and just routes on `ask.kind`. Parent-owned `onLocalDismiss` is reused so `[Not now]` hides the card without dismissing the whole screen.
+- Main-process side effects triggered by the renderer (e.g. `app.setLoginItemSettings`) should be wrapped in try/catch and return `{ ok: boolean, error?: string }` so the renderer can present a recovery state without leaking the raw exception.
 
-## 2026-04-21 11:50 PDT - US-001
-Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- Extended `Config` in `src/main/config.ts` with `calendars: CalendarSubscription[]` and `selfEmails: string[]`, both defaulting to `[]`. Kept `googleIcsUrl`/`outlookIcsUrl` as `@deprecated` fields (migration still reads them).
-- Exported `CalendarProvider` and `CalendarSubscription` types plus helpers: `listCalendars`, `addCalendar`, `updateCalendar`, `removeCalendar`, `setSelfEmails`.
-- Added `migrateLegacyCalendars()`: early-returns when `calendars.length > 0` (idempotent guard) and otherwise seeds one row per non-empty legacy URL using `crypto.randomUUID()` for ids and labels `'Google'`/`'Outlook'`.
-- Wired the migration into `app.whenReady()` in `src/main/main.ts` right after `initDatabase()` and before `createMainWindow()`/`calendarWatcher.start()`; logs `config:migrate-calendars` at `info` level only when rows were actually added.
-- Files changed: `src/main/config.ts`, `src/main/main.ts`.
-- Quality: both `tsc --noEmit` targets pass; no test runner exists in the project.
-- **Learnings for future iterations:**
-  - `electron-store` stores on disk are persistent across runs, so the `calendars.length > 0` guard is the migration's only safety net — don't "clean up" the deprecated fields in the same pass, or a user who rolls back to a pre-US-001 build loses their subscriptions.
-  - Consumers reading calendar URLs (currently `src/main/calendar-watcher.ts`) still need to be migrated to iterate `getConfig().calendars` — that is the work US-002 picks up. Until then, calendars[] is written but nothing reads it at runtime.
-  - `randomUUID` lives in Node's `crypto` module in this Electron main process — no extra dep needed.
-  - The PRD phrased the helpers module as "new `src/main/calendar-config.ts` (or extend config.ts)". I chose to extend `config.ts` because the surface is small (four helpers) and splitting would fragment the single `Store<Config>` instance across files.
 ---
 
-## 2026-04-21 11:55 PDT - US-002
-Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- Rewrote `CalendarWatcher.poll()` in `src/main/calendar-watcher.ts` to iterate `listCalendars().filter(c => c.enabled && c.url.trim())` instead of reading the deprecated `googleIcsUrl`/`outlookIcsUrl` directly.
-- Switched from sequential `for...of` fetch to `Promise.allSettled` so one slow/failed calendar can't stall the others.
-- Added `sourceCalendarId: string` to the `CalendarEvent` shape; every event coming out of `fetchIcsEvents()` carries the calendar it came from (test path passes `'__test__'`).
-- Replaced the simple `id`-only dedup with a composite key `${id}|${startTime.toISOString()}` Map. On collision, the entry with more attendees wins; ties keep the first-fetched (Map insertion order).
-- Per-calendar log line on each fetch: `calendar-watcher:fetch | calendarId=X label="Y" got=N events`.
-- Aggregate poll line: `calendar-watcher:poll | Done — total=M unique events across K calendars`.
-- Empty-enabled-list short-circuits with an `info` log (logger.ts only knows info/warn/error, not debug — see Codebase Patterns).
-- Health rollup now: status=`ok` when at least one calendar succeeded, `error` only when every calendar failed; `lastError` populated whenever any failure happens. `googleConfigured`/`outlookConfigured` are derived from `calendars[]` rather than legacy fields, so the existing `Settings.tsx` health card keeps compiling until US-004 swaps it out.
-- Notifications (`meeting-starting`/`meeting-reminder`) now fire from the *deduped* list, not the raw merged list — otherwise a meeting present on two synced calendars would notify twice.
-- Files changed: `src/main/calendar-watcher.ts`.
-- Quality: both `tsc --noEmit` targets pass. No test runner.
-- **Learnings for future iterations:**
-  - `logger.ts` only accepts `'info' | 'warn' | 'error'` — there is no `'debug'` level. The PRD's "skip polling with a debug log" got translated to `info` to keep typecheck green; if a debug level is wanted, add it to `logger.ts` first.
-  - `CalendarHealth.googleConfigured`/`outlookConfigured` are now derived, not authoritative. `Settings.tsx` still consumes them; US-004 should remove both fields and the consumer in the same commit so the deprecation window is short.
-  - Composite-key dedup matters: the previous `id`-only dedup would have silently dropped one calendar's copy of a cross-shared event without preserving attendee context. The Map-based "prefer more attendees" rule only kicks in when the same event lands twice — no behavior change for single-calendar users.
-  - `Promise.allSettled` returns results in input order, so we can pair `results[i]` with `enabled[i]` for per-calendar error attribution without threading the calendar id through the rejection.
-  - `fetchIcsEvents()` now requires a `calendarId` argument; `testUrl()` passes the sentinel `'__test__'` because Settings → Test isn't tied to a saved row yet (US-004 will change that).
+## 2026-04-21 13:30 PDT - US-001
+- Extended `Config` in `src/main/config.ts` with `lastOpenedAt: string | null` and `welcomeBackLastSeenAt: string | null` (both default null).
+- Added helpers: `markAppOpened()`, `getDaysSinceLastOpen()`, `markWelcomeBackSeen()`.
+- Factored out pure `computeDaysSince(iso, nowMs)` so the gap-compute logic is testable without spinning up electron-store.
+- Snapshotted the stored `lastOpenedAt` at module-load time into `priorLastOpenedAtSnapshot`; `getDaysSinceLastOpen()` reads from the snapshot so downstream code sees the gap from the PREVIOUS session, not the value we just overwrote.
+- In `src/main/main.ts`: imported `markAppOpened`, wired it to both `mainWindow.once('ready-to-show', …)` and `mainWindow.on('show', …)` — 'show' fires when the tray menu re-activates a hidden window, so both are required.
+
+Files changed:
+- src/main/config.ts
+- src/main/main.ts
+- src/main/config.test.ts (new)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `node dist/main/config.test.js` — all tests passed.
+- `node dist/main/self-identity.test.js` — regression check, all tests still pass.
+
+Learnings for future iterations:
+- If a helper's stored-value semantic needs the PRIOR value (not the just-written one), snapshot the store read at module-load time. Future stories (US-004 compute, US-008 suppression) will want the same treatment for any fresh-session signal.
+- `markAppOpened` intentionally writes on BOTH `ready-to-show` and `show` — this is double-fire on cold start (once for each event in sequence) but idempotent; writing now-to-now has no effect on getDaysSinceLastOpen since that reads the snapshot.
+- `welcomeBackLastSeenAt` has no prior-value snapshot and no read-helper yet — US-004 will compare it directly against `lastOpenedAt` in its null-return branch.
+- electron-store v8 requires Electron runtime to resolve paths reliably; this is why the test file only exercises the pure `computeDaysSince` helper and not the store-backed helpers.
+
 ---
 
-## 2026-04-21 12:00 PDT - US-003
-Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- Added `src/main/self-identity.ts` exporting `isSelf(attendee)` (reads `getConfig().selfEmails` + `userName`) and a pure `matchesSelf(attendee, selfEmails, userName)` helper kept side-effect-free so tests can run without loading electron-store. Rule: lowercased `attendee.includes()` any non-empty self-email, OR `attendee.includes()` a non-empty trimmed `userName`. Handles `Name <email>`, plain email, and plain display-name attendees.
-- Empty-config (`selfEmails=[]` and blank `userName`) returns `false` — preserves fresh-install behavior where nothing is filtered from attendee lists.
-- Replaced inline filters:
-  - `src/main/main.ts` — `replaceSpeakerLabels`'s `otherAttendees` now uses `attendees.filter(a => !isSelf(a))`; the `userName` local survives because it's still used to label speaker 0.
-  - `src/main/main.ts` — `autoEnrollVoices` `otherAttendees` uses `!isSelf(a)`. The early-return on blank `userName` stays (it has a different purpose: no known name to enroll as).
-  - `src/main/database.ts` — in the `getPerson` action-item filter, replaced the `(currentUserName && (owner.includes(currentUserName) || currentUserName.includes(owner)))` disjunct with `isSelf(owner)` and dropped the now-unused `const currentUserName` read.
-  - `src/main/database.ts` — in `getSuggestedPeople`, dropped the `userName` const and replaced the `if (userName && key === userName) continue` equality check with `if (isSelf(attendee)) continue` placed *before* lowercasing so aliases never reach the frequency map.
-- Added `src/main/self-identity.test.ts` using `node:assert/strict` with cases: email-only, display-name fallback, `Name <email>` combined, mixed-case (both sides), multi-email (one match), no-match, empty config, whitespace-only email/userName ignored, and empty-attendee. Verified green by compiling to a temp dir and running with node (output: `self-identity: all tests passed`). No permanent test runner was wired — `src/main/self-identity.test.ts` is picked up by `tsconfig.main.json` for typecheck coverage but ships in `dist/` as an unused module.
-- Files changed: `src/main/self-identity.ts` (new), `src/main/self-identity.test.ts` (new), `src/main/main.ts`, `src/main/database.ts`.
-- Quality: both `tsc --noEmit` targets green.
-- **Learnings for future iterations:**
-  - `tsconfig.main.json` has `include: ["src/main/**/*"]` and no test-file exclusion, so any `*.test.ts` in `src/main/` will be built into `dist/main/`. Harmless for a single leaf test module, but if the suite grows, either move tests to a sibling `tests/` dir with its own tsconfig or add a `**/*.test.ts` exclude pattern — excluding will drop them from typecheck too, so you'd need a paired `tsconfig.test.json` for that.
-  - Splitting `isSelf` into a pure `matchesSelf(attendee, selfEmails, userName)` + a thin `isSelf` that pulls from `getConfig()` is the pragmatic way to get unit tests without mocking `electron-store`. Follow this shape for any future identity/config-coupled predicates.
-  - Direction matters for fuzzy name matches. The old `database.ts:395` code did *bidirectional* `includes()` (`owner.includes(userName) || userName.includes(owner)`). `isSelf` is *unidirectional* (`owner.includes(userName)` only). The loosening was acceptable per the PRD and reduces false positives, but any caller expecting the old "userName is a substring of owner" behavior will regress silently.
-  - In `getSuggestedPeople`, the self-check must run on the raw `attendee` string *before* lowercasing to the map key. Placing the guard after `const key = attendee.toLowerCase()` still works but wastes the allocation; more importantly, keeping the guard first makes it obvious the self path is a short-circuit, not a tail-end filter.
-  - `autoEnrollVoices`'s `const userName = config.userName?.trim()` survived because the early-return is semantically about "can we label speaker 0 at all", not about self-filtering. Don't collapse that into `isSelf` — they answer different questions.
+## 2026-04-21 13:40 PDT - US-002
+- Added snooze schema fields to tasks: `snoozedAt`, `snoozedReason`, `lastMentionedAt` (default null) in `createTask` init. Also started stamping `updatedAt` at creation so downstream US-003 eligibility (age since last touch) works for freshly-created tasks too.
+- Added helpers in `src/main/database.ts`: `isSnoozed`, `snoozeTask`, `bringBackTask`, `getSnoozedTasks`, `touchLastMentioned`. `snooze`/`bringBack`/`touch*` all bump `updatedAt` per PRD.
+- Extracted `sortTasks(tasks[])` so `getTasks` and `getSnoozedTasks` share the priority/createdAt sort.
+- `getTasks(opts?: { includeSnoozed?: boolean })` — default excludes snoozed by adding `snoozedAt: null` to the NeDB query (NeDB matches both null and missing, so legacy rows without the field are treated as active). `includeSnoozed: true` drops the filter.
+- Added test-only export `__setTasksDbForTests(db)` so unit tests can inject an in-memory NeDB without booting Electron. Production code never uses it.
+- Wrote `src/main/database.test.ts` covering all US-002 acceptance gates: isSnoozed purity, createTask field defaults, snooze→excluded, includeSnoozed→all, getSnoozedTasks→only snoozed (with reason + timestamp), bringBack→reappears + reason cleared, touchLastMentioned persists + updatedAt bumps, archived still excluded regardless of includeSnoozed flag.
+
+Files changed:
+- src/main/database.ts
+- src/main/database.test.ts (new)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `node dist/main/database.test.js` — all tests passed.
+- `node dist/main/config.test.js` — regression, all tests passed.
+- `node dist/main/self-identity.test.js` — regression, all tests passed.
+
+Learnings for future iterations:
+- Electron's module in plain node is a string (path to the binary), so `import { app } from 'electron'` at file-top is NOT a load-time throw — `app` is just `undefined`. Tests can safely import `database.ts` as long as they never call `initDatabase()`; inject a raw `@seald-io/nedb` Datastore instead via the `__setTasksDbForTests` hook.
+- `new Datastore()` with no options is pure in-memory — no filesystem, no `app.getPath` — ideal for unit tests. Call `loadDatabaseAsync()` once before use.
+- NeDB matches `{ field: null }` against documents where the field is either null OR missing, matching Mongo semantics. This is what makes adding a new nullable field backward-compatible for existing rows without a migration.
+- There are still TWO inline `tasksDb.findAsync({ archivedAt: null, ... })` calls in `database.ts` (person-nudges at ~line 504, meeting-agenda at ~line 820) that do NOT filter snoozed. Out of scope for US-002 (PRD scoped to getTasks), but be aware: if snoozed tasks start appearing in person nudges or agenda context in a later iteration, those are the two sites to fix.
+- Pattern to follow when adding testable DB helpers to `database.ts`: pure helpers (like `isSnoozed`) stay free-standing; stateful helpers get a corresponding in-memory test using `__setTasksDbForTests`. Follow the same injection pattern for meetings/people DBs if future stories need it.
+
 ---
 
-## 2026-04-21 12:05 PDT - US-004
-Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- Replaced the two fixed `IcsField` components in `src/renderer/Settings.tsx` with a `CalendarList` + `CalendarRowView` pair. Removed `IcsField` entirely.
-- Each row: label input (debounced 500ms + save-on-blur), provider `<select>` (Google/Outlook/Other → 'google'/'outlook'/'ics'), URL input (debounced+blur), "Enabled" checkbox (saves immediately), Test, Delete.
-- Test wires to existing `inwiseAPI.testCalendarUrl` — the event-count/error message renders inline directly under the URL row.
-- `+ Add calendar` appends a blank row server-side via `inwiseAPI.addCalendar({ label:'', provider:'ics', url:'', enabled:true })`; the returned `id` is tracked in a `newlyAddedId` state that the child row consumes to auto-focus the label input on mount.
-- Empty state: dashed-border placeholder with copy "Add your first calendar to get started — paste a secret ICS link from your calendar settings."
-- `CalendarStatus` left untouched — the aggregation it already showed (ok/error/no-url + `eventCount` + `lastError`) is already "total event count + any-failing flag" per the PRD; `lastError` is populated whenever any single calendar fails even if others succeed (see calendar-watcher health rollup).
-- Delete uses `window.confirm` with explicit warning that events from that calendar will disappear from the upcoming list.
-- Added three new IPC handlers in `main.ts` — `calendar:add`, `calendar:update`, `calendar:remove` (plus `calendar:list`) — each calls `calendarWatcher.refresh()` so toggling a calendar off removes its events on the NEXT poll cycle within seconds, not at the 5-minute interval.
-- Added a public `refresh()` method on `CalendarWatcher` that awaits `poll()`.
-- `src/main/preload.ts` exposes `listCalendars`, `addCalendar`, `updateCalendar`, `removeCalendar`.
-- Removed `googleIcsUrl` and `outlookIcsUrl` from the renderer `Config` interface — they stay in the backend store (used by the migration path only), but the Settings form no longer reads/writes them.
-- Files changed: `src/main/calendar-watcher.ts`, `src/main/main.ts`, `src/main/preload.ts`, `src/renderer/Settings.tsx`.
-- Quality: both `tsc --noEmit` targets pass; `npm run build:renderer` (webpack) compiles successfully.
-- Browser verification: not applicable — this is an Electron app whose renderer runs inside a BrowserWindow, not a standalone web page the `dev-browser` skill can navigate to. Typecheck + webpack build are the real signals here; interactive testing needs `npm start`.
-- **Learnings for future iterations:**
-  - Because we post to main via IPC for every calendar mutation, the calendar list state lives primarily in the main store (`electron-store`) — the renderer mirrors it with optimistic updates. Don't try to round-trip through the existing `config:get`/`config:set` path: the `calendars[]` array is large/nested enough that per-row `updateCalendar(id, patch)` is much cleaner than serializing the whole array through setConfig.
-  - `calendarWatcher.refresh()` is now load-bearing for "toggle off and events disappear". If you add other mutation paths (e.g. bulk import from a file), call `refresh()` there too — otherwise users wait up to 5 minutes for the poll to reflect their change.
-  - The renderer's `Config` type is *not* the same shape as `src/main/config.ts`'s `Config`. The renderer uses a narrow subset — don't synchronize them; instead, add fields only if the UI needs them. US-005 will add `selfEmails` to the renderer type for the chip editor.
-  - The legacy `googleIcsUrl`/`outlookIcsUrl` fields stay in the backend Config (marked `@deprecated`) so `migrateLegacyCalendars()` can still seed calendars[] for users upgrading from pre-US-001 builds. The renderer does not need to know they exist, and removing them from the renderer Config keeps us from accidentally wiping them via `setConfig(config)` on Save.
-  - Per-row auto-focus needs a *ref passed to the input*, set in an effect that fires when `autoFocus` becomes true for that row. Don't try to focus inside the parent's add handler — React hasn't mounted the new row yet at that point.
+## 2026-04-21 13:45 PDT - US-003
+- Added new module `src/main/staleness-sweep.ts` exporting `sweepStaleTasks(now?: Date): Promise<{ snoozed: any[] }>` and `getLastSweepResult(): SweepResult | null`.
+- Eligibility implementation follows PRD gates: `status === 'todo'` (this codebase uses 'todo' where the PRD says 'active' — they mean the same thing here), `!isSnoozed(t)`, `updatedAt < now - 30d`, `(!lastMentionedAt || lastMentionedAt < now - 14d)`, `priority !== 'high' && priority !== 'critical'`.
+- For each eligible task, call `snoozeTask(id, 'stale-30d')` (reuses US-002's helper — no new DB write path).
+- `lastSweepResult` is module-local and includes `{ snoozed, eligible, totalActive, ranAt }` so US-004's compute IPC can read `snoozed.length`, sample titles, and skip re-running if the cached result is fresh.
+- Hooked into `app.whenReady()` in `main.ts`: `setTimeout(() => sweepStaleTasks().catch(...), 5_000)` — fire-and-forget, runs after calendar sync starts but before the UI would typically ask for welcome-back data, and is NOT awaited inside whenReady (so startup stays non-blocking per PRD).
+- Log line format matches PRD spec: `log('info', 'staleness-sweep', 'snoozed=N eligible=E of total active tasks=T')` — logger formats this as `[ts] INFO staleness-sweep | snoozed=... eligible=... of total active tasks=...`.
+- Added test-only `__resetLastSweepResultForTests()` so tests don't leak stashed state across cases.
+- Accepts an optional `now: Date` parameter so tests can control the clock deterministically.
+
+Files changed:
+- src/main/staleness-sweep.ts (new)
+- src/main/staleness-sweep.test.ts (new)
+- src/main/main.ts (import + whenReady hook)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `node dist/main/staleness-sweep.test.js` — 8 test blocks passed (happy path, age gate, mention-blocks, mention-too-old-doesnt-block, priority=high + critical, already-snoozed, mixed counts, status=done gate).
+- `node dist/main/database.test.js` / `config.test.js` / `self-identity.test.js` — regressions still green.
+
+Learnings for future iterations:
+- This codebase's task "active" state is `status === 'todo'`, not literally `'active'`. The PRD used 'active' generically; implementation should treat them as synonymous. If a later story needs to distinguish (e.g., 'in_progress' as a separate active state), update the filter.
+- `high` AND `critical` priorities both skip the sweep. PRD only spelled out `priority !== 'high'`, but `critical` is strictly more important than `high`, so excluding it is the obvious-intent interpretation. Documented here so future reviewers don't think it was overreach.
+- The sweep does NOT touch `lastMentionedAt` for untouched tasks — it reads it only. US-007 (task completion inference) is where `lastMentionedAt` should start being written by the transcript-processing pipeline.
+- `lastSweepResult` is a singleton in module state — fine for Electron main process, but if we ever need per-window isolation or SSR, this needs to move to a store. Not currently a concern.
+- The whenReady `setTimeout(5_000)` delay is a soft fence — it is NOT synchronised with `calendarWatcher`'s first `events-updated` emission. If US-008's live-meeting suppression needs the sweep result to be guaranteed-present before rendering, promote the sweep call to listen on `calendarWatcher.once('events-updated', ...)` instead.
+- Tests build tasks via `createTask()` then backdate with `updateTask(id, { updatedAt: iso(daysAgo), ... })` because `createTask` stamps `updatedAt` to now. This is the standard pattern for time-sensitive DB tests in this codebase.
+
 ---
 
-## 2026-04-21 12:12 PDT - US-005
-Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- Added `SelfEmailsEditor` component in `src/renderer/Settings.tsx` rendered in the Voice Enrollment section, right after the "Your Name" input.
-- Chips: each existing email renders as a pill with a `×` button; backspace on an empty draft removes the last chip.
-- Input: `Enter` or `,` commits the draft (`e.preventDefault()` avoids form submit); a trailing `,` pasted into `onChange` also auto-commits.
-- Validation: `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`. Invalid → inline red error below the chip row for 3 s (setTimeout cleared on unmount + on next error to avoid flicker). Duplicates rejected silently, case-insensitive.
-- Persistence: each mutation calls the new `inwiseAPI.setSelfEmails(next)` bridge → `ipcMain.handle('config:setSelfEmails')` in `main.ts` trims/drops empties and delegates to `setSelfEmails()` in `config.ts`, logging the resulting count. Added `selfEmails: string[]` to the renderer `Config` interface so the "Save Settings" whole-config save also persists the array.
-- Helper text: "Separate from display name. Used to identify you in attendee lists across multiple calendars."
-- Files changed: `src/main/main.ts` (import + new IPC handler), `src/main/preload.ts` (bridge entry), `src/renderer/Settings.tsx` (Config type + SelfEmailsEditor component + wiring).
-- Quality: `npx tsc -p tsconfig.main.json --noEmit` green, `npx tsc -p tsconfig.renderer.json --noEmit` green, `npm run build:renderer` succeeds.
-- Browser verification: not applicable — this is an Electron renderer running inside a BrowserWindow, not a web page the `dev-browser` skill can navigate to. Typecheck + webpack build are the real gates; interactive testing needs `npm start`.
-- **Learnings for future iterations:**
-  - The setSelfEmails IPC path is a *narrow helper*, not `setConfig({selfEmails: [...]})`. Using a dedicated channel makes the main-side logging meaningful (`count=N`) and lets us sanitize (trim + drop empties) at the boundary without polluting the generic `config:set` path.
-  - When the chip editor calls `onChange(next)`, the parent both updates local state *and* fires IPC — so the "Save Settings" button is not load-bearing for selfEmails persistence (changes save per-action). Keeping selfEmails in the renderer Config type still matters because `setConfig(config)` in the big save path would otherwise be `undefined`-valued for the key, which electron-store's `store.set('selfEmails', undefined)` would treat oddly. Always add newly-added main-Config fields to the renderer Config type when they participate in the save-all path.
-  - `Backspace`-to-remove-last-chip is a subtle UX affordance copied from Gmail/Linear: users discover it and like it, and it avoids trapping the cursor when they meant to edit the last email they typed.
-  - The 3-second inline error uses `useRef<ReturnType<typeof setTimeout>>()` not `number` — `setTimeout` is typed differently under Node (`NodeJS.Timeout`) vs. DOM (`number`), and `ReturnType<typeof setTimeout>` handles both without importing `@types/node` into the renderer.
-  - Comma-in-onChange (`value.endsWith(',')`) is necessary in addition to `onKeyDown === ','` because pasting "a@b.com," triggers onChange but not a keydown for the comma character — both paths need to commit.
+## 2026-04-21 19:40 PDT - US-004
+- Added pure compute module `src/main/welcome-back.ts` exporting `computeWelcomeBack(inputs): WelcomeBackResult | null`. All data dependencies (tasks, meetings, upcoming events, sweep result, config timestamps, openAtLogin) are passed as inputs — zero imports from `electron` or `config` so the function is fully unit-testable.
+- Added IPC handlers in `main.ts`:
+  - `welcomeBack:compute` — assembles tasks (`getTasks({ includeSnoozed: true })`), meetings (`getMeetings()`), upcoming events (`calendarWatcher.getUpcomingEvents()`), sweep cache (`getLastSweepResult()`), config timestamps, and `app.getLoginItemSettings().openAtLogin`, then calls `computeWelcomeBack`. `getLoginItemSettings` is guarded by try/catch for platforms that throw (Linux dev env).
+  - `welcomeBack:dismiss` — calls `markWelcomeBackSeen()`.
+- Extended `src/main/config.ts` with `getLastOpenedAtSnapshot()` and `getWelcomeBackLastSeenAt()` so compute can read the pre-session snapshot (the live store value is overwritten on every `show` event by `markAppOpened`).
+- Added `welcomeBackCompute` and `welcomeBackDismiss` to `src/main/preload.ts`. Both are invoke-style (no `allowed[]` update needed — that list is only for main→renderer push channels).
+- Null-return gates implemented per PRD: (1) `daysSinceLastOpen === null` (first-ever launch), (2) `< 2` days, (3) `welcomeBackLastSeenAt >= lastOpenedAtSnapshot` (already dismissed for this gap). Using the SNAPSHOT, not the live store value, is critical — see `getLastOpenedAtSnapshot` doc comment.
+- Ask-selection follows documented priority: contradiction > overdueWithSignal > launchAtStartupOffer. Only the first qualifying ask is returned; when none qualify, `ask` is omitted entirely.
+- Contradictions come from `meetings.insights.contradictions` (stored via `saveInsights`), not from re-calling the LLM `detectContradictions` function. Gap filter: `m.createdAt > priorSnapshot`. PRD originally used `detectContradictions.createdAt` but the real source is the meeting row.
+- `jiraProgress` = tasks where `source.type === 'jira'` AND `updatedAt > priorSnapshot`; `doneCount` is the subset with `status === 'completed' || 'done'`. No explicit status-change history exists, so `updatedAt` is the best proxy (runDailyJiraPull bumps it on status map).
+- `meetingsMatched` counts DISTINCT meeting IDs (via `provenance.meetingId`) for jira-linked tasks whose meeting was created in the gap window. A single meeting with multiple jira-linked tasks counts once.
+- Missed meetings for launchAtStartupOffer: calendar events with `startTime` in `(priorOpen, now)` that have NO meetings row, OR only a `status === 'calendar_sync'` placeholder row (calendar sync created a stub but nothing was actually recorded).
+
+Files changed:
+- src/main/config.ts (added `getLastOpenedAtSnapshot`, `getWelcomeBackLastSeenAt`)
+- src/main/welcome-back.ts (new)
+- src/main/welcome-back.test.ts (new)
+- src/main/main.ts (imports + two IPC handlers)
+- src/main/preload.ts (two new invoke wrappers)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `node dist/main/welcome-back.test.js` — 19 test blocks passed (3 null-return gates + 1 gate counter + 4 wins + 3 ask-priority branches + 6 ask guards + empty-wins sanity + 1 misc).
+- `node dist/main/{config,database,staleness-sweep,self-identity}.test.js` — regressions all green.
+
+Learnings for future iterations:
+- Pure-function extraction is the key testability pattern in this codebase. `staleness-sweep.ts` does this via `sweepStaleTasks(now?: Date)` (injects the clock); `welcome-back.ts` takes it further and injects ALL dependencies. When a new story needs data from multiple modules (config + db + calendar + staleness), follow this pattern and let `main.ts` be the wiring layer.
+- The PRD null-return condition "`welcomeBackLastSeenAt >= lastOpenedAt`" MUST compare against the module-load snapshot from config.ts, NOT the live store value. `markAppOpened()` fires on every `show` event, so the live `lastOpenedAt` is always >= `welcomeBackLastSeenAt` and the gate would never fire. `getLastOpenedAtSnapshot()` is the correct reader. Document this pattern wherever else "pre-session state" is needed.
+- Contradictions are stored in `meetings.insights.contradictions` by `saveInsights` — do NOT re-call `detectContradictions` (that's the LLM extractor, it's a COMPUTE function not a STORE). Query `getMeetings()` and filter by `insights.contradictions.length > 0` + createdAt window.
+- `getLoginItemSettings` can throw on non-darwin/win32 platforms; wrap in try/catch and default to `false`. US-009 will add the `setLoginItemSettings` side. The PRD's guard ("never return launchAtStartupOffer if already openAtLogin") is in compute, not in the IPC — good for testing, but means the compute also needs a try-safe boolean input.
+- `calendarWatcher.getUpcomingEvents()` returns events including the PAST 7 days (see `fetchIcsEvents` starting `todayStart` 7 days back). That's why missed-meetings detection can iterate upcomingEvents rather than needing a separate history query. Document this in AGENTS.md for calendar-watcher if a future story assumes future-only.
+- The new preload entries (`welcomeBackCompute`, `welcomeBackDismiss`) are both `invoke` style and do NOT need to be added to the `allowed[]` array in the `on()` handler — that allowlist is ONLY for main→renderer push channels. This distinction is documented in Codebase Patterns as well.
+- When adding a new module with `any[]` dependencies (tasks, meetings), default to `any` at the boundary but use well-named interfaces for the OUTPUT shape (WelcomeBackResult, WelcomeBackWins, WelcomeBackAsk). The IPC payload is the contract for US-005's UI.
+- Wins fields are individually optional (`?`) — only populated when count > 0. Empty wins + no ask is the signal for US-005's "Nothing urgent while you were out" empty-state copy.
 ---
 
-## 2026-04-21 12:20 PDT - US-006
-Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- Added meeting conflict detection + resolution flow in `src/main/main.ts`. Refactored the body of the `meeting-starting` handler into `startMeetingRecording(event)` so the normal (non-conflict) path is unchanged — previously the handler did `createOverlayWindow/updateTrayMenu/isRecordingActive=true/badge:show` inline.
-- Module-scope state: `lastMeetingStarting: { event, at } | null` and `pendingConflict: { active, incoming, timer } | null`. Constants `MEETING_CONFLICT_WINDOW_MS=90_000` and `MEETING_CONFLICT_AUTO_SELECT_MS=30_000`.
-- Conflict rule: next meeting-starting fires → if `isRecordingActive` OR `now − lastMeetingStarting.at ≤ 90s`, treat as conflict (unless it's a duplicate of the same event id). A third meeting-starting while a conflict is pending gets logged at `warn` and dropped — a binary modal can't resolve three-way without UX for it.
-- `handleMeetingConflict(active, incoming)` serializes both events (Date → epoch ms to mirror the existing `calendar:events` channel format), sends IPC `meeting:conflict` to mainWindow, starts a 30s auto-select timer via `pickConflictWinner()`. If mainWindow is hidden/minimized/missing, it *also* fires a desktop `Notification` with two action buttons routed through the same resolve path, plus a click handler that `show()` + `focus()`es the window.
-- `pickConflictWinner(a, b)` scoring: `count(attendee → isSelf(attendee))`; higher wins. Tiebreaker = earlier `startTime`, final tiebreaker = `a` (first-fired). Uses `isSelf` from US-003 — reads `getConfig().selfEmails` + `userName` so users with empty self-config still get a reasonable result (falls through to startTime tiebreaker).
-- `resolveMeetingConflict(winner, reason)` clears the timer and pendingConflict, logs `calendar-watcher:conflict | recording="X" passed-over="Y" reason=auto-selected|user-selected`, sends `meeting:conflict:resolved` with `{chosenId, reason}`, and calls `startMeetingRecording(winner)` **only when the winner is not the already-active event** (avoids redundant overlay recreation + double `badge:show`).
-- Added `ipcMain.handle('meeting:conflict:choose', chosenId)` that validates the id against pendingConflict and routes through `resolveMeetingConflict(..., 'user-selected')`. Returns `{ok:true}` / `{ok:false, reason}` for telemetry.
-- `src/main/preload.ts`: added `chooseMeetingForConflict(chosenId)` bridge entry, added `'meeting:conflict'` and `'meeting:conflict:resolved'` to the allowlist used by `on(channel, cb)`.
-- `src/renderer/components/modal/MeetingConflictModal.tsx` (new): Chakra `Modal` with `closeOnOverlayClick={false} closeOnEsc={false}` (user must pick or let the timer expire). Two side-by-side `MeetingCard`s showing label ("Already in progress" / "Just started"), title, formatted start time, attendee count, and a "Record this one" button. Live countdown driven by a 250ms `setInterval` against a `startedAt` timestamp — restarts cleanly when `autoSelectMs` changes (new conflict payload).
-- `src/renderer/App.tsx`: added `conflict` state, two IPC listeners (`meeting:conflict` → set state, `meeting:conflict:resolved` → clear state) in a `useEffect`, a `handlePickConflict(id)` that calls `chooseMeetingForConflict` and optimistically clears state, and renders `<MeetingConflictModal>` outside the main layout so it overlays everything including the FirstTimeUserFlow.
-- Passed-over meeting preservation: the conflict flow never mutates `calendarWatcher.cachedEvents`, so the loser still shows up in `getUpcomingEvents()` — no calendar-watcher code needed to change. The `notifiedIds` guard in calendar-watcher already prevents re-firing `meeting-starting` for the same event next poll, so we don't re-open the modal.
-- Files changed: `src/main/main.ts`, `src/main/preload.ts`, `src/renderer/App.tsx`, `src/renderer/components/modal/MeetingConflictModal.tsx` (new).
-- Quality: both `npx tsc --noEmit` targets pass; `npm run build:renderer` succeeds (webpack).
-- Browser verification: not applicable — Electron renderer inside a BrowserWindow, not a standalone web page. Interactive test would need `npm start` with two synthetic calendar events within 90s of each other.
-- **Learnings for future iterations:**
-  - Date → epoch ms serialization is the house convention for main→renderer event payloads; `calendar:events` does it, and the conflict payload mirrors that shape. If you add a new channel carrying a `Date`, convert at the boundary so the renderer doesn't get `Date`-ish objects back from structured clone (they become plain `Object` with no methods).
-  - The conflict flow's "don't re-start recording if winner was already active" check is load-bearing. Without it, picking the already-active meeting would call `createOverlayWindow(winner.title, winner.id)` which reuses the existing overlay but re-sends `recording:start` — harmless-looking but re-fires `badge:show` and resets audio-health debounce timers. Always compare `winner.id === active.id` before short-circuiting.
-  - Electron `Notification` accepts an `actions` array but only macOS renders them as buttons natively; on Windows they are silently ignored. Always log the decision on the main-process side so reason-tracking doesn't depend on notification action-click behavior.
-  - For a countdown in a modal, drive it from a `setInterval` that compares `Date.now()` to a captured `startedAt` — don't decrement a counter state each tick. If the modal unmounts and remounts mid-conflict, the counter-based approach drifts or resets; the timestamp-based approach always shows the true remaining time.
-  - When a component receives IPC events, always pair `api.on(channel, handler)` with `api.off(channel, handler)` in the cleanup function AND store a reference to the same handler. The preload's `off` uses `removeListener` which requires identity match, so inline arrow functions passed directly would leak.
-  - `closeOnOverlayClick={false} closeOnEsc={false}` on the conflict modal is intentional: the main process is the source of truth for conflict resolution. If the user could dismiss the modal without picking, we'd get a state where the 30s timer still fires but the modal is gone — safe but confusing. Forcing a pick (or waiting for the timer) keeps main and renderer in sync.
+## 2026-04-21 19:50 PDT - US-005
+- Added `src/renderer/WelcomeBack.tsx`: full-screen overlay that calls `inwiseAPI.welcomeBackCompute()` on mount, renders nothing when the IPC returns null, otherwise renders greeting + wins list + at most one ask + chip row + Done button.
+- Wins render count-not-list per PRD copy: cleared, jiraProgress (with doneCount), meetingsMatched, calendarHealthy. Sample titles are NOT shown — PRD says "detail on-demand via chips," so the sampleTitles array coming from compute is intentionally unused by the UI.
+- Ask variants: `contradiction` → Review/Dismiss (Review navigates to Communications + dismisses the screen); `overdueWithSignal` → Snooze to next week / Mark done / Keep as-is (all local-dismiss the ask for US-005 scope — US-007 wires completion semantics); `launchAtStartupOffer` → Turn on / Not now (both local-dismiss per PRD note that action logic is deferred to US-009).
+- "Nothing urgent" empty-state line renders ONLY when both wins are empty AND no ask is shown (after any local ask-dismiss, the chip row remains so the user isn't trapped).
+- Chip row: Tasks → tasks view, Meetings → communications, Jira → settings, Calendar → settings. Clicking any chip calls welcomeBackDismiss() via the shared handleDone() and then navigates.
+- Done button top-right calls `inwiseAPI.welcomeBackDismiss()` and unmounts (parent clears `welcomeBackVisible`).
+- Integrated into `src/renderer/App.tsx`: new `welcomeBackVisible` state (default true) — WelcomeBack renders while it is true AND FirstTimeUserFlow is not active (avoid stacking modals on first-run).
+
+Files changed:
+- src/renderer/WelcomeBack.tsx (new)
+- src/renderer/App.tsx (import + conditional render)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `npx webpack --config webpack.renderer.config.js` — bundle compiled successfully.
+- `node dist/main/{config,database,staleness-sweep,welcome-back,self-identity}.test.js` — all pass (regression).
+
+Browser verification:
+- **Dev-browser skill was NOT available in this session.** No standalone browser test harness exists in this codebase (Electron renderer only bundles via webpack into the app shell). Verification relied on: (a) renderer typecheck, (b) full webpack bundle passes, (c) structural inspection of rendered JSX against PRD copy spec. A follow-up `electron .` run with synthetic `welcomeBack:compute` fixtures is the recommended human smoke test before shipping.
+
+Learnings for future iterations:
+- This codebase's UI components use **plain inline styles** for full-screen overlays (see `FirstTimeUserFlow.tsx`) and **Chakra UI** for interactive cards/modals (see `MeetingConflictModal.tsx`). Both are fine; I chose inline styles for `WelcomeBack.tsx` because the overlay pattern is closer to FirstTimeUserFlow and we want minimal dependency coupling.
+- Palette: `#0d9488` teal primary, `#14b8a6` teal hover, `#0f172a` ink, `#64748b` muted, `#e2e8f0` border. Matches FirstTimeUserFlow and the Chakra theme.
+- `inwiseAPI` is accessed via `(window as any).inwiseAPI` in components — there's `src/renderer/api.ts` that wraps a subset but it doesn't include welcome-back yet. Use the raw `(window as any).inwiseAPI.welcomeBack*` invoke path and handle the missing-API case defensively (for headless test environments, the API object may be absent).
+- PRD says "sampleTitles up to 3" but also "NEVER render a list of task/meeting titles (count is the message, detail on-demand via chips)". These are not in conflict — sampleTitles is still useful as telemetry/debug surface in the IPC payload, but the UI MUST NOT display them. I left the data in the compute return and just ignored it in the component.
+- There are **only 4 views**: communications, tasks, people, settings. The PRD's chip row mentions "Jira" and "Calendar" — both live inside `settings`. Mapping Jira→settings and Calendar→settings is the pragmatic interpretation.
+- The `allowed[]` allowlist in `preload.ts` is for main→renderer **push** channels (`ipcRenderer.on`). New **invoke** handlers (like `welcomeBackCompute`/`welcomeBackDismiss`) do NOT need to be added there. (Reiterated from US-004 for anyone touching preload.)
+- When adding new overlays on top of App.tsx, decide stacking order with care: FirstTimeUserFlow is shown to first-run users at a higher z-index (10000) than Sidebar but must take precedence over WelcomeBack. I gate WelcomeBack with `!showFirstTimeFlow` so first-time users never see both.
+- For Electron-only projects with UI acceptance criteria, "verify in browser" in a PRD is aspirational unless the project has an explicit web-renderer mode. Document when skipped — don't silently claim browser verification that didn't happen.
+---
+
+## 2026-04-21 19:55 PDT - US-006
+- Added IPC handlers in `src/main/main.ts`: `db:getSnoozedTasks`, `db:snoozeTask`, `db:bringBackTask`, `db:bringBackAllTasks` (the last iterates snoozed tasks and calls `bringBackTask` per id, returning `{ count }`). Imported `getSnoozedTasks`, `snoozeTask`, `bringBackTask` from database.ts.
+- Exposed wrappers in `src/main/preload.ts`: `getSnoozedTasks`, `snoozeTask(id, reason)`, `bringBackTask(id)`, `bringBackAllTasks()` — all invoke-style (no `allowed[]` push-channel update needed).
+- Mirrored wrappers in `src/renderer/api.ts` so components use `api.getSnoozedTasks()` / `api.bringBackTask(id)` / `api.bringBackAllTasks()`.
+- Extended `src/renderer/MyTasks.tsx`:
+  - Added `SnoozedTask` type alias + `SnoozedRow` sub-component (title, due date, relative `snoozedAt` via local `formatRelative`, human-readable `snoozedReason` via `humanSnoozedReason` — 'stale-30d' → 'auto-snoozed — no activity for 30+ days').
+  - New `filter` state (`'board' | 'snoozed'`) with pill-style buttons at the top of the dashboard. Snoozed pill shows a count badge when snoozedTasks.length > 0 (hidden otherwise per PRD).
+  - Fetches snoozed tasks on mount (for the badge) and re-fetches whenever entering the Snoozed view.
+  - `handleBringBack` removes the row optimistically, fires a 3-second success toast ('Brought back — back in your active list.'), and re-fetches active tasks so the brought-back task shows up on the board.
+  - `handleBringBackAll` calls the new IPC, empties the local list, toasts `Brought back N task(s)`, and re-fetches active.
+  - Empty-state: friendly copy explaining that the staleness sweep will populate this view.
+  - Kanban board and pending-approval banner are wrapped in `filter === 'board'` so they hide when Snoozed is active.
+
+Files changed:
+- src/main/main.ts (imports + 4 new IPC handlers)
+- src/main/preload.ts (4 new invoke wrappers)
+- src/renderer/api.ts (4 new method wrappers)
+- src/renderer/MyTasks.tsx (type + row + filter-pill UI + handlers + conditional rendering)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `npx webpack --config webpack.renderer.config.js` — bundle compiled successfully.
+- `node dist/main/{config,database,staleness-sweep,welcome-back,self-identity}.test.js` — regression green.
+
+Browser verification:
+- **Dev-browser skill was NOT available in this session** (same as US-005). Verification relied on: (a) main + renderer typecheck clean, (b) full webpack bundle passes, (c) structural inspection of JSX against PRD copy spec, (d) unit-test regression across all 5 pre-existing suites. Recommended follow-up human smoke: launch Electron, seed 3 snoozed tasks via `snoozeTask(id, 'stale-30d')` in the main-process console, navigate to Tasks → Snoozed, confirm rows render with reason copy and relative `snoozedAt`, click [Bring back] on one and [Bring back all] on the rest.
+
+Learnings for future iterations:
+- The existing `MyTasks.tsx` had NO pre-existing filter-pill system — tasks render as a 3-column kanban. PRD wording "alongside existing filters" was aspirational; the pragmatic interpretation is to ADD pill-style toggles at the top that switch the entire view mode (Board ↔ Snoozed). Future stories that add more list-style filters (e.g., US-007 likely-done pill) can reuse this pattern.
+- When adding a new IPC channel that just wraps an existing DB helper, the boilerplate spans 3 files: `main.ts` (handler), `preload.ts` (invoke wrapper), `api.ts` (typed method). Keep the 3 in lockstep — if any one is missing, the renderer gets `undefined is not a function` at runtime. None of these need entry in the `allowed[]` allowlist (that list is ONLY for `ipcRenderer.on` push channels — reiterated from US-004/US-005).
+- `bringBackAllTasks` on the main side iterates snoozed tasks and calls `bringBackTask` per id. A future optimisation could batch this as a single DB update if performance matters (NeDB doesn't support `$set` across many docs as atomically, so the per-doc loop is fine for now).
+- Relative-time formatting: I wrote a local `formatRelative(iso)` rather than pulling in a date-fns-style dep. The codebase already inlines `toLocaleDateString()` for absolute dates (see existing TaskCard) — local helper matches that style.
+- `handleBringBack` calls `fetchTasks()` after every bring-back so that when the user flips back to the Board view, the restored task is already visible. Otherwise the user would see stale state until the next render-refresh.
+- Badge count on the Snoozed pill: fetching `getSnoozedTasks` once on mount keeps it live for the badge even before the user clicks the pill. If a later story adds real-time staleness-sweep events from main, wire a push channel and call `fetchSnoozedTasks` in the handler (mirror the `tasks:reprioritized` pattern).
+---
+
+## 2026-04-21 20:05 PDT - US-007
+- Added new module `src/main/task-completion-inference.ts` with pure `inferCompletedTaskIdsWith(transcript, openTasks, llm)` (DI-friendly, testable) + `inferCompletedTaskIds(transcript, openTasks)` production wrapper that injects the real Claude/OpenAI caller via `getConfig()`.
+- Prompt requires high-confidence, past-tense, definitive completion signals; instructs model to prefer false negatives. Response schema: `{"completedTaskIds": ["id1", ...]}`. Returned IDs are filtered against the set of IDs the model was given — hallucinated or stray IDs are silently dropped.
+- LLM errors never bubble — the wrapper catches and returns `[]`, so a flaky API key never breaks the recording pipeline.
+- Extended `src/main/database.ts`:
+  - `createTask` now initializes `likelyDone: false` on every new task record.
+  - New helpers: `markLikelyDone(id)` (sets flag, bumps updatedAt — never touches status), `confirmLikelyDone(id)` (clears flag + sets status='done'), `rejectLikelyDone(id)` (clears flag only, preserves status).
+- Wired the inference step into `runRecordingPipeline` in `src/main/main.ts` — placed AFTER the jira-auto-push block and BEFORE `pipeline:done`, per PRD. Flow: fetch active/non-snoozed tasks → call `inferCompletedTaskIds` → for each returned ID call `markLikelyDone` → log `pipeline:likely-done | flagged=N tasks` → send `tasks:likely-done-updated` push to renderer.
+- Added IPC handlers `db:confirmLikelyDone` and `db:rejectLikelyDone`; exposed wrappers in `src/main/preload.ts` (invoke-style, no allowed[] update needed) and `src/renderer/api.ts`.
+- Added `tasks:likely-done-updated` to preload's `allowed[]` push-channel allowlist — MyTasks.tsx subscribes to it and refreshes so the pill appears without requiring the user to reload.
+- Extended `Task` interface in `MyTasks.tsx` with `likelyDone?: boolean`.
+- `TaskCard` now renders a green "Done?" pill with [Yes]/[No] buttons when `task.likelyDone === true`, positioned right under the title. [Yes] calls `handleConfirmLikelyDone` → `api.confirmLikelyDone` → optimistically sets status='completed' + clears pill. [No] calls `handleRejectLikelyDone` → `api.rejectLikelyDone` → just clears the pill. Both show 2-second toasts.
+- Handlers are plumbed through `TaskColumn` → `TaskCard` via new optional `onConfirmLikelyDone`/`onRejectLikelyDone` props.
+- Added `task-completion-inference.test.ts` covering all acceptance gates: parseInferenceResponse (valid / fenced / hallucinated-filter / empty / malformed / wrong-shape), buildUserMessage sanity, early-return gates (empty transcript, no open tasks), inference with mocked LLM (empty, single match, multi match, hallucinated-filter, throws→empty), and DB helpers (markLikelyDone never sets status=done; confirmLikelyDone sets status=done; rejectLikelyDone preserves status).
+
+Files changed:
+- src/main/database.ts (likelyDone default + 3 new helpers)
+- src/main/task-completion-inference.ts (new)
+- src/main/task-completion-inference.test.ts (new)
+- src/main/main.ts (import + inference step + 2 new IPC handlers)
+- src/main/preload.ts (2 new invoke wrappers + 1 new push channel in allowed[])
+- src/renderer/api.ts (2 new method wrappers)
+- src/renderer/MyTasks.tsx (Task schema + TaskCard/TaskColumn props + handlers + pill UI + push-channel subscription)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `npx webpack --config webpack.renderer.config.js` — bundle compiled successfully.
+- `node dist/main/task-completion-inference.test.js` — all tests pass.
+- `node dist/main/{config,database,staleness-sweep,welcome-back,self-identity}.test.js` — regression green.
+
+Browser verification:
+- **Dev-browser skill was NOT available in this session** (same as US-005 and US-006). Verification relied on: (a) main + renderer typecheck clean, (b) full webpack bundle passes, (c) structural inspection of JSX against PRD copy spec, (d) unit-test coverage of inference + DB helpers. Recommended follow-up human smoke: launch Electron, seed a task via `createTask({ title: 'ship feature X' })`, run a meeting whose transcript says "we shipped feature X yesterday", confirm the Done? pill appears on the task card, click [Yes] and confirm task moves to Completed column, create another likelyDone task and click [No] to confirm pill disappears without status change.
+
+Learnings for future iterations:
+- The **DI pattern** established in `welcome-back.ts` (inject all deps; pure function is the testable surface) was reused here with an extra twist: the LLM call is abstracted as a `LlmCaller` function type, and tests provide mock callers. This is the cleanest pattern in this codebase for anything that makes an external API call — future stories that call an LLM should follow `task-completion-inference.ts` as the reference (NOT `extractor.ts`, which hard-codes `getConfig()` inline).
+- **LLM-returned IDs must be validated against a known set.** Models hallucinate IDs. The `validTaskIds` Set filter in `parseInferenceResponse` is non-negotiable — without it, a typo'd ID in the model's response would fail silently at `markLikelyDone` (NeDB `updateAsync` with a non-matching `_id` is a no-op) but corrupt the log line counts.
+- **LLM errors in the pipeline must be caught at the boundary.** The pipeline has its own try/catch around the inference step AND the inference function catches internally. Defense-in-depth — a failure in this step cannot abort the pipeline because `pipeline:done` is what triggers the overlay close + toast.
+- `markLikelyDone` is **strictly additive** — it does not touch `status`. The PRD is emphatic: never auto-close. Only `confirmLikelyDone` is allowed to set `status='done'`. If a future story adds more "inferred state" fields (e.g., `likelyBlocked`), follow the same 3-helper pattern: `markX`, `confirmX`, `rejectX`, where `markX` NEVER mutates user-owned fields.
+- The **push channel `tasks:likely-done-updated`** is sent with no payload — the renderer just knows to re-fetch. If we ever need to tell the UI which specific task was flagged, extend the payload shape; but for now, the simple "something changed, refetch" pattern aligns with how `tasks:reprioritized` already works.
+- The PRD's "only evaluate transcripts within 24h" clause is **guaranteed by position in the pipeline** — `runRecordingPipeline` runs seconds after meeting creation, so the transcript is always fresh. No explicit date-check needed in code. If inference is ever run against historical meetings (e.g., a backfill job), that code path needs its own 24h guard.
+- Chakra UI's `Button` inside a draggable `Card` needs `e.stopPropagation()` on onClick — otherwise the drag listeners on the card swallow the click. This pattern was already used for the archive/delete buttons; the Done?/No buttons follow the same idiom.
+- When adding new `TaskCard` or `TaskColumn` props, **both parent and child must accept them as optional** so that the DragOverlay `<TaskCard>` (rendered outside the Column) doesn't need to plumb every prop. The DragOverlay's TaskCard is a static snapshot — pills/actions won't fire there.
+---
+
+## 2026-04-21 20:20 PDT - US-008
+- Added new pure compute module `src/main/live-meeting-banner.ts` exporting `findLiveMeetingForBanner({ events, now, isRecordingActive, overlayWindowOpen })`. Returns a compact payload (id, title, startTime/endTime epoch ms, attendees[]) when an in-progress event matches `startTime <= now <= (endTime || startTime + 90min)` and both suppressor flags are false; returns null otherwise. Zero electron imports so it's fully unit-testable.
+- Added IPC handler `welcomeBack:liveMeeting` in `src/main/main.ts` — wires `calendarWatcher.getUpcomingEvents()`, `isRecordingActive`, and `overlayWindow && !overlayWindow.isDestroyed()` into the pure compute. Invoke-style, no `allowed[]` update needed.
+- Exposed `welcomeBackLiveMeeting` in `src/main/preload.ts` alongside the other welcome-back invoke wrappers.
+- Added new component `src/renderer/LiveMeetingBanner.tsx` — compact teal banner rendered at the top of `.main-content`. Copy matches PRD: "This looks like your meeting with {subject} — want me to start recording?" with `[Start recording]` and `[Not now]` buttons. Subject prefers the first non-empty attendee name, falling back to the event title.
+- Wired into `src/renderer/App.tsx`:
+  - New state: `liveMeetingChecked`, `liveMeeting`, `liveMeetingSuppressesWelcomeBack`; ref-based `dismissedLiveMeetingIds: Set<string>` so the dismissed-ids set survives re-renders without triggering them.
+  - On mount: call `welcomeBackLiveMeeting()`. If it returns a payload, flip `liveMeetingSuppressesWelcomeBack` (guarantees WelcomeBack is suppressed for the rest of this renderer session) AND — if the id isn't already in the dismissed Set — set `liveMeeting` so the banner renders. `.finally()` sets `liveMeetingChecked=true`.
+  - WelcomeBack render guard extended: `welcomeBackVisible && !showFirstTimeFlow && liveMeetingChecked && !liveMeetingSuppressesWelcomeBack`. This ensures we don't flash WelcomeBack before the check resolves.
+  - `[Start recording]` calls `inwiseAPI.startRecording(title, eventId)` via existing IPC, then adds the event id to the dismissed Set and hides the banner. Failure is swallowed — user can retry from the sidebar.
+  - `[Not now]` adds the id to the dismissed Set and hides the banner without triggering any IPC.
+- Added `src/main/live-meeting-banner.test.ts` covering: empty list, happy path, not-yet-started, already-ended, missing endTime (90min fallback), malformed endTime<=startTime (fallback), isRecordingActive suppressor, overlayWindowOpen suppressor, first-match-wins, attendees-default-to-empty.
+
+Files changed:
+- src/main/live-meeting-banner.ts (new)
+- src/main/live-meeting-banner.test.ts (new)
+- src/main/main.ts (import + 1 new IPC handler)
+- src/main/preload.ts (1 new invoke wrapper)
+- src/renderer/LiveMeetingBanner.tsx (new)
+- src/renderer/App.tsx (import + state + effect + handlers + conditional render + WelcomeBack suppression guard)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `npx webpack --config webpack.renderer.config.js` — both bundles compiled successfully.
+- `node dist/main/live-meeting-banner.test.js` — all tests pass.
+- `node dist/main/{config,database,staleness-sweep,welcome-back,task-completion-inference,self-identity}.test.js` — regression green.
+
+Browser verification:
+- **Dev-browser skill was NOT available in this session** (same as US-005/US-006/US-007). Verification relied on: (a) main + renderer typecheck clean, (b) full webpack bundle passes, (c) unit-test coverage of the core eligibility logic, (d) structural inspection of JSX and banner copy against PRD spec. Recommended follow-up human smoke: launch Electron with a synthetic calendar event whose start/end span the current time, confirm the teal banner appears at the top of Home and WelcomeBack is suppressed; click Start recording and confirm the overlay opens with the event title/id; click Not now and confirm the banner disappears and does not re-appear after hide/show of the main window.
+
+Learnings for future iterations:
+- The **session-local dismissed Set** for banner event ids uses `useRef<Set<string>>(new Set())` — not `useState` — because updates to the set don't need to trigger a re-render (the visible state is controlled by `liveMeeting` itself). Using `useState` with a new Set each update would also work but would thrash reference identity. `useRef` is idiomatic for "persistent mutable bag" in React.
+- The live-meeting check is a **fire-and-fail-open pattern**: if the IPC throws, the user still sees WelcomeBack normally rather than a broken state. Mirror this for any future "pre-check" IPCs that gate primary UI.
+- WelcomeBack suppression is a ONE-WAY flag (`liveMeetingSuppressesWelcomeBack`). Once the app detects an in-progress meeting at mount, WelcomeBack stays suppressed for the rest of the renderer lifetime, even if the user dismisses the banner. This matches the PRD's "suppress WelcomeBack for this session" semantics. Re-enabling happens naturally on next renderer boot.
+- The `calendar:active-event` IPC already existed for the Sidebar's manual-start flow and uses similar 90min fallback logic — we did NOT reuse it because the banner needs the additional `!isRecordingActive && !overlayWindow` gates AND the attendees field (the Sidebar version doesn't return attendees). If a future story needs a unified "am I in a meeting right now?" helper, extract `findLiveMeetingForBanner` further or replace the existing handler with a thin wrapper.
+- React render-order gotcha: **do not render `WelcomeBack` before `liveMeetingChecked` is true**. If you do, WelcomeBack may mount, fire its compute IPC, and flash on screen before the live-meeting check resolves. Gate the render on `liveMeetingChecked` like this story does.
+- The **banner mounts inside `.main-content`** (not as a fixed overlay) so it scrolls with content, doesn't obscure the Sidebar, and doesn't need its own z-index. Full-screen overlays (FirstTimeUserFlow, WelcomeBack) live outside `.main-content`. Match the pattern: inline-banner = in the content flow; modal = outside, fixed-positioned.
+- `startRecording(title, eventId)` is the canonical recording-kick-off entry point from the renderer (preload exposes it as `inwiseAPI.startRecording`). The Sidebar and now LiveMeetingBanner both use it — that's 2 call sites. If any future story adds a 3rd, consider moving the "pick title, pick eventId, call IPC" logic into a shared helper in `src/renderer/api.ts`.
+---
+
+## 2026-04-21 20:24 PDT - US-009
+- Added IPC handler `app:setLoginItemOpenAtLogin(enabled: boolean)` in `src/main/main.ts` — calls `app.setLoginItemSettings({ openAtLogin })`, logs outcome, returns `{ ok: true }` on success or `{ ok: false, error }` on failure.
+- Exposed `setLoginItemOpenAtLogin(enabled)` in `src/main/preload.ts` (invoke-style; no `allowed[]` update needed — that list is for main→renderer push channels only).
+- Extracted a new internal `LaunchAtStartupCard` sub-component in `src/renderer/WelcomeBack.tsx` that owns local state (`offer` → `enabling` → `enabled` | `failed`). On `[Turn on]`, it calls `inwiseAPI.setLoginItemOpenAtLogin(true)`; on success, the card morphs to the confirmation line "Done. Inwise will start automatically next time you log in." — the welcome-back screen stays open so the user isn't whisked away. On failure, shows an inline recovery message without leaving the offer state. `[Not now]` still calls `onLocalDismiss` (inherited from the ask-dismiss plumbing) which hides just the card, not the whole screen — matches PRD.
+- Compute-side guard (`openAtLogin === true` ⇒ no launchAtStartupOffer) was already present from US-004 in `computeWelcomeBack`; verified via the existing `welcome-back.test.ts` case "openAtLogin=true suppresses launch offer". Missed-meetings detection (`startTime > priorOpen && startTime < now && (no meetings row || row.status === 'calendar_sync')`) was also already implemented in US-004.
+- PRD note about `ask.kind === 'launchAtStartupOffer'` rendering the offer card described in US-005 — already wired via the `AskCard` dispatcher, now delegates to the new stateful sub-component.
+
+Files changed:
+- src/main/main.ts (1 new IPC handler)
+- src/main/preload.ts (1 new invoke wrapper)
+- src/renderer/WelcomeBack.tsx (new LaunchAtStartupCard sub-component with local state machine)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `npx webpack --config webpack.renderer.config.js` — both bundles compiled successfully.
+- `node dist/main/{config,database,staleness-sweep,welcome-back,live-meeting-banner,task-completion-inference}.test.js` — all regression suites pass.
+
+Browser verification:
+- **Dev-browser skill was NOT available in this session** (same as US-005–US-008). Verification relied on: (a) main + renderer typecheck clean, (b) full webpack bundle passes, (c) reuse of already-tested compute guards from US-004, (d) structural inspection of JSX against PRD copy spec. Recommended follow-up human smoke: launch Electron with `openAtLogin=false` and inject a welcomeBack:compute payload with `ask.kind = 'launchAtStartupOffer'`; confirm the offer card renders with the correct copy; click `[Turn on]` and confirm the card morphs to the "Done. Inwise will start automatically next time you log in." confirmation; re-open the app and confirm `app.getLoginItemSettings().openAtLogin === true` (and therefore the compute now suppresses the offer permanently).
+
+Learnings for future iterations:
+- For ask-cards in WelcomeBack that trigger a side effect AND transform in-place after success (rather than dismissing the screen), **own the state inside a dedicated sub-component** — don't lift it to the parent. `LaunchAtStartupCard` is the reference pattern: the parent just knows about `ask.kind === 'launchAtStartupOffer'`, and the card runs its own state machine (offer → enabling → enabled | failed) internally. Keeps the dispatcher AskCard dumb.
+- `app.setLoginItemSettings` is platform-aware in Electron (darwin/win32 only). Wrap in try/catch and return a structured result (`{ ok, error }`) so the renderer can show a recovery message without leaking the raw exception.
+- The compute-side guard for this ask (`!openAtLogin`) was already in US-004. When you plan a "one-tap side-effect" ask, bake the corresponding `off/on` guard into compute up-front — otherwise the ask keeps rendering on every future open even after the user already said yes.
+- PRD's "[Not now] dismisses the card only" naturally falls out of reusing the parent's `onLocalDismiss` (which sets `askDismissed=true` → AskCard unmounts, rest of WelcomeBack stays). No new plumbing needed, but note this when adding future asks: the local-dismiss contract is already there.
 ---

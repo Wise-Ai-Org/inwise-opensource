@@ -244,8 +244,11 @@ export async function syncCalendarEventsToDb(events: {
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
 
-export async function getTasks(): Promise<any[]> {
-  const tasks = await tasksDb.findAsync({ archivedAt: null });
+export function isSnoozed(t: any): boolean {
+  return !!(t && t.snoozedAt != null);
+}
+
+function sortTasks(tasks: any[]): any[] {
   const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
   return tasks.sort((a: any, b: any) => {
     const pa = priorityOrder[a.priority] ?? 2;
@@ -255,6 +258,20 @@ export async function getTasks(): Promise<any[]> {
   });
 }
 
+export async function getTasks(opts?: { includeSnoozed?: boolean }): Promise<any[]> {
+  const query: any = { archivedAt: null };
+  if (!opts?.includeSnoozed) {
+    query.snoozedAt = null;
+  }
+  const tasks = await tasksDb.findAsync(query);
+  return sortTasks(tasks);
+}
+
+export async function getSnoozedTasks(): Promise<any[]> {
+  const tasks = await tasksDb.findAsync({ archivedAt: null, snoozedAt: { $ne: null } });
+  return sortTasks(tasks);
+}
+
 export async function createTask(data: {
   title: string;
   description?: string;
@@ -262,6 +279,7 @@ export async function createTask(data: {
   dueDate?: string;
   status?: string;
 }): Promise<any> {
+  const now = new Date().toISOString();
   const doc = await tasksDb.insertAsync({
     _id: uuidv4(),
     title: data.title,
@@ -273,9 +291,41 @@ export async function createTask(data: {
     aiExtracted: false,
     approval: { status: 'auto_approved' },
     archivedAt: null,
-    createdAt: new Date().toISOString(),
+    snoozedAt: null,
+    snoozedReason: null,
+    lastMentionedAt: null,
+    likelyDone: false,
+    createdAt: now,
+    updatedAt: now,
   });
   return doc;
+}
+
+export async function markLikelyDone(taskId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await tasksDb.updateAsync(
+    { _id: taskId },
+    { $set: { likelyDone: true, updatedAt: now } },
+    {},
+  );
+}
+
+export async function confirmLikelyDone(taskId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await tasksDb.updateAsync(
+    { _id: taskId },
+    { $set: { likelyDone: false, status: 'done', updatedAt: now } },
+    {},
+  );
+}
+
+export async function rejectLikelyDone(taskId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await tasksDb.updateAsync(
+    { _id: taskId },
+    { $set: { likelyDone: false, updatedAt: now } },
+    {},
+  );
 }
 
 export async function updateTask(id: string, updates: Record<string, any>): Promise<any> {
@@ -285,6 +335,38 @@ export async function updateTask(id: string, updates: Record<string, any>): Prom
 
 export async function deleteTask(id: string): Promise<void> {
   await tasksDb.removeAsync({ _id: id }, {});
+}
+
+export async function snoozeTask(taskId: string, reason: string): Promise<void> {
+  const now = new Date().toISOString();
+  await tasksDb.updateAsync(
+    { _id: taskId },
+    { $set: { snoozedAt: now, snoozedReason: reason, updatedAt: now } },
+    {},
+  );
+}
+
+export async function bringBackTask(taskId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await tasksDb.updateAsync(
+    { _id: taskId },
+    { $set: { snoozedAt: null, snoozedReason: null, updatedAt: now } },
+    {},
+  );
+}
+
+export async function touchLastMentioned(taskId: string, when: string): Promise<void> {
+  await tasksDb.updateAsync(
+    { _id: taskId },
+    { $set: { lastMentionedAt: when, updatedAt: new Date().toISOString() } },
+    {},
+  );
+}
+
+// Test-only: inject an in-memory Datastore so helpers can be exercised without
+// booting Electron. Do NOT call from production code.
+export function __setTasksDbForTests(db: Datastore): void {
+  tasksDb = db;
 }
 
 // ── People ─────────────────────────────────────────────────────────────────────

@@ -401,6 +401,7 @@ interface Task {
   teamId?: string;
   blockerId?: string | null;
   actualHours?: number | null;
+  likelyDone?: boolean;
 }
 
 const priorityColors: Record<string, string> = {
@@ -426,6 +427,8 @@ function TaskCard({
   onClick,
   onArchive,
   onDelete,
+  onConfirmLikelyDone,
+  onRejectLikelyDone,
   isOverlay = false
 }: {
   task: Task;
@@ -435,6 +438,8 @@ function TaskCard({
   onClick?: (task: Task) => void;
   onArchive?: (taskId: string) => void;
   onDelete?: (taskId: string) => void;
+  onConfirmLikelyDone?: (taskId: string) => void;
+  onRejectLikelyDone?: (taskId: string) => void;
   isOverlay?: boolean;
 }) {
   const cardBg = useColorModeValue('white', 'gray.700');
@@ -548,6 +553,37 @@ function TaskCard({
         <Text fontWeight="semibold" fontSize="sm" noOfLines={2}>
           {task.title}
         </Text>
+
+        {task.likelyDone && (
+          <HStack
+            spacing={2}
+            p={2}
+            bg="green.50"
+            borderRadius="md"
+            borderLeftWidth="3px"
+            borderLeftColor="green.400"
+            data-testid="likely-done-pill"
+          >
+            <Badge colorScheme="green" fontSize="xs">Done?</Badge>
+            <Text fontSize="xs" color="gray.700" flex={1}>
+              Transcript suggests this is completed.
+            </Text>
+            <Button
+              size="xs"
+              colorScheme="green"
+              onClick={(e) => { e.stopPropagation(); onConfirmLikelyDone?.(task._id); }}
+            >
+              Yes
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={(e) => { e.stopPropagation(); onRejectLikelyDone?.(task._id); }}
+            >
+              No
+            </Button>
+          </HStack>
+        )}
 
         {task.priorityReasoning && task.priorityReasoning !== 'Standard priority' && (
           <Text fontSize="xs" color="orange.500" noOfLines={1}>{task.priorityReasoning}</Text>
@@ -698,7 +734,9 @@ function TaskColumn({
   onReject,
   onTaskClick,
   onArchive,
-  onDelete
+  onDelete,
+  onConfirmLikelyDone,
+  onRejectLikelyDone
 }: {
   title: string;
   tasks: Task[];
@@ -711,6 +749,8 @@ function TaskColumn({
   onTaskClick?: (task: Task) => void;
   onArchive?: (taskId: string) => void;
   onDelete?: (taskId: string) => void;
+  onConfirmLikelyDone?: (taskId: string) => void;
+  onRejectLikelyDone?: (taskId: string) => void;
 }) {
   const columnBg = useColorModeValue('gray.50', 'gray.800');
   const overBg = useColorModeValue('blue.50', 'blue.900');
@@ -764,6 +804,8 @@ function TaskColumn({
             onClick={onTaskClick}
             onArchive={onArchive}
             onDelete={onDelete}
+            onConfirmLikelyDone={onConfirmLikelyDone}
+            onRejectLikelyDone={onRejectLikelyDone}
           />
         ))}
         {tasks.length === 0 && (
@@ -777,6 +819,86 @@ function TaskColumn({
   );
 }
 
+interface SnoozedTask extends Task {
+  snoozedAt?: string | null;
+  snoozedReason?: string | null;
+}
+
+function formatRelative(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hrs / 24);
+  if (days === 1) return '1 day ago';
+  if (days < 30) return `${days} days ago`;
+  const months = Math.floor(days / 30);
+  if (months === 1) return '1 month ago';
+  return `${months} months ago`;
+}
+
+function humanSnoozedReason(reason: string | null | undefined): string {
+  if (!reason) return 'snoozed';
+  if (reason === 'stale-30d') return 'auto-snoozed — no activity for 30+ days';
+  if (reason === 'manual') return 'snoozed manually';
+  return reason;
+}
+
+function SnoozedRow({
+  task,
+  onBringBack,
+}: {
+  task: SnoozedTask;
+  onBringBack: (id: string) => void;
+}) {
+  return (
+    <Box
+      p={4}
+      mb={2}
+      bg="white"
+      borderRadius="8px"
+      borderWidth="1px"
+      borderColor="gray.200"
+      _hover={{ borderColor: 'gray.300', boxShadow: 'sm' }}
+    >
+      <HStack justify="space-between" align="start" spacing={4}>
+        <Box flex="1" minW={0}>
+          <Text fontSize="sm" fontWeight="600" noOfLines={1}>
+            {task.title}
+          </Text>
+          <HStack spacing={3} mt={1} flexWrap="wrap">
+            {task.dueDate && (
+              <Text fontSize="xs" color="gray.500">
+                Due {new Date(task.dueDate).toLocaleDateString()}
+              </Text>
+            )}
+            {task.snoozedAt && (
+              <Text fontSize="xs" color="gray.500">
+                Snoozed {formatRelative(task.snoozedAt)}
+              </Text>
+            )}
+            <Text fontSize="xs" color="gray.600" fontStyle="italic">
+              {humanSnoozedReason(task.snoozedReason)}
+            </Text>
+          </HStack>
+        </Box>
+        <Button
+          size="sm"
+          colorScheme="teal"
+          variant="outline"
+          onClick={() => onBringBack(task._id)}
+          flexShrink={0}
+        >
+          Bring back
+        </Button>
+      </HStack>
+    </Box>
+  );
+}
+
 export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: string) => void }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -786,6 +908,9 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
   const [sidebarTaskId, setSidebarTaskId] = useState<string | null>(null);
   const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [filter, setFilter] = useState<'board' | 'snoozed'>('board');
+  const [snoozedTasks, setSnoozedTasks] = useState<SnoozedTask[]>([]);
+  const [snoozedLoading, setSnoozedLoading] = useState(false);
   const { isOpen, onOpen, onClose } = useDisclosure();
   const { isOpen: isSidebarOpen, onOpen: onSidebarOpen, onClose: onSidebarClose } = useDisclosure();
   const { isOpen: isEditOpen, onOpen: onEditOpen, onClose: onEditClose } = useDisclosure();
@@ -828,11 +953,59 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
 
   useEffect(() => { fetchTasks(); }, []);
 
+  const fetchSnoozedTasks = useCallback(async () => {
+    try {
+      setSnoozedLoading(true);
+      const data = await api.getSnoozedTasks();
+      setSnoozedTasks((data || []) as SnoozedTask[]);
+    } catch {
+      /* non-fatal — badge/list stays at previous value */
+    } finally {
+      setSnoozedLoading(false);
+    }
+  }, []);
+
+  // Fetch snoozed count on mount (for badge) and whenever entering Snoozed view
+  useEffect(() => { fetchSnoozedTasks(); }, [fetchSnoozedTasks]);
+  useEffect(() => {
+    if (filter === 'snoozed') fetchSnoozedTasks();
+  }, [filter, fetchSnoozedTasks]);
+
+  const handleBringBack = async (taskId: string) => {
+    try {
+      await api.bringBackTask(taskId);
+      setSnoozedTasks(prev => prev.filter(t => t._id !== taskId));
+      toast({ title: 'Brought back — back in your active list.', status: 'success', duration: 3000 });
+      fetchTasks();
+    } catch {
+      toast({ title: 'Bring back failed', status: 'error', duration: 3000 });
+    }
+  };
+
+  const handleBringBackAll = async () => {
+    try {
+      const result = await api.bringBackAllTasks();
+      const count = (result && typeof result === 'object' && 'count' in result) ? (result as any).count : snoozedTasks.length;
+      setSnoozedTasks([]);
+      toast({ title: `Brought back ${count} task${count === 1 ? '' : 's'}`, status: 'success', duration: 3000 });
+      fetchTasks();
+    } catch {
+      toast({ title: 'Bring back all failed', status: 'error', duration: 3000 });
+    }
+  };
+
   // Auto-refresh when tasks are reprioritized after a meeting
   useEffect(() => {
     const onReprioritized = () => fetchTasks();
     api.on?.('tasks:reprioritized', onReprioritized);
     return () => { api.off?.('tasks:reprioritized', onReprioritized); };
+  }, []);
+
+  // Auto-refresh when the inference pipeline flags tasks as likely-done
+  useEffect(() => {
+    const onLikelyDoneUpdated = () => fetchTasks();
+    api.on?.('tasks:likely-done-updated', onLikelyDoneUpdated);
+    return () => { api.off?.('tasks:likely-done-updated', onLikelyDoneUpdated); };
   }, []);
 
   // Jira sync details modal
@@ -922,6 +1095,32 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
     if (pending.length === 0) return;
     for (const t of pending) {
       await handleApprove(t._id);
+    }
+  };
+
+  const handleConfirmLikelyDone = async (taskId: string) => {
+    try {
+      await api.confirmLikelyDone(taskId);
+      setTasks(prev => prev.map(t =>
+        t._id === taskId
+          ? { ...t, likelyDone: false, status: 'completed' as Task['status'] }
+          : t
+      ));
+      toast({ title: 'Marked done', status: 'success', duration: 2000 });
+    } catch {
+      toast({ title: 'Failed to mark done', status: 'error', duration: 3000 });
+    }
+  };
+
+  const handleRejectLikelyDone = async (taskId: string) => {
+    try {
+      await api.rejectLikelyDone(taskId);
+      setTasks(prev => prev.map(t =>
+        t._id === taskId ? { ...t, likelyDone: false } : t
+      ));
+      toast({ title: 'Kept as-is', status: 'info', duration: 2000 });
+    } catch {
+      toast({ title: 'Failed to update', status: 'error', duration: 3000 });
     }
   };
 
@@ -1024,8 +1223,34 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
 
   return (
     <Box pt={{ base: '20px', md: '10px', xl: '10px' }}>
+      <HStack spacing={2} mb={4}>
+        <Button
+          size="sm"
+          variant={filter === 'board' ? 'solid' : 'ghost'}
+          colorScheme={filter === 'board' ? 'brand' : 'gray'}
+          borderRadius="full"
+          onClick={() => setFilter('board')}
+        >
+          Board
+        </Button>
+        <Button
+          size="sm"
+          variant={filter === 'snoozed' ? 'solid' : 'ghost'}
+          colorScheme={filter === 'snoozed' ? 'brand' : 'gray'}
+          borderRadius="full"
+          onClick={() => setFilter('snoozed')}
+          rightIcon={snoozedTasks.length > 0 ? (
+            <Badge colorScheme={filter === 'snoozed' ? 'whiteAlpha' : 'gray'} borderRadius="full" px={2}>
+              {snoozedTasks.length}
+            </Badge>
+          ) : undefined}
+        >
+          Snoozed
+        </Button>
+      </HStack>
+
       <Flex justify="flex-end" align="center" mb={6} gap={3}>
-        {pendingApprovalCount > 0 && (
+        {pendingApprovalCount > 0 && filter === 'board' && (
           <Badge colorScheme="yellow" fontSize="sm" px={3} py={1} borderRadius="full" mr="auto">
             {pendingApprovalCount} pending approval
           </Badge>
@@ -1060,7 +1285,7 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
         </HStack>
       </Flex>
 
-      {pendingApprovalCount > 0 && (
+      {pendingApprovalCount > 0 && filter === 'board' && (
         <Box mb={4} px={4} py={3} borderRadius="8px" bg="orange.50" border="1px solid" borderColor="orange.200">
           <HStack spacing={3}>
             <Box w="8px" h="8px" borderRadius="full" bg="orange.400" />
@@ -1072,6 +1297,41 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
         </Box>
       )}
 
+      {filter === 'snoozed' && (
+        <Box>
+          {snoozedLoading ? (
+            <Flex justify="center" py={10}><Spinner /></Flex>
+          ) : snoozedTasks.length === 0 ? (
+            <Box px={6} py={10} textAlign="center" bg="gray.50" borderRadius="8px">
+              <Text color="gray.500" fontSize="sm">No snoozed tasks.</Text>
+              <Text color="gray.400" fontSize="xs" mt={1}>
+                Tasks are auto-snoozed after 30+ days without activity. They will show up here with a one-click bring-back.
+              </Text>
+            </Box>
+          ) : (
+            <Box>
+              <HStack justify="space-between" mb={3}>
+                <Text fontSize="sm" color="gray.600">
+                  {snoozedTasks.length} snoozed task{snoozedTasks.length === 1 ? '' : 's'}
+                </Text>
+                <Button
+                  size="sm"
+                  colorScheme="teal"
+                  variant="outline"
+                  onClick={handleBringBackAll}
+                >
+                  Bring back all ({snoozedTasks.length})
+                </Button>
+              </HStack>
+              {snoozedTasks.map((t) => (
+                <SnoozedRow key={t._id} task={t} onBringBack={handleBringBack} />
+              ))}
+            </Box>
+          )}
+        </Box>
+      )}
+
+      {filter === 'board' && (
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <SimpleGrid columns={{ base: 1, md: 3 }} spacing={6}>
           <TaskColumn
@@ -1086,6 +1346,8 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
             onTaskClick={handleTaskClick}
             onArchive={handleArchive}
             onDelete={handleDeleteRequest}
+            onConfirmLikelyDone={handleConfirmLikelyDone}
+            onRejectLikelyDone={handleRejectLikelyDone}
           />
           <TaskColumn
             title="In Progress"
@@ -1099,6 +1361,8 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
             onTaskClick={handleTaskClick}
             onArchive={handleArchive}
             onDelete={handleDeleteRequest}
+            onConfirmLikelyDone={handleConfirmLikelyDone}
+            onRejectLikelyDone={handleRejectLikelyDone}
           />
           <TaskColumn
             title="Completed"
@@ -1112,6 +1376,8 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
             onTaskClick={handleTaskClick}
             onArchive={handleArchive}
             onDelete={handleDeleteRequest}
+            onConfirmLikelyDone={handleConfirmLikelyDone}
+            onRejectLikelyDone={handleRejectLikelyDone}
           />
         </SimpleGrid>
 
@@ -1127,6 +1393,7 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
           ) : null}
         </DragOverlay>
       </DndContext>
+      )}
 
       <CreateTaskModal
         isOpen={isOpen}

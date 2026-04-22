@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
-import { getConfig, setConfig, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, CalendarSubscription } from './config';
+import { getConfig, setConfig, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
@@ -15,6 +15,8 @@ import {
   getMeetings, getMeeting, deleteMeeting, getAllPastDecisions, getOverdueCommitments,
   createMeetingFromTranscript,
   getTasks, createTask, updateTask, deleteTask,
+  getSnoozedTasks, snoozeTask, bringBackTask,
+  markLikelyDone, confirmLikelyDone, rejectLikelyDone,
   getPeople, getArchivedPeople, getPerson, addPerson, addTrackedPeople,
   archivePerson, unarchivePerson, getSuggestedPeople, updatePersonProfile,
   getPersonAgendaContext, getMeetingAgendaContext,
@@ -32,6 +34,10 @@ import { matchAllItems, semanticMatch } from './jira-matcher';
 import { scoreTasks } from './task-scorer';
 import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from './mfcc';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
+import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
+import { computeWelcomeBack } from './welcome-back';
+import { findLiveMeetingForBanner } from './live-meeting-banner';
+import { inferCompletedTaskIds } from './task-completion-inference';
 
 Menu.setApplicationMenu(null);
 
@@ -79,7 +85,14 @@ function createMainWindow(): void {
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
   }
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.once('ready-to-show', () => {
+    markAppOpened();
+    mainWindow?.show();
+  });
+
+  mainWindow.on('show', () => {
+    markAppOpened();
+  });
 
   mainWindow.on('close', (e) => {
     e.preventDefault();
@@ -470,6 +483,26 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       log('error', 'pipeline:reprioritize-failed', scoreErr.message);
     }
 
+    // Task completion inference — flag tasks the transcript strongly implies are done.
+    // Never auto-completes; user confirms via the 'Done?' pill in the Tasks view.
+    try {
+      const openTasks = await getTasks();
+      const candidates = openTasks
+        .filter((t: any) => t.status !== 'done' && t.status !== 'completed')
+        .map((t: any) => ({ _id: t._id, title: t.title, description: t.description }));
+      const flaggedIds = await inferCompletedTaskIds(transcript, candidates);
+      for (const id of flaggedIds) {
+        await markLikelyDone(id);
+      }
+      log('info', 'pipeline:likely-done', `flagged=${flaggedIds.length} tasks`);
+      if (flaggedIds.length > 0) {
+        log('info', 'pipeline:likely-done-ids', flaggedIds.join(','));
+        mainWindow?.webContents.send('tasks:likely-done-updated');
+      }
+    } catch (inferErr: any) {
+      log('error', 'pipeline:likely-done-failed', inferErr.message);
+    }
+
     sendToOverlay({ status: 'done' });
     mainWindow?.webContents.send('recording:status', { status: 'done' });
     log('info', 'pipeline:done', meetingId);
@@ -802,6 +835,32 @@ ipcMain.handle('db:updateTask', async (_e, id, updates) => {
   return result;
 });
 ipcMain.handle('db:deleteTask', async (_e, id) => { await deleteTask(id); return true; });
+
+// Snoozed tasks (US-006)
+ipcMain.handle('db:getSnoozedTasks', async () => getSnoozedTasks());
+ipcMain.handle('db:snoozeTask', async (_e, id: string, reason: string) => {
+  await snoozeTask(id, reason || 'manual');
+  return true;
+});
+ipcMain.handle('db:bringBackTask', async (_e, id: string) => {
+  await bringBackTask(id);
+  return true;
+});
+ipcMain.handle('db:bringBackAllTasks', async () => {
+  const snoozed = await getSnoozedTasks();
+  for (const t of snoozed) await bringBackTask(t._id);
+  return { count: snoozed.length };
+});
+
+// Likely-done task confirmation (US-007)
+ipcMain.handle('db:confirmLikelyDone', async (_e, id: string) => {
+  await confirmLikelyDone(id);
+  return true;
+});
+ipcMain.handle('db:rejectLikelyDone', async (_e, id: string) => {
+  await rejectLikelyDone(id);
+  return true;
+});
 
 // People
 ipcMain.handle('db:getPeople', async (_e, search) => getPeople(search));
@@ -1243,6 +1302,53 @@ ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
 
 ipcMain.handle('audio:health:get', () => latestAudioHealth);
 
+ipcMain.handle('welcomeBack:compute', async () => {
+  let openAtLogin = false;
+  try {
+    openAtLogin = app.getLoginItemSettings().openAtLogin;
+  } catch {
+    openAtLogin = false;
+  }
+  const tasks = await getTasks({ includeSnoozed: true });
+  const meetings = await getMeetings();
+  return computeWelcomeBack({
+    now: new Date(),
+    daysSinceLastOpen: getDaysSinceLastOpen(),
+    lastOpenedAtSnapshot: getLastOpenedAtSnapshot(),
+    welcomeBackLastSeenAt: getWelcomeBackLastSeenAt(),
+    openAtLogin,
+    lastSweepResult: getLastSweepResult(),
+    tasks,
+    meetings,
+    upcomingEvents: calendarWatcher.getUpcomingEvents(),
+  });
+});
+
+ipcMain.handle('welcomeBack:dismiss', () => {
+  markWelcomeBackSeen();
+  return true;
+});
+
+ipcMain.handle('welcomeBack:liveMeeting', () => {
+  return findLiveMeetingForBanner({
+    events: calendarWatcher.getUpcomingEvents(),
+    now: new Date(),
+    isRecordingActive,
+    overlayWindowOpen: !!(overlayWindow && !overlayWindow.isDestroyed()),
+  });
+});
+
+ipcMain.handle('app:setLoginItemOpenAtLogin', (_e, enabled: boolean) => {
+  try {
+    app.setLoginItemSettings({ openAtLogin: !!enabled });
+    log('info', 'login-item', `openAtLogin=${!!enabled}`);
+    return { ok: true };
+  } catch (err) {
+    log('error', 'login-item', `setLoginItemSettings failed: ${String(err)}`);
+    return { ok: false, error: String(err) };
+  }
+});
+
 ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; message?: string; stack?: string; source?: string }) => {
   const name = payload?.name || 'UnhandledRejection';
   const message = payload?.message || '(no message)';
@@ -1506,6 +1612,13 @@ app.whenReady().then(() => {
   createMainWindow();
   createTray(mainWindow!);
   calendarWatcher.start();
+
+  // Staleness sweep — fire-and-forget after calendar sync starts so the welcome-back
+  // compute IPC (US-004) can read lastSweepResult. Delayed to let first calendar sync
+  // settle but NOT awaited so whenReady() stays non-blocking.
+  setTimeout(() => {
+    sweepStaleTasks().catch((err) => log('error', 'staleness-sweep', String(err)));
+  }, 5_000);
 
   // Daily Jira pull — run on startup (after a short delay) and every 6 hours
   setTimeout(() => runDailyJiraPull(), 10_000);

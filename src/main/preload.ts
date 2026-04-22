@@ -34,6 +34,16 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   updateTask: (id: string, updates: any) => ipcRenderer.invoke('db:updateTask', id, updates),
   deleteTask: (id: string) => ipcRenderer.invoke('db:deleteTask', id),
 
+  // Snoozed tasks (US-006)
+  getSnoozedTasks: () => ipcRenderer.invoke('db:getSnoozedTasks'),
+  snoozeTask: (id: string, reason: string) => ipcRenderer.invoke('db:snoozeTask', id, reason),
+  bringBackTask: (id: string) => ipcRenderer.invoke('db:bringBackTask', id),
+  bringBackAllTasks: () => ipcRenderer.invoke('db:bringBackAllTasks'),
+
+  // Likely-done task confirmation (US-007)
+  confirmLikelyDone: (id: string) => ipcRenderer.invoke('db:confirmLikelyDone', id),
+  rejectLikelyDone: (id: string) => ipcRenderer.invoke('db:rejectLikelyDone', id),
+
   // People
   getPeople: (search?: string) => ipcRenderer.invoke('db:getPeople', search),
   getArchivedPeople: () => ipcRenderer.invoke('db:getArchivedPeople'),
@@ -75,6 +85,13 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   // Audio health (mic + system audio capture status)
   getAudioHealth: () => ipcRenderer.invoke('audio:health:get'),
 
+  // Welcome-back (returns null when not eligible)
+  welcomeBackCompute: () => ipcRenderer.invoke('welcomeBack:compute'),
+  welcomeBackDismiss: () => ipcRenderer.invoke('welcomeBack:dismiss'),
+  welcomeBackLiveMeeting: () => ipcRenderer.invoke('welcomeBack:liveMeeting'),
+  setLoginItemOpenAtLogin: (enabled: boolean) =>
+    ipcRenderer.invoke('app:setLoginItemOpenAtLogin', enabled),
+
   // Renderer error reporting
   reportUnhandledRejection: (payload: { name?: string; message?: string; stack?: string; source?: string }) =>
     ipcRenderer.send('renderer:unhandled-rejection', payload),
@@ -104,7 +121,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 
   // Events from main → renderer
   on: (channel: string, cb: (...args: any[]) => void) => {
-    const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'jira:auto-synced', 'pipeline:error', 'audio:health'];
+    const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'tasks:likely-done-updated', 'jira:auto-synced', 'pipeline:error', 'audio:health'];
     if (allowed.includes(channel)) {
       ipcRenderer.on(channel, (_event, ...args) => cb(...args));
     }
