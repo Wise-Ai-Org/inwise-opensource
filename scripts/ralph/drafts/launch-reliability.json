@@ -1,0 +1,91 @@
+{
+  "project": "inwise-opensource",
+  "branchName": "ralph/launch-reliability",
+  "description": "Minimum infrastructure for a private alpha: reliable recording lifecycle (silence-based auto-stop + first-60s early warnings + 2h safety cap + clean handoff), chunk streaming to disk so crashes don't destroy recordings, diagnostic bundle export so users can report bugs in 30 seconds, electron-updater + GitHub release workflow so fixes reach users in hours not weeks, and tray menu polish as the power-user delight surface.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Reliable recording lifecycle — silence auto-stop + first-60s warnings + 2h cap + clean handoff",
+      "description": "As a user, I want the app to catch audio problems in the first minute of recording, auto-stop cleanly when the meeting really ends, cap runaway recordings at 2 hours, and hand off smoothly when I switch meetings — without me having to remember to click Stop.",
+      "acceptanceCriteria": [
+        "Periodic audio monitor (every 30s) samples RMS on both channels during an active recording and emits audio:health-tick IPC with { micRms, sysRms, elapsedSec }",
+        "Main process aggregates ticks and drives three behaviors: first-60s early warnings, silence-based auto-stop, 2h hard cap",
+        "First-60s early warnings: micRms < 0.001 for 30s → desktop Notification 'Your mic isn\\'t picking up sound' with [Stop & fix] [Continue]; sysRms < 0.001 for 30s after start-probe → 'System audio dropped — other participants won\\'t be captured' same actions; both silent → 'Neither mic nor system audio is carrying sound' same actions",
+        "[Stop & fix] invokes the clean finalize path; [Continue] suppresses re-warnings of that kind for the rest of this recording",
+        "Silence-based auto-stop: after 90s grace period, if both channels stay under threshold for 2 consecutive minutes AND previously had signal → auto-stop cleanly with Notification 'Recording for {title} saved'",
+        "2-hour hard cap: at elapsedSec >= 2*60*60 regardless of signal → auto-stop with Notification 'Reached max recording length. Saved.'",
+        "Single finalizeRecording() entry point in main.ts used by user-click-stop, silence-auto-stop, 2h-cap, and conflict-modal switch — ensures chunks flush, WAV writes, pipeline queued, overlay closes",
+        "Back-to-back chaining: when silence auto-stops meeting A and a meeting-starting event fires within 2 minutes, a single Notification chains: 'Recording for A saved. Now recording B.' — no conflict modal, no interruption",
+        "Conflict modal 'switch to new' resolver calls finalizeRecording() for A, awaits pipeline-queue, then starts B. Log: 'meeting-conflict:switch | finalized=A started=B'",
+        "Typecheck passes",
+        "Tests pass: unit tests for silence-detection state machine (signal-then-silent → stop; silent-from-start → don\\'t trip until hadSignal), 90s grace suppression, 2h-cap trigger, early-warning 30s debounce"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Stream recording chunks to disk (crash-safe recording)",
+      "description": "As a user, if my machine crashes or I force-quit Electron mid-recording, I want whatever was captured up to that moment to survive instead of disappearing.",
+      "acceptanceCriteria": [
+        "On recording start, main.ts opens a write stream to userData/recordings/inwise-rec-{timestamp}.webm.partial",
+        "Each MediaRecorder ondataavailable chunk in Badge.tsx is IPC-sent to main ('recording:chunk'); main appends to the open write stream immediately",
+        "On finalizeRecording(): close the stream, rename .webm.partial → .webm, convert webm → WAV via existing pipeline, write WAV, delete the .webm intermediate, kick off the pipeline with the WAV path",
+        "On app startup, scan userData/recordings/ for orphan .webm.partial files from prior crashes. For each: close + rename + convert + queue into the pipeline as if it had finalized. Log 'recording:recovered | path=X size=Y'",
+        "Memory usage during a 3-hour recording stays roughly flat (chunks streamed out as they arrive), not linear with duration",
+        "If streaming to disk fails for any reason, fall back to the old accumulate-in-memory path so recording still works",
+        "Typecheck passes",
+        "Tests pass: simulate a crash by killing the write stream mid-recording, relaunch, verify the partial file is recovered and converted end-to-end"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Launch infrastructure: diagnostic bundle + auto-updater + GitHub release workflow",
+      "description": "As an alpha user, when I hit a bug I want to send it in 30 seconds. As Shrav, when I ship a fix I want users to get it automatically. As Shrav, shipping a new version should be git tag + push and nothing more.",
+      "acceptanceCriteria": [
+        "Diagnostic bundle — Settings → Support section with [Export diagnostic bundle] button",
+        "Button invokes main-process IPC 'support:export-bundle' that: tails last 5000 lines of app.log; reads config.json with apiKey and jiraTokens redacted; collects crash stack traces if present; collects 20 most recent meetings.db entries (titles + statuses, NO transcripts); collects app version, OS, Electron version, Node version",
+        "Export writes to userData/inwise-diagnostic-{timestamp}.zip and opens a file-save dialog pre-populated with that path",
+        "Helper text under the button: 'Attach this to your GitHub issue or email it to support@inwise.ai. No transcripts or audio are included.'",
+        "Add electron-updater dependency; configure setFeedURL to GitHub provider targeting Wise-Ai-Org/inwise-opensource",
+        "Poll for updates every 6 hours after launch via autoUpdater.checkForUpdatesAndNotify()",
+        "On update-available event: silent background download",
+        "On update-downloaded event: desktop Notification 'Inwise v{version} is ready. Restart to install.' with actions [Restart now] [Later]. [Restart now] calls autoUpdater.quitAndInstall()",
+        "Add 'Check for updates now' button in Settings that invokes autoUpdater.checkForUpdates()",
+        "Update package.json build.publish to GitHub provider config for Wise-Ai-Org/inwise-opensource",
+        "New .github/workflows/release.yml triggered on tag push matching v*; runs on windows-latest (builds .exe + .blockmap via dist:win) and macos-latest (builds .dmg + .zip via dist:mac; skip gracefully if no cert available)",
+        "Workflow uses softprops/action-gh-release to publish artifacts to the GitHub release page",
+        "New docs/releasing.md documents the tag-and-push release process",
+        "Typecheck passes",
+        "Verify manually post-merge (one-time): push a test tag v0.0.0-test, confirm GitHub Actions workflow runs green, artifacts appear on releases page. Delete the test release after. (Not Ralph-automated — manual verification after the branch merges.)"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Tray menu polish — Start/Stop recording, Launch-at-login toggle, Focus mode",
+      "description": "As a user, I want to do common recording actions from the tray without opening the main window. Tray should be a first-class delight surface, not just Open/Quit.",
+      "acceptanceCriteria": [
+        "Extend src/main/tray.ts updateTrayMenu() with four new items (in addition to existing Open / Quit)",
+        "'Start recording now' — enabled only when NOT currently recording; opens the overlay for an ad-hoc recording with an auto-generated title 'Recording {datetime}' and no calendarEventId",
+        "'Stop recording' — enabled only when currently recording; triggers the same finalizeRecording() path from US-001",
+        "'Launch at login' checkbox menu item — reflects current app.getLoginItemSettings().openAtLogin; clicking toggles via the existing app:setLoginItemOpenAtLogin IPC",
+        "'Focus mode: suppress meeting reminders for...' submenu with options: 15 minutes, 30 minutes, 1 hour, until tomorrow. When active, calendar-watcher's meeting-reminder events are suppressed until the timer expires",
+        "Status label at the top updates: idle → 'Inwise'; recording → '● Recording — {elapsed}' (updates every 30s via the audio-monitor tick); focus mode active → append '🌙 Focus until {time}' (no emojis in final version — replace with text)",
+        "updateTrayMenu() called on: recording start/stop, login-item toggle, focus mode change",
+        "Store focus mode expiry in main-process module state; cleared when timer fires or user toggles it off",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill: right-click tray icon → all new items visible; click Start recording → overlay appears without main window; click Stop → overlay closes and pipeline runs; toggle Launch at login → confirm app.getLoginItemSettings() reflects; activate Focus mode for 15min → simulated meeting-reminder does not fire during the window"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

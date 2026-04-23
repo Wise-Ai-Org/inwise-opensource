@@ -1,0 +1,95 @@
+{
+  "project": "inwise-opensource",
+  "branchName": "ralph/action-item-lifecycle",
+  "description": "Fix the hidden bug where Create-task doesn't persist convertedToTaskId, add a Reject button next to the Create-task button (same approve/reject pattern as Communications), rename 'PENDING ACTION ITEMS' to 'Action items pending review', and add a second 'Active action items' section with a collapsed 'Show N completed' toggle on the Person drawer. Extend seed:demo to populate all three lifecycle tiers so the UI is visibly exercised.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Persist convertedToTaskId + dismissed on insight action items; partition getPerson into pending/active/done",
+      "description": "As a developer, I need writes to the source insight record so action items have durable lifecycle state instead of stateless projections that always look pending.",
+      "acceptanceCriteria": [
+        "Action items in meeting.insights.actionItems gain two optional fields: convertedToTaskId?: string | null and dismissed?: boolean (default absent — no migration)",
+        "Add src/main/database.ts export convertActionItemToTask(meetingId, actionItemIndex, taskFields) that creates a Task AND updates insights.actionItems[actionItemIndex].convertedToTaskId atomically, returning {taskId}",
+        "Add src/main/database.ts export dismissActionItem(meetingId, actionItemIndex) that sets insights.actionItems[actionItemIndex].dismissed = true",
+        "Add src/main/database.ts export undismissActionItem(meetingId, actionItemIndex) that clears the dismissed flag",
+        "Update getPerson() pending filter at database.ts:478-487 to exclude BOTH convertedToTaskId set AND dismissed === true",
+        "getPerson() returns a new activeActionItems array: items with convertedToTaskId set AND linked task status NOT IN ('completed','cancelled'). Join on tasks collection to populate current status, updatedAt, dueDate on each item",
+        "getPerson() returns a new doneActionItems array: items with convertedToTaskId set AND linked task status IN ('completed','cancelled')",
+        "The ActionItem interface in src/renderer/People.tsx:59-70 mirrors the new fields (dismissed?, updated taskStatus source)",
+        "Typecheck passes",
+        "Tests pass: unit tests for convertActionItemToTask (task created + back-reference written), dismissActionItem (flag set), getPerson partitioning (pending vs active vs done vs dismissed-excluded)"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "IPC + preload bridge for actionItem:convert / :dismiss / :undismiss",
+      "description": "As a developer, I need renderer-facing IPC wrappers so the UI can call the new helpers cleanly.",
+      "acceptanceCriteria": [
+        "Add ipcMain.handle('actionItem:convert', ...) in src/main/main.ts that calls convertActionItemToTask(meetingId, actionItemIndex, taskFields)",
+        "Add ipcMain.handle('actionItem:dismiss', ...) in src/main/main.ts that calls dismissActionItem(meetingId, actionItemIndex)",
+        "Add ipcMain.handle('actionItem:undismiss', ...) in src/main/main.ts that calls undismissActionItem(meetingId, actionItemIndex)",
+        "Expose convertActionItem, dismissActionItem, undismissActionItem on inwiseAPI in src/main/preload.ts",
+        "Mirror the three methods in src/renderer/api.ts so components can call api.convertActionItem(...), api.dismissActionItem(...), api.undismissActionItem(...)",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Rename 'PENDING ACTION ITEMS' to 'Action items pending review' and add Reject (×) button with Undo toast",
+      "description": "As a user, I want to reject an action item with one click when it's not worth tracking, matching the approve/reject pattern used in Communications.",
+      "acceptanceCriteria": [
+        "Rename the section heading in src/renderer/People.tsx from 'PENDING ACTION ITEMS' (or equivalent existing label) to 'Action items pending review'. Preserve neighboring small-caps styling",
+        "In ActionItemRow (People.tsx:188-247), add a second IconButton next to the existing + Create-task button: a small × using MdClose from react-icons (matches TranscriptReviewModal dismiss style). aria-label='Reject' and a tooltip",
+        "Extend ActionItemRow props with onReject: (item: ActionItem) => Promise<void>",
+        "Clicking × calls onReject(item) which invokes api.dismissActionItem({ meetingId: item.meetingId, actionItemIndex: item.actionItemIndex }) and refreshes person drawer data — the rejected item vanishes from the pending list",
+        "Show a toast: 'Rejected — won\\'t show again' with an [Undo] action that calls api.undismissActionItem with the same args. Undo window: 5 seconds",
+        "Clicking the existing + now calls api.convertActionItem (not raw api.createTask) so convertedToTaskId is persisted",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill: with seeded demo data, open a Person drawer with pending items; click Reject on one → it disappears from the pending list; toast appears; clicking Undo within 5s restores it; click + on another → it moves from pending to Active (after US-004 ships)"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Render 'Active action items' section + collapsed 'Show N completed' toggle",
+      "description": "As a user, I want to see on a person's page which of their action items became real tasks and where those tasks stand, without leaving the drawer.",
+      "acceptanceCriteria": [
+        "Below the 'Action items pending review' section in People.tsx, add a new section titled 'Active action items'",
+        "Render person.activeActionItems (from US-001): each row shows title, owner, due date, status badge (todo / inProgress / etc.), and 'from {meeting title}' as a subtle secondary line",
+        "Clicking an active row opens the underlying Task — reuse the existing TaskDetailSidebar drawer from MyTasks if it is importable; otherwise open a minimal read-only popover with title, description, status, due, linked meeting",
+        "Below Active, render a collapsed toggle labeled 'Show N completed' where N = person.doneActionItems.length. Hide the toggle when N === 0",
+        "Clicking the toggle expands a list of done items: strikethrough title, dim gray, with completion date. Click a row to re-open the task",
+        "Empty state for Active section shows 'No active action items for this person' only when both activeActionItems.length === 0 AND doneActionItems.length === 0; otherwise render nothing above the Show-N-completed toggle",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill: after US-005 seeds demo data, open a Person drawer with 2+ meetings → confirm all three tiers (pending / active / done) render with realistic data and the Show-N-completed toggle expands/collapses"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Extend seed:demo to populate all three action-item lifecycle tiers",
+      "description": "As a demo user, the seeded demo data should include action items in each state (pending, active, done, dismissed) so the three sections on the Person drawer are visibly populated.",
+      "acceptanceCriteria": [
+        "In ipcMain.handle('seed:demo', ...) in src/main/main.ts, after creating the existing meetings and their insights, programmatically: convert 2 action items (across different meetings) whose linked Tasks are in status 'todo' or 'inProgress'; convert 2 more whose linked Tasks are in status 'completed'; leave 3-4 in default pending state; mark 1 as dismissed",
+        "Use the new convertActionItemToTask helper (not a raw DB write) so the real code path is exercised",
+        "Update the seed completion log line and return value to include pending / active / done / dismissed counts",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill: reset the user profile, run the seed, open any Person drawer with 2+ meetings → confirm pending / active / done sections all populated and the dismissed item appears in none of them"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
