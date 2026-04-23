@@ -28,8 +28,18 @@ import { extractChannel, trimWav, wavBufferToSamples } from './audio-utils';
 import {
   connectJira, disconnectJira, isJiraConnected, getJiraInfo,
   getJiraProjects, getJiraStories, createJiraIssue, updateJiraIssue,
-  transitionJiraIssue, addJiraComment,
+  transitionJiraIssue, addJiraComment, retryJiraWrite,
 } from './jira-client';
+import {
+  initSorWriteLog, onWriteCompleted,
+  listRecent as sorListRecent,
+  listByMeeting as sorListByMeeting,
+  listByTaskId as sorListByTaskId,
+  listByTargetRecord as sorListByTargetRecord,
+  aggregateByIntegration as sorAggregateByIntegration,
+  listStuckEntries as sorListStuckEntries,
+  getWriteEntry as sorGetWriteEntry,
+} from './sor-write-log';
 import { matchAllItems, semanticMatch } from './jira-matcher';
 import { scoreTasks } from './task-scorer';
 import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from './mfcc';
@@ -401,21 +411,35 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
             const match = matches[i];
             const item = insights.actionItems[i];
 
+            // Create the local task first so we can pass its id as `linkedTaskId`
+            // provenance to the Jira push. If the Jira call then fails, the local
+            // task survives as an unsynced record — strictly better than losing it.
+            const task = await createTask({
+              title: item.text,
+              description: `From meeting: ${meetingTitle}`,
+              priority: item.priority || 'medium',
+              dueDate: item.dueDate,
+              status: 'todo',
+            });
+
+            const transcriptSpan = item.text
+              ? { start: 0, end: item.text.length, snippet: item.text }
+              : undefined;
+            const provenance = {
+              sourceMeetingId: meetingId,
+              sourceTranscriptSpan: transcriptSpan,
+              linkedTaskId: task._id,
+              approvalPath: 'auto' as const,
+            };
+
             if (match.autoApproved && match.bestMatch) {
               // High-confidence match — link to existing story via comment
               await addJiraComment(
                 match.bestMatch.jiraKey,
                 `Action item: ${item.text}\nOwner: ${item.owner || 'Unassigned'}`,
                 meetingTitle,
+                provenance,
               );
-              // Create local task linked to the Jira story
-              const task = await createTask({
-                title: item.text,
-                description: `From meeting: ${meetingTitle}`,
-                priority: item.priority || 'medium',
-                dueDate: item.dueDate,
-                status: 'todo',
-              });
               await updateTask(task._id, {
                 source: { type: 'jira', id: match.bestMatch.jiraKey, url: match.bestMatch.jiraUrl },
               });
@@ -428,15 +452,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
                 priority: item.priority || 'medium',
                 dueDate: item.dueDate,
                 projectKey,
-              });
-              // Create local task linked to the new Jira issue
-              const task = await createTask({
-                title: item.text,
-                description: `From meeting: ${meetingTitle}`,
-                priority: item.priority || 'medium',
-                dueDate: item.dueDate,
-                status: 'todo',
-              });
+              }, provenance);
               await updateTask(task._id, {
                 source: { type: 'jira', id: result.key, url: result.url },
               });
@@ -918,9 +934,11 @@ ipcMain.handle('db:updateTask', async (_e, id, updates) => {
       const jiraKey = result.source.id;
       let synced = false;
 
+      const provenance = { linkedTaskId: id, approvalPath: 'auto' as const };
+
       // Status changed — transition in Jira
       if (updates.status) {
-        await transitionJiraIssue(jiraKey, updates.status);
+        await transitionJiraIssue(jiraKey, updates.status, provenance);
         synced = true;
       }
 
@@ -931,7 +949,7 @@ ipcMain.handle('db:updateTask', async (_e, id, updates) => {
           description: updates.description,
           priority: updates.priority,
           dueDate: updates.dueDate,
-        });
+        }, provenance);
         synced = true;
       }
 
@@ -1370,6 +1388,29 @@ ipcMain.handle('jira:matchTasks', async (_e, items: any[], projectKey?: string) 
   } catch (e: any) { return { ok: false, error: e.message }; }
 });
 
+// SoR audit log (US-001)
+ipcMain.handle('sor:listRecent', async (_e, limit?: number, sinceMs?: number) => {
+  return sorListRecent(limit ?? 50, sinceMs);
+});
+ipcMain.handle('sor:listByMeeting', async (_e, meetingId: string) => {
+  return sorListByMeeting(meetingId);
+});
+ipcMain.handle('sor:listByTaskId', async (_e, taskId: string) => {
+  return sorListByTaskId(taskId);
+});
+ipcMain.handle('sor:listByTargetRecord', async (_e, system: 'jira', recordId: string) => {
+  return sorListByTargetRecord(system, recordId);
+});
+ipcMain.handle('sor:aggregateByIntegration', async (_e, sinceMs?: number) => {
+  return sorAggregateByIntegration(sinceMs);
+});
+ipcMain.handle('sor:retry', async (_e, id: string) => {
+  const entry = await sorGetWriteEntry(id);
+  if (!entry) return { ok: false, error: 'Entry not found' };
+  if (entry.targetSystem === 'jira') return retryJiraWrite(id);
+  return { ok: false, error: `Retry not supported for ${entry.targetSystem}` };
+});
+
 // Recording
 ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string) => {
   createOverlayWindow(title, calendarEventId);
@@ -1717,6 +1758,10 @@ async function runDailyJiraPull(): Promise<void> {
 
 app.whenReady().then(() => {
   initDatabase();
+  initSorWriteLog();
+  onWriteCompleted((entry) => {
+    mainWindow?.webContents.send('sor:write-completed', entry);
+  });
   const migration = migrateLegacyCalendars();
   if (migration.migrated) {
     log('info', 'config:migrate-calendars', `Seeded calendars[] from legacy fields — added=${migration.added}`);
@@ -1724,6 +1769,25 @@ app.whenReady().then(() => {
   createMainWindow();
   createTray(mainWindow!);
   calendarWatcher.start();
+
+  // One-time scan for SoR writes stuck in 'pending' / 'pending-approval' / 'retrying'
+  // for more than 24 hours — these indicate an interrupted/crashed prior session.
+  setTimeout(async () => {
+    try {
+      const stuck = await sorListStuckEntries(24 * 60 * 60 * 1000);
+      if (stuck.length > 0) {
+        log('info', 'sor:stuck-entries', `${stuck.length} interrupted writes found`);
+        if (Notification.isSupported()) {
+          new Notification({
+            title: 'Jira sync interrupted',
+            body: `${stuck.length} Jira ${stuck.length === 1 ? 'write was' : 'writes were'} interrupted. Open Settings → Integrations to retry.`,
+          }).show();
+        }
+      }
+    } catch (err: any) {
+      log('error', 'sor:stuck-scan-failed', err.message);
+    }
+  }, 15_000);
 
   // Staleness sweep — fire-and-forget after calendar sync starts so the welcome-back
   // compute IPC (US-004) can read lastSweepResult. Delayed to let first calendar sync

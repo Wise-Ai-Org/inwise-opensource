@@ -23,7 +23,7 @@
         "Tests pass: unit tests for recordWrite → markCompleted lifecycle; fieldDiffs computed correctly for update vs create vs comment; aggregate query returns correct totals; retry increments retryCount and re-runs"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "Foundation story. All other stories depend on this. The fieldDiffs GET-before-write pattern is the only non-trivial design call — accept the extra HTTP cost in exchange for accurate diffs."
     },
     {
