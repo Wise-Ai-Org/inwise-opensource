@@ -65,7 +65,7 @@
         "Browser-verify: connect Jira; confirm card shows 'Connected · No writes yet'; trigger a meeting with pushes; confirm counts update; force-fail one push (e.g., disconnect mid-write); confirm [Retry failed (1)] enables and works"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "Trimmed from the originally-discussed 'integrations health dashboard' — solo OSS user does not need 30-day trend charts."
     },
     {

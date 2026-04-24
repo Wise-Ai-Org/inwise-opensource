@@ -37,6 +37,7 @@ import {
   listByTaskId as sorListByTaskId,
   listByTargetRecord as sorListByTargetRecord,
   aggregateByIntegration as sorAggregateByIntegration,
+  listFailedSince as sorListFailedSince,
   listStuckEntries as sorListStuckEntries,
   getWriteEntry as sorGetWriteEntry,
 } from './sor-write-log';
@@ -1442,6 +1443,24 @@ ipcMain.handle('sor:retry', async (_e, id: string) => {
   if (!entry) return { ok: false, error: 'Entry not found' };
   if (entry.targetSystem === 'jira') return retryJiraWrite(id);
   return { ok: false, error: `Retry not supported for ${entry.targetSystem}` };
+});
+ipcMain.handle('sor:listFailed', async (_e, system: 'jira', sinceMs: number) => {
+  return sorListFailedSince(system, sinceMs);
+});
+ipcMain.handle('sor:retryFailed', async (_e, system: 'jira', sinceMs: number) => {
+  const failed = await sorListFailedSince(system, sinceMs);
+  let succeeded = 0;
+  let stillFailed = 0;
+  for (const entry of failed) {
+    try {
+      const result = system === 'jira' ? await retryJiraWrite(entry._id) : { ok: false as const };
+      if (result.ok) succeeded += 1;
+      else stillFailed += 1;
+    } catch {
+      stillFailed += 1;
+    }
+  }
+  return { ok: true, attempted: failed.length, succeeded, failed: stillFailed };
 });
 
 // Recording

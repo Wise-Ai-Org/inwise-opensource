@@ -91,7 +91,9 @@ export const api = {
   sorListByTargetRecord: (system: string, recordId: string) =>
     inwiseAPI.sorListByTargetRecord(system, recordId),
   sorAggregateByIntegration: (sinceMs?: number) => inwiseAPI.sorAggregateByIntegration(sinceMs),
+  sorListFailed: (system: string, sinceMs: number) => inwiseAPI.sorListFailed(system, sinceMs),
   sorRetry: (id: string) => inwiseAPI.sorRetry(id),
+  sorRetryFailed: (system: string, sinceMs: number) => inwiseAPI.sorRetryFailed(system, sinceMs),
 
   // ── Desktop Capture ──────────────────────────────────────────────────────
   getDesktopSourceId: () => inwiseAPI.getDesktopSourceId(),

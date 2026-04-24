@@ -243,6 +243,25 @@ export async function aggregateByIntegration(sinceMs?: number): Promise<Integrat
 }
 
 /**
+ * Failed entries for a given system since `sinceMs`. Used by the Settings
+ * Integrations bulk-retry action and the failed-count indicator.
+ */
+export async function listFailedSince(
+  system: TargetSystem,
+  sinceMs: number,
+): Promise<SorWriteEntry[]> {
+  const db = getDb();
+  const rows = await (db as any)
+    .findAsync({
+      targetSystem: system,
+      result: 'failed',
+      createdAt: { $gte: new Date(sinceMs).toISOString() },
+    })
+    .sort({ createdAt: -1 });
+  return rows as SorWriteEntry[];
+}
+
+/**
  * Entries stuck in 'pending', 'pending-approval', or 'retrying' older than `olderThanMs`.
  * Used at app-startup to detect interrupted writes after a crash / force-quit.
  */

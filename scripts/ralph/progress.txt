@@ -107,3 +107,45 @@ Learnings for future iterations:
 - **`initialTab` is a one-shot intent, not state.** The prop is read by the modal's open-effect to set `activeTab` once; subsequent tab clicks move on normally. The parent doesn't need to re-sync. This is the right shape for "open here" deep-links.
 - **Notification must be wrapped in try/catch.** A failed Notification construction (OS-specific quirks, no desktop session, etc.) must not break the auto-push pipeline. Any UI-adjacent side effect in the main process should be non-fatal.
 ---
+
+## 2026-04-23 22:14 PDT - US-003
+Thread: local (Claude Code)
+- Added Settings → Integrations status block:
+  - New `IntegrationsSection` component at top level of `Settings.tsx`. Rendered between the existing "Jira Integration" and "Voice Enrollment" sections.
+  - Per-integration card (today: Jira only). Layout reusable — adding Salesforce/HubSpot/Linear is a pure array-extend, no restructure needed.
+  - Header: integration name + connection status pill. Pills: `Connected` (teal), `Disconnected` (slate), `Auth expired` (amber — triggered if `jiraStatus.info.authExpired === true`, a field the main process is free to set in the future).
+  - Counts line (from `sor:aggregateByIntegration({sinceMs: 30d ago})`): `{success} writes · {failed} failed · last write {ago}`; collapses to `No writes yet.` when the aggregate total is 0.
+  - Recent activity: last 10 rows from `sor:listRecent(10, 30d)` filtered to this integration. Collapsible, default collapsed. Each row shows colored operation badge, Jira key (clickable via `openExternal`), one-line summary, relative timestamp. Expand chevron reveals fieldDiffs / comment body / source-transcript snippet — same info as US-002, restyled in plain CSS to match the rest of `Settings.tsx`.
+  - Failed rows get a red card border + red `FAILED` badge + red per-row `↻ Retry` button (calls `sor:retry`).
+  - Action row: `[Retry failed (N)]` bulk button (enabled only when N > 0 and Jira is connected) + `[Disconnect]` button mirroring the existing Jira section behavior. A transient result message ("3 succeeded, 1 still failing") appears next to the buttons for ~4 s after a bulk retry.
+- Main-process plumbing for bulk retry and count-of-failed:
+  - `src/main/sor-write-log.ts`: new `listFailedSince(system, sinceMs)` query — one-liner findAsync with `result:'failed'` + system + createdAt cutoff.
+  - `src/main/main.ts`: two new IPC handlers. `sor:listFailed(system, sinceMs)` → returns the failed rows (used by the UI for the button's `(N)` badge). `sor:retryFailed(system, sinceMs)` → iterates failed rows, dispatches `retryJiraWrite(id)` for each, returns `{ ok, attempted, succeeded, failed }`. Wrapped so a single retry exception doesn't abort the batch.
+  - `src/main/preload.ts` + `src/renderer/api.ts`: `sorListFailed` / `sorRetryFailed` wrappers on both sides of the bridge. Pattern identical to the existing `sorRetry` / `sorListRecent` wiring from US-001.
+- Live refresh: the Integrations section subscribes to `sor:write-completed` IPC on mount and re-runs the 4-call `Promise.all` on each event. No polling. Matches the US-002 pattern.
+- "Today: only Jira card renders." — enforced by hardcoding the card inside the section. When a second SoR ships, extract the card into a `SorCard` component and map over an array of system configs.
+
+Files changed:
+- src/main/sor-write-log.ts (new `listFailedSince` export)
+- src/main/main.ts (2 new IPC handlers + 1 import)
+- src/main/preload.ts (2 new invoke wrappers)
+- src/renderer/api.ts (2 new typed methods)
+- src/renderer/Settings.tsx (new IntegrationsSection + SorWriteRow components, used once; minimal inline-style rendering matching existing Settings code)
+- scripts/ralph/prd.json (US-003 → passes:true)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `node dist/main/sor-write-log.test.js` — all tests still pass (new `listFailedSince` is additive; existing lifecycle/aggregate tests unaffected).
+- Regression: config / database / staleness-sweep / welcome-back / task-completion-inference / live-meeting-banner / self-identity — all still pass.
+
+Browser verification:
+- **Deferred to manual QA.** `dev-browser` skill is not available in this runner. The end-to-end flow was reviewed statically: `Promise.all` fires jiraStatus + aggregate + recent + failed in parallel on mount; `sor:write-completed` IPC triggers a reload; retry-one and retry-all both re-trigger the reload after resolving; disconnect confirmation uses the existing `jiraDisconnect` path already exercised elsewhere in the file. No new IPC path bypasses the allowlist — `sor:write-completed` was already in `preload.ts` from US-001.
+
+Learnings for future iterations:
+- **Settings.tsx is plain-CSS, not Chakra.** The per-meeting SoR trace in TranscriptReviewModal uses Chakra (`Box`, `Badge`, `HStack`, …). Settings.tsx is all inline-styled `<div>`s with css-variable colors (`var(--slate-500)`, `var(--teal)`, …). Replicating the row renderer cost ~150 LOC but kept the bundle honest — don't introduce Chakra into Settings for a single use. If a third surface needs the same row, extract a shared `SorWriteRow` that ships styles both ways.
+- **Bulk retry in the main process, not the renderer.** A naive renderer-side `Promise.all(ids.map(sorRetry))` would fire N concurrent IPC calls and N concurrent Jira HTTP requests. The `sor:retryFailed` handler serializes them in the main process — acceptable latency for a user-initiated button (dozens, not hundreds) and gentler on Jira rate limits. Preserve this shape when adding other bulk operations.
+- **Connection status pill has room for a third state.** `Auth expired` is driven by `jiraStatus.info?.authExpired`, a field the main process does not currently set. The UI reads it opportunistically so a future jira-client change to detect expired tokens can light it up without touching the Settings UI. Common pattern for progressive enhancement — declare the UI state up front, backfill the signal later.
+- **Reusable layout means "the CARD is reusable", not "the SECTION is reusable".** The PRD was explicit: one card per integration, today only Jira. The section wrapper stays the same when a new SoR is added; just extract the card body into `<SorCard system="salesforce" label="Salesforce" ... />` and map. Don't prematurely abstract before the second card exists.
+- **30-day window uses `useRef` not `useMemo`.** `useMemo([])` looks tempting but is more boilerplate and does the same thing. `useRef(Date.now() - 30d)` is a single statement, stable for the component's lifetime, and doesn't invite dependency-array confusion. Small detail but worth remembering — it'll recur for every "compute-once-on-mount" value.
+---

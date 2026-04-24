@@ -746,6 +746,431 @@ function JiraSettings({ config, update }: { config: Config; update: (key: keyof 
   );
 }
 
+// ── Integrations status block (US-003) ──────────────────────────────────────
+
+type SorOp = 'create' | 'update' | 'transition' | 'comment';
+type SorResult = 'pending' | 'success' | 'failed' | 'pending-approval' | 'retrying';
+type SorSystem = 'jira';
+
+interface SorFieldDiff { field: string; before: any; after: any }
+interface SorSpan { start: number; end: number; snippet: string }
+
+interface SorWriteEntry {
+  _id: string;
+  targetSystem: SorSystem;
+  targetRecordId: string;
+  targetRecordUrl: string | null;
+  operation: SorOp;
+  fieldDiffs: SorFieldDiff[];
+  commentBody: string | null;
+  sourceMeetingId: string | null;
+  sourceTranscriptSpan: SorSpan | null;
+  linkedTaskId: string | null;
+  confidence: number | null;
+  approvalPath: 'auto' | 'user' | 'opt-in-gated';
+  result: SorResult;
+  errorMessage: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  retryCount: number;
+}
+
+interface IntegrationAggregate {
+  system: SorSystem;
+  total: number;
+  success: number;
+  failed: number;
+  lastWriteAt: string | null;
+}
+
+const SOR_OP_LABEL: Record<SorOp, string> = {
+  create: 'Created',
+  update: 'Updated',
+  transition: 'Transitioned',
+  comment: 'Commented',
+};
+
+const SOR_OP_COLOR: Record<SorOp, string> = {
+  create: '#0F766E',
+  update: '#1D4ED8',
+  transition: '#7C3AED',
+  comment: '#475569',
+};
+
+function sorOneLineSummary(entry: SorWriteEntry): string {
+  if (entry.operation === 'create') return 'New issue created';
+  if (entry.operation === 'comment') return 'Comment added';
+  if (entry.operation === 'transition') {
+    const d = entry.fieldDiffs.find(x => x.field === 'status');
+    if (d) return `Status: ${d.before ?? '—'} → ${d.after ?? '—'}`;
+    return 'Status transition';
+  }
+  const n = entry.fieldDiffs.length;
+  if (n === 0) return 'No field changes';
+  if (n === 1) return `${entry.fieldDiffs[0].field} changed`;
+  return `+${n} fields`;
+}
+
+function SorWriteRow({ entry, onRetry, retrying }: {
+  entry: SorWriteEntry;
+  onRetry: (id: string) => void;
+  retrying: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const isFailed = entry.result === 'failed';
+  const isPending = entry.result === 'pending' || entry.result === 'retrying' || entry.result === 'pending-approval';
+
+  return (
+    <div style={{
+      padding: '10px 12px',
+      border: '1px solid',
+      borderColor: isFailed ? '#FECACA' : 'var(--slate-200)',
+      borderRadius: 8,
+      background: isFailed ? '#FEF2F2' : 'white',
+      marginBottom: 6,
+    }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+        <button
+          onClick={() => setExpanded(e => !e)}
+          aria-label={expanded ? 'Collapse' : 'Expand'}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: 'var(--slate-400)', fontSize: 12, padding: 0, marginTop: 2, width: 14, flexShrink: 0,
+          }}
+        >
+          {expanded ? '▾' : '▸'}
+        </button>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 2 }}>
+            <span style={{
+              fontSize: 10, fontWeight: 700, color: SOR_OP_COLOR[entry.operation],
+              background: `${SOR_OP_COLOR[entry.operation]}1a`, borderRadius: 4, padding: '2px 6px',
+              textTransform: 'uppercase', letterSpacing: '0.04em',
+            }}>
+              {SOR_OP_LABEL[entry.operation]}
+            </span>
+            {entry.targetRecordId && entry.targetRecordId !== '(pending-create)' && (
+              <button
+                style={{
+                  background: 'none', border: 'none', cursor: entry.targetRecordUrl ? 'pointer' : 'default',
+                  color: '#1a7080', fontSize: 12, fontWeight: 600, padding: 0,
+                  textDecoration: entry.targetRecordUrl ? 'underline' : 'none',
+                }}
+                onClick={() => {
+                  if (entry.targetRecordUrl) (window as any).inwiseAPI.openExternal(entry.targetRecordUrl);
+                }}
+                disabled={!entry.targetRecordUrl}
+              >
+                {entry.targetRecordId}
+              </button>
+            )}
+            {isFailed && (
+              <span style={{
+                fontSize: 10, fontWeight: 700, color: '#DC2626',
+                background: 'rgba(220, 38, 38, 0.1)', borderRadius: 4, padding: '2px 6px',
+              }}>FAILED</span>
+            )}
+            {isPending && (
+              <span style={{
+                fontSize: 10, fontWeight: 700, color: '#B45309',
+                background: 'rgba(180, 83, 9, 0.1)', borderRadius: 4, padding: '2px 6px',
+              }}>
+                {entry.result === 'pending-approval' ? 'PENDING APPROVAL' : 'IN PROGRESS'}
+              </span>
+            )}
+            <span style={{ fontSize: 11, color: 'var(--slate-400)', marginLeft: 'auto' }}>
+              {formatAgo(new Date(entry.createdAt).getTime())}
+            </span>
+          </div>
+
+          <div style={{ fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.4 }}>
+            {sorOneLineSummary(entry)}
+          </div>
+
+          {isFailed && entry.errorMessage && !expanded && (
+            <div style={{ fontSize: 11, color: '#991B1B', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {entry.errorMessage}
+            </div>
+          )}
+
+          {expanded && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--slate-100)' }}>
+              {entry.operation === 'comment' && entry.commentBody && (
+                <div style={{
+                  background: 'var(--slate-50)', borderRadius: 6, padding: 8,
+                  fontSize: 12, color: 'var(--slate-700)', whiteSpace: 'pre-wrap',
+                }}>
+                  {entry.commentBody}
+                </div>
+              )}
+
+              {entry.operation !== 'comment' && entry.fieldDiffs.length > 0 && (
+                <div style={{ fontSize: 12 }}>
+                  <div style={{
+                    fontSize: 10, fontWeight: 600, color: 'var(--slate-400)',
+                    textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4,
+                  }}>
+                    Field changes
+                  </div>
+                  {entry.fieldDiffs.map((d, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 2 }}>
+                      <span style={{ color: 'var(--slate-500)', minWidth: 80, fontWeight: 500 }}>{d.field}</span>
+                      <span style={{
+                        color: 'var(--slate-500)',
+                        textDecoration: entry.operation === 'create' ? 'none' : 'line-through',
+                      }}>
+                        {d.before === null || d.before === undefined ? '—' : String(d.before)}
+                      </span>
+                      <span style={{ color: 'var(--slate-400)' }}>→</span>
+                      <span style={{ color: 'var(--slate-800)' }}>
+                        {d.after === null || d.after === undefined ? '—' : String(d.after)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {entry.sourceTranscriptSpan?.snippet && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{
+                    fontSize: 10, fontWeight: 600, color: 'var(--slate-400)',
+                    textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4,
+                  }}>From transcript</div>
+                  <div style={{
+                    borderLeft: '3px solid #9dd4d9', background: '#f0fafa',
+                    padding: '6px 10px', borderRadius: '0 6px 6px 0',
+                    fontSize: 12, color: 'var(--slate-700)', fontStyle: 'italic',
+                  }}>
+                    "{entry.sourceTranscriptSpan.snippet}"
+                  </div>
+                </div>
+              )}
+
+              {isFailed && entry.errorMessage && (
+                <div style={{
+                  marginTop: 8, padding: 8, borderRadius: 6,
+                  background: '#FEF2F2', border: '1px solid #FECACA',
+                  fontSize: 12, color: '#991B1B',
+                }}>
+                  {entry.errorMessage}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {isFailed && (
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{ fontSize: 11, padding: '2px 8px', color: '#DC2626', flexShrink: 0 }}
+            onClick={() => onRetry(entry._id)}
+            disabled={retrying}
+          >
+            {retrying ? '…' : '↻ Retry'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+function IntegrationsSection() {
+  const [jiraStatus, setJiraStatus] = useState<{ connected: boolean; info: any } | null>(null);
+  const [aggregates, setAggregates] = useState<IntegrationAggregate[]>([]);
+  const [recentByIntegration, setRecentByIntegration] = useState<Record<SorSystem, SorWriteEntry[]>>({ jira: [] });
+  const [failedCount, setFailedCount] = useState<Record<SorSystem, number>>({ jira: 0 });
+  const [expanded, setExpanded] = useState<Record<SorSystem, boolean>>({ jira: false });
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [bulkRetrying, setBulkRetrying] = useState(false);
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
+
+  const sinceMs = useMemoSince();
+
+  const reload = async () => {
+    const win = window as any;
+    try {
+      const [status, agg, recent, failed] = await Promise.all([
+        win.inwiseAPI.jiraStatus?.().catch(() => null),
+        win.inwiseAPI.sorAggregateByIntegration(sinceMs).catch(() => []),
+        win.inwiseAPI.sorListRecent(10, sinceMs).catch(() => []),
+        win.inwiseAPI.sorListFailed('jira', sinceMs).catch(() => []),
+      ]);
+      setJiraStatus(status);
+      setAggregates(Array.isArray(agg) ? agg : []);
+      const recentRows: SorWriteEntry[] = Array.isArray(recent) ? recent : [];
+      setRecentByIntegration({ jira: recentRows.filter(r => r.targetSystem === 'jira') });
+      setFailedCount({ jira: Array.isArray(failed) ? failed.length : 0 });
+    } catch {
+      /* best-effort — leave prior state */
+    }
+  };
+
+  useEffect(() => {
+    reload();
+    const win = window as any;
+    const handler = () => { reload(); };
+    win.inwiseAPI.on?.('sor:write-completed', handler);
+    return () => win.inwiseAPI.off?.('sor:write-completed', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleRetryOne = async (id: string) => {
+    setRetryingId(id);
+    try {
+      await (window as any).inwiseAPI.sorRetry(id);
+    } finally {
+      setRetryingId(null);
+      // live-refresh IPC will trigger reload, but kick one just in case
+      reload();
+    }
+  };
+
+  const handleRetryFailed = async () => {
+    setBulkRetrying(true);
+    setBulkResult(null);
+    try {
+      const res = await (window as any).inwiseAPI.sorRetryFailed('jira', sinceMs);
+      if (res?.ok) {
+        const parts: string[] = [];
+        if (res.succeeded > 0) parts.push(`${res.succeeded} succeeded`);
+        if (res.failed > 0) parts.push(`${res.failed} still failing`);
+        setBulkResult(parts.length > 0 ? parts.join(', ') : 'No changes');
+      } else {
+        setBulkResult(res?.error || 'Retry failed');
+      }
+    } catch (e: any) {
+      setBulkResult(e?.message || 'Retry failed');
+    } finally {
+      setBulkRetrying(false);
+      reload();
+      setTimeout(() => setBulkResult(null), 4000);
+    }
+  };
+
+  const handleDisconnectJira = async () => {
+    if (!window.confirm('Disconnect Jira? Auto-push will stop until you reconnect.')) return;
+    await (window as any).inwiseAPI.jiraDisconnect();
+    reload();
+  };
+
+  const jiraAgg = aggregates.find(a => a.system === 'jira') ?? {
+    system: 'jira' as SorSystem, total: 0, success: 0, failed: 0, lastWriteAt: null,
+  };
+
+  const connectionPill = (() => {
+    if (!jiraStatus?.connected) {
+      return { label: 'Disconnected', bg: 'var(--slate-100)', color: 'var(--slate-500)' };
+    }
+    const authExpired = jiraStatus.info?.authExpired === true;
+    if (authExpired) return { label: 'Auth expired', bg: '#FEF3C7', color: '#92400E' };
+    return { label: 'Connected', bg: 'rgba(13, 148, 136, 0.1)', color: 'var(--teal)' };
+  })();
+
+  const countsLine = (() => {
+    if (jiraAgg.total === 0) return 'No writes yet.';
+    const parts: string[] = [];
+    parts.push(`${jiraAgg.success} write${jiraAgg.success !== 1 ? 's' : ''}`);
+    if (jiraAgg.failed > 0) parts.push(`${jiraAgg.failed} failed`);
+    if (jiraAgg.lastWriteAt) parts.push(`last write ${formatAgo(new Date(jiraAgg.lastWriteAt).getTime())}`);
+    return parts.join(' · ');
+  })();
+
+  const jiraRecent = recentByIntegration.jira;
+  const jiraFailedN = failedCount.jira;
+
+  return (
+    <div className="settings-section">
+      <div className="settings-section-title">Integrations</div>
+      <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 14, lineHeight: 1.6 }}>
+        Status and recent sync activity for every connected system of record. Last 30 days.
+      </p>
+
+      {/* Jira card */}
+      <div style={{
+        border: '1px solid var(--slate-200)', borderRadius: 10, padding: 14, background: 'white',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--navy)' }}>Jira</span>
+          <span style={{
+            fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999,
+            background: connectionPill.bg, color: connectionPill.color,
+          }}>
+            {connectionPill.label}
+          </span>
+        </div>
+
+        <div style={{ fontSize: 13, color: 'var(--slate-600)', marginBottom: 10 }}>
+          {countsLine}
+        </div>
+
+        {/* Action row */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{ fontSize: 12 }}
+            onClick={handleRetryFailed}
+            disabled={jiraFailedN === 0 || bulkRetrying || !jiraStatus?.connected}
+          >
+            {bulkRetrying ? 'Retrying…' : `Retry failed${jiraFailedN > 0 ? ` (${jiraFailedN})` : ''}`}
+          </button>
+          {jiraStatus?.connected && (
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ fontSize: 12, color: 'var(--red)' }}
+              onClick={handleDisconnectJira}
+            >
+              Disconnect
+            </button>
+          )}
+          {bulkResult && (
+            <span style={{ fontSize: 12, color: 'var(--slate-500)' }}>{bulkResult}</span>
+          )}
+        </div>
+
+        {/* Recent activity, collapsible */}
+        {jiraRecent.length > 0 ? (
+          <div>
+            <button
+              onClick={() => setExpanded(e => ({ ...e, jira: !e.jira }))}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: 12, fontWeight: 600, color: 'var(--slate-600)',
+                padding: 0, display: 'flex', alignItems: 'center', gap: 4,
+              }}
+            >
+              <span>{expanded.jira ? '▾' : '▸'}</span>
+              <span>Recent activity ({jiraRecent.length})</span>
+            </button>
+            {expanded.jira && (
+              <div style={{ marginTop: 10 }}>
+                {jiraRecent.map(entry => (
+                  <SorWriteRow
+                    key={entry._id}
+                    entry={entry}
+                    onRetry={handleRetryOne}
+                    retrying={retryingId === entry._id}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function useMemoSince(): number {
+  // Stable for the lifetime of this component instance. Small drift across days is fine
+  // for a Settings page that the user is typically viewing for a short session.
+  const ref = useRef<number | null>(null);
+  if (ref.current === null) ref.current = Date.now() - THIRTY_DAYS_MS;
+  return ref.current;
+}
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function SelfEmailsEditor({ emails, onChange }: { emails: string[]; onChange: (next: string[]) => void }) {
@@ -1432,6 +1857,9 @@ export default function Settings() {
             <div className="settings-section-title">Jira Integration</div>
             <JiraSettings config={config} update={update} />
           </div>
+
+          {/* Integrations (US-003) */}
+          <IntegrationsSection />
 
           {/* Voice Enrollment */}
           <div className="settings-section">

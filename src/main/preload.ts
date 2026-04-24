@@ -85,7 +85,9 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   sorListByTaskId: (taskId: string) => ipcRenderer.invoke('sor:listByTaskId', taskId),
   sorListByTargetRecord: (system: string, recordId: string) => ipcRenderer.invoke('sor:listByTargetRecord', system, recordId),
   sorAggregateByIntegration: (sinceMs?: number) => ipcRenderer.invoke('sor:aggregateByIntegration', sinceMs),
+  sorListFailed: (system: string, sinceMs: number) => ipcRenderer.invoke('sor:listFailed', system, sinceMs),
   sorRetry: (id: string) => ipcRenderer.invoke('sor:retry', id),
+  sorRetryFailed: (system: string, sinceMs: number) => ipcRenderer.invoke('sor:retryFailed', system, sinceMs),
 
   // Desktop capture
   getDesktopSourceId: () => ipcRenderer.invoke('desktop:getSourceId'),
