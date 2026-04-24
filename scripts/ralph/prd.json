@@ -104,7 +104,7 @@
         "Browser-verify: trigger several pushes; confirm receipts appear in Inbox; dismiss one; confirm it disappears; trigger a new push; confirm it shows; click 'Clear all' and confirm"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Passive feed. Read-only. Receipts only — not approvals (those are US-006)."
     },
     {

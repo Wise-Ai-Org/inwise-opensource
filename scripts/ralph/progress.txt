@@ -12,6 +12,7 @@ Started: Thu Apr 23 16:41:47 PDT 2026
 - SoR write audit log (`sor-write-log.ts`): every outbound push to an external system wraps the HTTP call with `recordWrite(...)` → network → `markCompleted(...)`. Push functions take an optional trailing `provenance?: WriteProvenance` parameter so callers who know `sourceMeetingId` / `linkedTaskId` / `confidence` / `approvalPath` can attach it. For retry, `pushParams` is stashed on the entry so the write can be re-sent via the raw transport (NOT the wrapper — that'd create a duplicate entry).
 - For SoR operations that modify existing records (`update`, `transition`): **GET-before-write** so `fieldDiffs.before` is accurate. PRD accepts the extra round trip.
 - Pure helpers `computeCreateDiffs(fields)` and `computeUpdateDiffs(before, updates)` live in `sor-write-log.ts` — free of HTTP, safe to unit-test.
+- Small per-user UI prefs (e.g., `sor.dismissedReceiptIds`) belong in `config.json` via the existing `config:get` / `config:set` IPC. Only invent new IPC surfaces when the main process has real logic to run (e.g., `sor:retry`).
 
 ---
 
@@ -183,4 +184,40 @@ Learnings for future iterations:
 - **Page size 50 is a belt-and-suspenders guard, not expected flow.** The PRD said "paginate at 50 entries (rare but possible)". In practice most tasks have 1–5 writes. The "Show older" link is the simplest possible affordance — no cursor/offset API needed because `listByTaskId` already returns the full list sorted.
 - **Third surface with the SoR row pattern; extraction is still deferred.** TranscriptReviewModal (Chakra), Settings (plain CSS), and now TaskDetailSidebar (Chakra). The two Chakra copies have ~95% identical row JSX. US-005 (Inbox receipts) will be the 4th surface — that's the right moment to extract `components/sor/SorWriteRow.tsx` + shared `types.ts`. Premature extraction now would still leave Settings's plain-CSS variant as a separate file, and risks breaking US-002 / US-004 in the same commit.
 - **Row pattern requires live-refresh with a per-scope filter.** TranscriptReviewModal filters on `sourceMeetingId`; IntegrationsSection refreshes unconditionally; SyncHistory filters on `linkedTaskId`. Every consumer of `sor:write-completed` should filter to their scope to avoid unnecessary IPC churn across unrelated open panels.
+---
+
+## 2026-04-23 22:34 PDT - US-005
+Thread: local (Claude Code)
+- Added "Recent sync activity" section to `Communications.tsx` as the canonical Inbox surface today (no discrete `Inbox` view exists yet — App.tsx has `communications | tasks | people | settings`; the PRD's 7-page unification is future work).
+  - New `RecentSyncActivity` sub-component declared at module scope above `CommunicationCenter`. Renders at the top of the main view between the Morning Briefing block and the two-column (calendar / meetings) Flex.
+  - Data load: `Promise.all` of `api.getConfig()` + `api.sorListRecent(25, sinceMs)` with a 7-day window fixed in a `useRef` on mount (stable — same cutoff across refreshes).
+  - Filters out dismissed IDs client-side; section renders nothing if the resulting visible list is empty, so the Inbox stays clean when there's been no activity. Gated on `loaded` so it never flashes empty during the initial fetch.
+  - Row format mirrors the US-002 / US-004 Chakra row exactly: colored op badge, clickable Jira key (opens via `api.openExternal`), Failed / Pending badges, relative timestamp, retry count, one-line summary, expand chevron → fieldDiffs / comment / transcript snippet / error message.
+  - Per-row dismiss (`✕` IconButton) + section-level "Clear all" ghost button. Both persist to `config.json` at `sor.dismissedReceiptIds: string[]` via `api.setConfig({ sor: { dismissedReceiptIds: [...] } })`.
+  - Failed rows get the standard `[Retry]` button wired to `api.sorRetry(id)` — no manual re-fetch; the `sor:write-completed` IPC listener re-runs `reload()` on every event.
+  - Collapse/expand toggle on the whole section (FiChevronUp / FiChevronDown) mirroring the morning-briefing visual language.
+- Config schema: added `sor: { dismissedReceiptIds: string[] }` to the `Config` interface in `src/main/config.ts` with an empty default. Exported `SorPrefs` type for future callers. Used the existing `config:get` / `config:set` IPC path — no new IPC surface needed.
+- No new IPC, preload wrappers, or api.ts methods were added. All plumbing for this story reuses what US-001 through US-004 already exposed (`sorListRecent`, `sorRetry`, `sor:write-completed` push, `getConfig`, `setConfig`).
+
+Files changed:
+- src/main/config.ts (new `SorPrefs` type, new `sor` field on `Config` + defaults)
+- src/renderer/Communications.tsx (+ types + helpers + `RecentSyncActivity` component + insertion point after Morning Briefing)
+- scripts/ralph/prd.json (US-005 → passes:true)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `node dist/main/sor-write-log.test.js` — all tests pass.
+- Regression: config / database / staleness-sweep / welcome-back / task-completion-inference / live-meeting-banner / self-identity — all still pass.
+
+Browser verification:
+- **Deferred to manual QA.** `dev-browser` skill is not available in this runner. The flow was reviewed statically: on mount, config + recent writes fetch in parallel; visible list = recent − dismissed; section hidden when empty; `sor:write-completed` IPC drives `reload`; dismiss/clear-all updates local state immediately and persists to config async; retry on a failed row triggers the live-refresh path. No new IPC channel introduced — `sor:write-completed` was already allow-listed in `preload.ts` from US-001.
+
+Learnings for future iterations:
+- **Dismiss-by-ID beats dismiss-by-timestamp for an ID'd event stream.** The PRD offered "track dismissed ids OR timestamps". IDs are simpler: new writes have new IDs, so they re-appear naturally without any timestamp bookkeeping. Timestamp-based dismissal needs a "dismissed up through T" marker AND per-row comparison AND handling of the retry-after-dismiss edge case. IDs just work.
+- **Reuse `config:get` / `config:set` for small per-user UI prefs before adding dedicated IPC.** `sor.dismissedReceiptIds` could have become its own `sor:dismissReceipt` / `sor:clearReceipts` pair, but the read/write volume is tiny (a button click) and the whole-config round trip is negligible. Fewer IPC surfaces = less plumbing = less drift. Reserve dedicated IPCs for operations with real logic in the main process (e.g., `sor:retry`, which dispatches to the push layer).
+- **Gate the UI on `loaded`, not `entries.length > 0` alone.** Without `loaded`, the section would briefly show nothing → jump in when data arrives. Guarding `!loaded` keeps layout stable and avoids a flash of empty content. Small detail but reusable for any initial-load-then-filter component.
+- **Fourth surface with the SoR row pattern.** After three copies (TranscriptReviewModal Chakra, Settings plain CSS, TaskDetailSidebar Chakra, now Communications Chakra), there are now ~3 near-identical Chakra copies of `renderSorWriteRow`. Extraction into `components/sor/SorWriteRow.tsx` + shared `types.ts` is still deferred: doing it inside US-005 would have doubled the diff and coupled the test surface for three existing stories to one new one. A standalone refactor story is the right home for that — the shape is now stable (retry button, dismiss button as optional trailing elements).
+- **`useRef(Date.now() - 7d).current` is the tidiest "compute once on mount" pattern.** Same trick Settings used in US-003. Avoids `useMemo([])` boilerplate and dependency-array confusion. Recurring enough to cement as the house style for point-in-time cutoffs.
+- **Best-effort persist, optimistic UI.** `persistDismissed` catches and swallows errors. Rationale: the user just clicked ✕; they expect the row to disappear. If writing to config fails for some reason, the state reverts on next reload, which is self-correcting. Don't block user intent on durable storage for low-stakes prefs.
 ---

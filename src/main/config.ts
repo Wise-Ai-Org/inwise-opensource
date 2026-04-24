@@ -11,6 +11,11 @@ export interface CalendarSubscription {
   enabled: boolean;
 }
 
+export interface SorPrefs {
+  /** IDs of sor-writes entries the user has dismissed from the Inbox receipts feed (US-005). */
+  dismissedReceiptIds: string[];
+}
+
 interface Config {
   apiProvider: 'anthropic' | 'openai';
   apiKey: string;
@@ -32,6 +37,7 @@ interface Config {
   jiraDefaultProject: string;
   lastOpenedAt: string | null;
   welcomeBackLastSeenAt: string | null;
+  sor: SorPrefs;
 }
 
 const store = new Store<Config>({
@@ -54,6 +60,7 @@ const store = new Store<Config>({
     jiraDefaultProject: '',
     lastOpenedAt: null,
     welcomeBackLastSeenAt: null,
+    sor: { dismissedReceiptIds: [] },
   },
 });
 
