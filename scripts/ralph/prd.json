@@ -85,7 +85,7 @@
         "Browser-verify: open a task that has Jira writes; confirm timeline renders correctly; expand a row; click Jira key; trigger a new write while panel is open; confirm it appears live"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "Lower-frequency but high-trust surface. Cheap to build once US-001 exists."
     },
     {

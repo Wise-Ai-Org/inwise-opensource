@@ -149,3 +149,38 @@ Learnings for future iterations:
 - **Reusable layout means "the CARD is reusable", not "the SECTION is reusable".** The PRD was explicit: one card per integration, today only Jira. The section wrapper stays the same when a new SoR is added; just extract the card body into `<SorCard system="salesforce" label="Salesforce" ... />` and map. Don't prematurely abstract before the second card exists.
 - **30-day window uses `useRef` not `useMemo`.** `useMemo([])` looks tempting but is more boilerplate and does the same thing. `useRef(Date.now() - 30d)` is a single statement, stable for the component's lifetime, and doesn't invite dependency-array confusion. Small detail but worth remembering — it'll recur for every "compute-once-on-mount" value.
 ---
+
+## 2026-04-23 22:20 PDT - US-004
+Thread: local (Claude Code)
+- Added "Sync history" panel to `TaskDetailSidebar.tsx`:
+  - New `SyncHistory({ taskId })` Chakra component mounted as a `<Section label="Sync history" icon={MdSync}>` at the bottom of the drawer body (below Linkage).
+  - Loads `api.sorListByTaskId(taskId)` on mount and whenever taskId changes. Returns reverse-chronological (`createdAt: -1` is the default sort in main-process `listByTaskId`).
+  - Header row: `Synced to {Jira key} · last write {relative} · {N} writes total`. Jira key + URL derived from the most recent entry that has a real `targetRecordId` (skips `(pending-create)` placeholders). Clickable key opens `targetRecordUrl` via `api.openExternal`.
+  - Timeline row format mirrors US-002 exactly: colored operation badge, clickable Jira key, one-line summary, retry badge, relative timestamp, expand/collapse chevron. Expanded view shows `fieldDiffs` table (with line-through on `before` for non-create ops), comment body, source-transcript snippet as a quoted block, and the error message for failed writes.
+  - Failed rows get a red card border + red `Failed` badge + per-row `↻ Retry` button (calls `api.sorRetry(id)`; no manual re-fetch — relies on the `sor:write-completed` live-refresh path).
+  - Pending / retrying / pending-approval rows get a yellow pill.
+  - Pagination: rendered cap at 50 rows (`SYNC_HISTORY_PAGE_SIZE`). If more exist, a `Show older (N more)` link expands the full list in-place. Not expected to trip in practice, but the PRD asked for it.
+  - Empty state: when `entries.length === 0`, renders "No Jira sync yet. Auto-push runs when this task is updated or after the next meeting referencing it." in the subtle label color. No header row in this state.
+  - Live-refresh: subscribes to `sor:write-completed` IPC once, only re-queries when the event's `linkedTaskId === taskId`. Same shape as the US-002 modal subscription.
+- Types / helpers duplicated inline (SorWriteEntry, SorOp, SorResult, SOR_OP_META, sorOneLineSummary). Third surface using this pattern; extraction-into-shared-module deferred to US-005 when the 4th surface will land.
+
+Files changed:
+- src/renderer/components/tasks/TaskDetailSidebar.tsx (+ ~260 LOC — SyncHistory component + types + SoR icon imports + mount point)
+- scripts/ralph/prd.json (US-004 → passes:true)
+
+Quality gates:
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `node dist/main/sor-write-log.test.js` — all tests pass.
+- Regression: config / database / staleness-sweep / welcome-back / task-completion-inference / live-meeting-banner / self-identity — all still pass.
+
+Browser verification:
+- **Deferred to manual QA.** `dev-browser` skill is not available in this runner. The flow was reviewed statically: task-detail drawer opens → useEffect fires `sorListByTaskId(taskId)` → header and timeline render from the returned rows → click chevron to expand → click Jira key → click Retry on a failed row → IPC event fires → list re-queries. No new IPC channel introduced — `sor:write-completed` was already allow-listed in preload.ts from US-001.
+
+Learnings for future iterations:
+- **Task detail uses `useEffect` on taskId reset, not `useEffect` on isOpen.** The sidebar remounts its internal state when `taskId` changes while `isOpen` stays true (user navigates between tasks). `SyncHistory` keys its reload and resets (`expandedId`, `showAll`, `loaded`) off `taskId` — not `isOpen` — so state is fresh for each distinct task without remounting the whole sidebar.
+- **Derive the header from the entries, not from the task object.** `DetailedTask` doesn't have a clean `jiraKey` field at the top level — the Jira link lives across `source.url`, `provenance`, and whatever `jiraLinkTask` sets. Reading the most recent `SorWriteEntry.targetRecordId` is authoritative: it's exactly what Inwise has actually written to, not what someone set in metadata. Also skips `(pending-create)` placeholders so a failed-create entry doesn't show a garbage key.
+- **Page size 50 is a belt-and-suspenders guard, not expected flow.** The PRD said "paginate at 50 entries (rare but possible)". In practice most tasks have 1–5 writes. The "Show older" link is the simplest possible affordance — no cursor/offset API needed because `listByTaskId` already returns the full list sorted.
+- **Third surface with the SoR row pattern; extraction is still deferred.** TranscriptReviewModal (Chakra), Settings (plain CSS), and now TaskDetailSidebar (Chakra). The two Chakra copies have ~95% identical row JSX. US-005 (Inbox receipts) will be the 4th surface — that's the right moment to extract `components/sor/SorWriteRow.tsx` + shared `types.ts`. Premature extraction now would still leave Settings's plain-CSS variant as a separate file, and risks breaking US-002 / US-004 in the same commit.
+- **Row pattern requires live-refresh with a per-scope filter.** TranscriptReviewModal filters on `sourceMeetingId`; IntegrationsSection refreshes unconditionally; SyncHistory filters on `linkedTaskId`. Every consumer of `sor:write-completed` should filter to their scope to avoid unnecessary IPC churn across unrelated open panels.
+---
