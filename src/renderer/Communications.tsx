@@ -67,7 +67,12 @@ const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export default function CommunicationCenter() {
+interface Props {
+  pendingOpen?: { meetingId: string; focusTab?: string } | null;
+  onPendingOpenConsumed?: () => void;
+}
+
+export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed }: Props = {}) {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +87,7 @@ export default function CommunicationCenter() {
   const [jiraSyncDetails, setJiraSyncDetails] = useState<any>(null);
 
   const [reviewMeetingData, setReviewMeetingData] = useState<Meeting | null>(null);
+  const [reviewInitialTab, setReviewInitialTab] = useState<string | undefined>(undefined);
   const [expandedMeetings, setExpandedMeetings] = useState<Set<string>>(new Set());
   const [meetingInsights, setMeetingInsights] = useState<Record<string, any>>({});
   const [loadingInsightsFor, setLoadingInsightsFor] = useState<string | null>(null);
@@ -313,8 +319,9 @@ export default function CommunicationCenter() {
 
   // ── Review ─────────────────────────────────────────────────────────────────
 
-  const handleOpenReview = (meeting: Meeting) => {
+  const handleOpenReview = (meeting: Meeting, initialTab?: string) => {
     setReviewMeetingData(meeting);
+    setReviewInitialTab(initialTab);
     onReviewOpen();
   };
 
@@ -325,6 +332,16 @@ export default function CommunicationCenter() {
     if (data?.insights) setMeetingInsights(prev => ({ ...prev, [meetingId]: data.insights }));
     setExpandedMeetings(prev => new Set([...prev, meetingId]));
   };
+
+  // Deep-link from main-process SoR trace notification → open the review modal
+  // on the requested tab. App.tsx owns the pendingOpen state and clears it here.
+  useEffect(() => {
+    if (!pendingOpen?.meetingId || loading) return;
+    const match = meetings.find(m => m._id === pendingOpen.meetingId);
+    if (!match) return;
+    handleOpenReview(match, pendingOpen.focusTab);
+    onPendingOpenConsumed?.();
+  }, [pendingOpen, loading, meetings]);
 
   // ── Upload transcript ─────────────────────────────────────────────────────
 
@@ -871,6 +888,7 @@ export default function CommunicationCenter() {
           onClose={onReviewClose}
           meetingId={reviewMeetingData?._id ?? null}
           onApproved={handleReviewApproved}
+          initialTab={reviewInitialTab as any}
         />
       )}
 

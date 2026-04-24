@@ -17,7 +17,7 @@ import {
   useToast,
   useColorModeValue
 } from '@chakra-ui/react';
-import { CheckIcon, CloseIcon } from '@chakra-ui/icons';
+import { CheckIcon, CloseIcon, ExternalLinkIcon, ChevronDownIcon, ChevronRightIcon, RepeatIcon } from '@chakra-ui/icons';
 import { MdClose, MdUndo } from 'react-icons/md';
 import { motion, LayoutGroup } from 'framer-motion';
 import {
@@ -111,6 +111,7 @@ interface Props {
   onClose: () => void;
   meetingId: string | null;
   onApproved: (meetingId: string) => void;
+  initialTab?: ReviewTab;
 }
 
 // ── Helper extractors ──────────────────────────────────────────────────────
@@ -434,30 +435,88 @@ function HighlightedText({ text, phrases }: { text: string; phrases: Array<{ tex
   );
 }
 
+// ── SoR write entry (US-002: per-meeting trace) ────────────────────────────
+// Mirrors the main-process SorWriteEntry shape, minimally typed for renderer use.
+
+type SorOp = 'create' | 'update' | 'transition' | 'comment';
+type SorResult = 'pending' | 'success' | 'failed' | 'pending-approval' | 'retrying';
+type SorSystem = 'jira';
+
+interface SorFieldDiff { field: string; before: any; after: any }
+interface SorSpan { start: number; end: number; snippet: string }
+
+interface SorWriteEntry {
+  _id: string;
+  targetSystem: SorSystem;
+  targetRecordId: string;
+  targetRecordUrl: string | null;
+  operation: SorOp;
+  fieldDiffs: SorFieldDiff[];
+  commentBody: string | null;
+  sourceMeetingId: string | null;
+  sourceTranscriptSpan: SorSpan | null;
+  linkedTaskId: string | null;
+  confidence: number | null;
+  approvalPath: 'auto' | 'user' | 'opt-in-gated';
+  result: SorResult;
+  errorMessage: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  retryCount: number;
+}
+
+const SOR_OP_META: Record<SorOp, { label: string; color: string }> = {
+  create:     { label: 'Created',      color: 'green'  },
+  update:     { label: 'Updated',      color: 'blue'   },
+  transition: { label: 'Transitioned', color: 'purple' },
+  comment:    { label: 'Commented',    color: 'gray'   },
+};
+
+const SOR_SYSTEM_LABEL: Record<SorSystem, string> = { jira: 'Jira' };
+
+function sorOneLineSummary(entry: SorWriteEntry): string {
+  if (entry.operation === 'create') return 'New issue created';
+  if (entry.operation === 'comment') return 'Comment added';
+  if (entry.operation === 'transition') {
+    const d = entry.fieldDiffs.find(d => d.field === 'status');
+    if (d) return `Status: ${d.before ?? '—'} → ${d.after ?? '—'}`;
+    return 'Status transition';
+  }
+  // update
+  const n = entry.fieldDiffs.length;
+  if (n === 0) return 'No field changes';
+  if (n === 1) return `${entry.fieldDiffs[0].field} changed`;
+  return `+${n} fields`;
+}
+
 // ── Tab config ─────────────────────────────────────────────────────────────
 
-type ReviewTab = 'actionItems' | 'blockers' | 'decisions' | 'transcript';
+type ReviewTab = 'actionItems' | 'blockers' | 'decisions' | 'transcript' | 'sorWrites';
 
 const TAB_CONFIG = [
   { key: 'actionItems' as ReviewTab, label: 'Action Items' },
   { key: 'blockers' as ReviewTab, label: 'Blockers' },
   { key: 'decisions' as ReviewTab, label: 'Decisions' },
-  { key: 'transcript' as ReviewTab, label: 'Transcript' }
+  { key: 'transcript' as ReviewTab, label: 'Transcript' },
+  { key: 'sorWrites' as ReviewTab, label: 'Synced to Jira' }
 ];
 
 function TabNav({
   activeTab,
   setActiveTab,
-  counts
+  counts,
+  visibleTabs
 }: {
   activeTab: ReviewTab;
   setActiveTab: (t: ReviewTab) => void;
   counts: Record<ReviewTab, number>;
+  visibleTabs: ReviewTab[];
 }) {
+  const tabs = TAB_CONFIG.filter(t => visibleTabs.includes(t.key));
   return (
     <LayoutGroup id="review-tabs">
       <HStack spacing={0} borderBottom="1px solid" borderColor="gray.200">
-        {TAB_CONFIG.map(tab => {
+        {tabs.map(tab => {
           const isActive = activeTab === tab.key;
           const count = counts[tab.key];
           return (
@@ -496,7 +555,7 @@ function TabNav({
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onApproved }: Props) {
+export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onApproved, initialTab }: Props) {
   const [loading, setLoading] = useState(false);
   const [meetingTitle, setMeetingTitle] = useState('');
   const [transcript, setTranscript] = useState('');
@@ -511,6 +570,9 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
   const [isApproving, setIsApproving] = useState(false);
   const [textHeights, setTextHeights] = useState<Record<string, number>>({});
   const [people, setPeople] = useState<Person[]>([]);
+  const [sorWrites, setSorWrites] = useState<SorWriteEntry[]>([]);
+  const [expandedSorId, setExpandedSorId] = useState<string | null>(null);
+  const [retryingSorId, setRetryingSorId] = useState<string | null>(null);
 
   const toast = useToast();
   const dimText = useColorModeValue('gray.500', 'gray.400');
@@ -523,13 +585,17 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
     if (!isOpen || !meetingId) return;
 
     setLoading(true);
-    setActiveTab('actionItems');
+    setActiveTab(initialTab ?? 'actionItems');
     setEditingField(null);
+    setExpandedSorId(null);
+    setRetryingSorId(null);
 
     Promise.all([
       api.getMeeting(meetingId),
-      api.getPeople()
-    ]).then(([meeting, peopleList]) => {
+      api.getPeople(),
+      api.sorListByMeeting(meetingId).catch(() => [] as SorWriteEntry[])
+    ]).then(([meeting, peopleList, writes]) => {
+      setSorWrites(Array.isArray(writes) ? (writes as SorWriteEntry[]) : []);
       setMeetingTitle(meeting?.title || 'Meeting Review');
       setTranscript(meeting?.transcript || '');
       setPeople(Array.isArray(peopleList) ? peopleList : []);
@@ -621,6 +687,22 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
     }).finally(() => {
       setLoading(false);
     });
+  }, [isOpen, meetingId]);
+
+  // ── Live-refresh SoR writes on IPC push ────────────────────────────────
+
+  useEffect(() => {
+    if (!isOpen || !meetingId) return;
+    const onWriteCompleted = (entry: SorWriteEntry) => {
+      if (!entry || entry.sourceMeetingId !== meetingId) return;
+      api.sorListByMeeting(meetingId)
+        .then((writes: any) => {
+          setSorWrites(Array.isArray(writes) ? (writes as SorWriteEntry[]) : []);
+        })
+        .catch(() => { /* best-effort */ });
+    };
+    api.on('sor:write-completed', onWriteCompleted);
+    return () => { api.off('sor:write-completed', onWriteCompleted); };
   }, [isOpen, meetingId]);
 
   // ── Editing helpers ────────────────────────────────────────────────────
@@ -827,8 +909,17 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
     actionItems: actionItems.length,
     blockers: blockers.length,
     decisions: decisions.length,
-    transcript: transcriptTurns.length
+    transcript: transcriptTurns.length,
+    sorWrites: sorWrites.length
   };
+
+  const visibleTabs: ReviewTab[] = [
+    'actionItems',
+    'blockers',
+    'decisions',
+    'transcript',
+    ...(sorWrites.length > 0 ? (['sorWrites'] as ReviewTab[]) : []),
+  ];
 
   // ── Card renderers ─────────────────────────────────────────────────────
 
@@ -1276,6 +1367,218 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
     );
   };
 
+  // ── SoR writes tab (US-002: per-meeting 'what this meeting wrote') ─────
+
+  const retrySorWrite = async (id: string) => {
+    setRetryingSorId(id);
+    try {
+      await api.sorRetry(id);
+      // Don't manually refresh — the sor:write-completed IPC listener will fire.
+    } catch (err: any) {
+      toast({
+        title: 'Retry failed',
+        description: err?.message || 'Unknown error',
+        status: 'error',
+        duration: 3000,
+      });
+    } finally {
+      setRetryingSorId(null);
+    }
+  };
+
+  const renderSorWriteRow = (entry: SorWriteEntry) => {
+    const meta = SOR_OP_META[entry.operation];
+    const isExpanded = expandedSorId === entry._id;
+    const isFailed = entry.result === 'failed';
+    const isPending = entry.result === 'pending' || entry.result === 'retrying' || entry.result === 'pending-approval';
+
+    return (
+      <Box
+        key={entry._id}
+        p={3}
+        borderRadius="10px"
+        border="1px solid"
+        borderColor={isFailed ? 'red.200' : 'gray.200'}
+        bg={isFailed ? 'red.50' : 'white'}
+      >
+        <HStack spacing={3} align="flex-start">
+          <Box
+            as="button"
+            onClick={() => setExpandedSorId(isExpanded ? null : entry._id)}
+            color="gray.400"
+            cursor="pointer"
+            lineHeight={0}
+            mt="2px"
+            _hover={{ color: 'gray.600' }}
+            aria-label={isExpanded ? 'Collapse' : 'Expand'}
+          >
+            {isExpanded ? <ChevronDownIcon boxSize="16px" /> : <ChevronRightIcon boxSize="16px" />}
+          </Box>
+
+          <VStack align="stretch" spacing={1} flex={1} minW={0}>
+            <HStack spacing={2} flexWrap="wrap">
+              <Badge colorScheme={meta.color} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                {meta.label}
+              </Badge>
+              {entry.targetRecordId && entry.targetRecordId !== '(pending-create)' && (
+                <Box
+                  as="button"
+                  onClick={(e: any) => {
+                    e.stopPropagation();
+                    if (entry.targetRecordUrl) api.openExternal(entry.targetRecordUrl);
+                  }}
+                  color="#1a7080"
+                  fontSize="12px"
+                  fontWeight="600"
+                  cursor={entry.targetRecordUrl ? 'pointer' : 'default'}
+                  _hover={{ textDecoration: entry.targetRecordUrl ? 'underline' : 'none' }}
+                >
+                  {entry.targetRecordId}
+                  {entry.targetRecordUrl && <ExternalLinkIcon boxSize="10px" ml={1} mb="2px" />}
+                </Box>
+              )}
+              {isFailed && (
+                <Badge colorScheme="red" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                  Failed
+                </Badge>
+              )}
+              {isPending && (
+                <Badge colorScheme="yellow" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                  {entry.result === 'pending-approval' ? 'Pending approval' : 'In progress'}
+                </Badge>
+              )}
+              {entry.retryCount > 0 && (
+                <Text fontSize="10px" color="gray.400">retry #{entry.retryCount}</Text>
+              )}
+            </HStack>
+
+            <Text fontSize="13px" color="gray.700" noOfLines={isExpanded ? undefined : 1}>
+              {sorOneLineSummary(entry)}
+            </Text>
+
+            {isFailed && entry.errorMessage && !isExpanded && (
+              <Text fontSize="11px" color="red.600" noOfLines={1}>{entry.errorMessage}</Text>
+            )}
+
+            {isExpanded && (
+              <VStack align="stretch" spacing={2} mt={2} pt={2} borderTop="1px solid" borderColor="gray.100">
+                {entry.operation === 'comment' && entry.commentBody && (
+                  <Box
+                    bg="gray.50"
+                    borderRadius="6px"
+                    p={2}
+                    fontSize="12px"
+                    color="gray.700"
+                    whiteSpace="pre-wrap"
+                  >
+                    {entry.commentBody}
+                  </Box>
+                )}
+
+                {entry.operation !== 'comment' && entry.fieldDiffs.length > 0 && (
+                  <Box fontSize="12px">
+                    <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                      Field changes
+                    </Text>
+                    <VStack align="stretch" spacing={1}>
+                      {entry.fieldDiffs.map((d, i) => (
+                        <HStack key={i} spacing={2} align="flex-start">
+                          <Text color="gray.500" minW="80px" fontWeight="500">{d.field}</Text>
+                          <HStack spacing={1} flex={1} flexWrap="wrap">
+                            <Text color="gray.500" textDecoration={entry.operation === 'create' ? 'none' : 'line-through'}>
+                              {d.before === null || d.before === undefined ? '—' : String(d.before)}
+                            </Text>
+                            <Text color="gray.400">→</Text>
+                            <Text color="gray.800">
+                              {d.after === null || d.after === undefined ? '—' : String(d.after)}
+                            </Text>
+                          </HStack>
+                        </HStack>
+                      ))}
+                    </VStack>
+                  </Box>
+                )}
+
+                {entry.sourceTranscriptSpan?.snippet && (
+                  <Box>
+                    <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                      From transcript
+                    </Text>
+                    <Box
+                      borderLeft="3px solid"
+                      borderLeftColor="#9dd4d9"
+                      bg="#f0fafa"
+                      pl={3}
+                      py={2}
+                      borderRadius="0 6px 6px 0"
+                      fontSize="12px"
+                      color="gray.700"
+                      fontStyle="italic"
+                    >
+                      "{entry.sourceTranscriptSpan.snippet}"
+                    </Box>
+                  </Box>
+                )}
+
+                {isFailed && entry.errorMessage && (
+                  <Box
+                    bg="red.50"
+                    border="1px solid"
+                    borderColor="red.200"
+                    borderRadius="6px"
+                    p={2}
+                    fontSize="12px"
+                    color="red.700"
+                  >
+                    {entry.errorMessage}
+                  </Box>
+                )}
+              </VStack>
+            )}
+          </VStack>
+
+          {isFailed && (
+            <Button
+              size="xs"
+              variant="outline"
+              colorScheme="red"
+              leftIcon={<RepeatIcon />}
+              onClick={() => retrySorWrite(entry._id)}
+              isLoading={retryingSorId === entry._id}
+              flexShrink={0}
+            >
+              Retry
+            </Button>
+          )}
+        </HStack>
+      </Box>
+    );
+  };
+
+  const renderSorWritesTab = () => {
+    // Group by targetSystem so future SoRs render as separate sections.
+    const grouped = sorWrites.reduce<Record<string, SorWriteEntry[]>>((acc, e) => {
+      (acc[e.targetSystem] ||= []).push(e);
+      return acc;
+    }, {});
+    const systems = Object.keys(grouped) as SorSystem[];
+
+    return (
+      <VStack spacing={5} align="stretch">
+        {systems.map(system => (
+          <Box key={system}>
+            <Text fontSize="11px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb={2}>
+              {SOR_SYSTEM_LABEL[system] ?? system}
+            </Text>
+            <VStack spacing={2} align="stretch">
+              {grouped[system].map(renderSorWriteRow)}
+            </VStack>
+          </Box>
+        ))}
+      </VStack>
+    );
+  };
+
   // ── Render ─────────────────────────────────────────────────────────────
 
   return (
@@ -1298,13 +1601,13 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
         ) : (
           <>
             <Box px={7} pb={2}>
-              <TabNav activeTab={activeTab} setActiveTab={setActiveTab} counts={tabCounts} />
+              <TabNav activeTab={activeTab} setActiveTab={setActiveTab} counts={tabCounts} visibleTabs={visibleTabs} />
             </Box>
 
             <FlowModalBody maxH="calc(80vh - 200px)">
               <VStack spacing={3} align="stretch" pb={16}>
                 {/* Summary bar */}
-                {activeTab !== 'transcript' && (
+                {activeTab !== 'transcript' && activeTab !== 'sorWrites' && (
                   <Box bg="#f7fafc" borderRadius="8px" px={3} py={2}>
                     <Text fontSize="11px" color="gray.500">
                       AI extracted {tabCounts[activeTab]} item{tabCounts[activeTab] !== 1 ? 's' : ''} from this meeting.
@@ -1334,6 +1637,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                 {activeTab === 'blockers' && blockers.map(item => renderBlockerCard(item))}
                 {activeTab === 'decisions' && decisions.map(item => renderDecisionCard(item))}
                 {activeTab === 'transcript' && renderTranscriptTab()}
+                {activeTab === 'sorWrites' && renderSorWritesTab()}
               </VStack>
             </FlowModalBody>
 

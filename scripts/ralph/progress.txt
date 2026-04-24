@@ -56,3 +56,54 @@ Learnings for future iterations:
 - **`targetRecordId: '(pending-create)'` placeholder** is a pragmatic shortcut — we don't know the Jira key until after the API responds. `markCompleted`'s `updates` arg patches the real key on success. A failed create leaves the placeholder, which is queryable and self-documenting.
 - **Startup stuck-scan runs after a 15s delay** (not on `whenReady` directly) so calendar sync + daily Jira pull get a chance to run first. No race with those paths, but the delay keeps startup snappy if the user has hundreds of stuck entries.
 ---
+
+## 2026-04-23 22:05 PDT - US-002
+Thread: local (Claude Code)
+- Wired per-meeting SoR trace UI into TranscriptReviewModal:
+  - New `ReviewTab` value `'sorWrites'` with 'Synced to Jira' label. `TabNav` now takes `visibleTabs` so the SoR tab only renders when writes exist (hidden by default). `tabCounts` extended with `sorWrites`.
+  - Added `initialTab` prop so the modal can deep-link straight to the SoR tab.
+  - On open, loads `api.sorListByMeeting(meetingId)` in parallel with meeting + people fetches. Result stored in `sorWrites` state.
+  - `renderSorWritesTab()` groups entries by `targetSystem` so future SoRs add rows without restructuring. Each row: colored operation badge, clickable Jira key (→ `api.openExternal(targetRecordUrl)`), one-line summary, expand/collapse chevron.
+  - Expanded row: full fieldDiffs table (struck-through before → after; create rows skip the strike), comment body, source transcript snippet as a quoted block with left border, error message for failed writes.
+  - Failed writes get a red card border, red 'Failed' badge, and a [Retry] button that calls `api.sorRetry(id)`. Retry success relies on the live-refresh path — no manual re-fetch.
+  - Live refresh: separate useEffect subscribes to `sor:write-completed` IPC; on each event matching `sourceMeetingId === meetingId` it re-runs `sorListByMeeting` to pick up the new/updated entry.
+  - Summary bar ('AI extracted N items…') now suppressed on the SoR tab (was only suppressed on transcript).
+  - Added `{activeTab === 'sorWrites' && renderSorWritesTab()}` to the modal body switch — the missing wire that was blocking the whole tab from rendering.
+- Desktop notification (main.ts, after-meeting auto-push):
+  - Reads `sorListByMeeting(meetingId)` after the push loop (NOT the loop counters — the audit log is the source of truth for failure counts).
+  - Title `Meeting {title}`; body `{N} updates pushed to Jira.` or `{N} pushed, {M} failed` when failures exist.
+  - [See details] action button → focuses the main window and sends `meeting:open-details` IPC with `{meetingId, focusTab: 'sorWrites'}`.
+  - Uses `Notification.isSupported()` to guard. Whole block wrapped in try/catch so a notification failure never breaks the pipeline.
+- Deep-link flow (App.tsx + Communications.tsx):
+  - App.tsx listens for `meeting:open-details`, switches to `view='communications'`, and stores `pendingMeetingOpen`.
+  - Passes `pendingOpen` + `onPendingOpenConsumed` callback as props to Communications.
+  - Communications has a useEffect that — once meetings have loaded — finds the target meeting in its list and calls `handleOpenReview(meeting, focusTab)`, then fires the callback to clear pendingOpen so it doesn't re-fire.
+  - `handleOpenReview` now takes an `initialTab` arg and stores it in `reviewInitialTab` state, which is passed through to `TranscriptReviewModal`.
+- preload.ts: added `'meeting:open-details'` to the `allowed[]` push-channel list.
+- api.ts: added SoR IPC wrappers (`sorListRecent`, `sorListByMeeting`, `sorListByTaskId`, `sorListByTargetRecord`, `sorAggregateByIntegration`, `sorRetry`) — the chain was missing on the renderer side.
+
+Files changed:
+- src/renderer/views/communications/TranscriptReviewModal.tsx (SoR tab, row renderer, retry, live refresh, initialTab prop)
+- src/renderer/Communications.tsx (pendingOpen prop, deep-link useEffect, initialTab wiring)
+- src/renderer/App.tsx (meeting:open-details listener, pendingMeetingOpen state, pass to Communications)
+- src/renderer/api.ts (SoR IPC wrappers)
+- src/main/main.ts (desktop notification block in after-meeting auto-push)
+- src/main/preload.ts (meeting:open-details push channel allowlist)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `node dist/main/sor-write-log.test.js` — all tests still pass.
+- Regression: config / database / staleness-sweep / welcome-back / task-completion-inference / live-meeting-banner / self-identity — all still pass.
+
+Browser verification:
+- **Deferred to manual QA.** The `dev-browser` skill referenced in CLAUDE.md is not available in this runner's skill set; a full browser-smoke run (simulate meeting → 3 pushes, 2 success 1 failure → notification → click details → expand row → retry) needs a local run. Typecheck + unit tests cover the compile-time and backend contract; renderer wiring was reviewed end-to-end (tab gated by `visibleTabs`, `initialTab` flows App→Communications→Modal, live-refresh re-queries on IPC).
+
+Learnings for future iterations:
+- **Deep-link pattern: App holds the pending, child consumes on mount.** `meeting:open-details` is emitted by main regardless of the current view. App.tsx switches view AND stores pending state; Communications sees the prop, waits for its own data to load, acts, then calls `onPendingOpenConsumed()` to clear. This avoids re-mounting races and requires no global store. Reusable for any future "main → renderer deep-link" event.
+- **Gate UI tabs by data, not feature flag.** The 'Synced to Jira' tab is hidden when `sorWrites.length === 0` — it doesn't just render empty. This keeps the default meeting view clean for meetings with no pushes and makes the tab self-documenting (its presence means "something happened").
+- **Read the audit log, not the loop counters, for user-facing totals.** `main.ts` could have computed `pushed/failed` from its own created/linked counters, but those only see orchestration-level outcomes, not per-call Jira failures. `sor-writes.db` is the truth — use it for the notification body AND the UI.
+- **Live refresh via IPC, not polling.** The renderer subscribes to `sor:write-completed` once per open modal / panel and re-fetches the scoped list on each event. Cleaner than interval polling and responds instantly to retries.
+- **`initialTab` is a one-shot intent, not state.** The prop is read by the modal's open-effect to set `activeTab` once; subsequent tab clicks move on normally. The parent doesn't need to re-sync. This is the right shape for "open here" deep-links.
+- **Notification must be wrapped in try/catch.** A failed Notification construction (OS-specific quirks, no desktop session, etc.) must not break the auto-push pipeline. Any UI-adjacent side effect in the main process should be non-fatal.
+---

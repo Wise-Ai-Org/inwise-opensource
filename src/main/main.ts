@@ -463,6 +463,39 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
           const total = created + linked;
           log('info', 'pipeline:jira-auto-push', `created ${created}, linked ${linked} of ${total} tasks to ${projectKey}`);
           mainWindow?.webContents.send('jira:auto-synced', { created, linked, total });
+
+          // Per-meeting SoR trace notification. Reads the audit log (not the
+          // loop counters) so failure counts reflect the truth on disk.
+          try {
+            const writes = await sorListByMeeting(meetingId);
+            const successCount = writes.filter(w => w.result === 'success').length;
+            const failedCount = writes.filter(w => w.result === 'failed').length;
+            if ((successCount + failedCount) > 0 && Notification.isSupported()) {
+              const body = failedCount > 0
+                ? `${successCount} pushed, ${failedCount} failed`
+                : `${successCount} update${successCount === 1 ? '' : 's'} pushed to Jira.`;
+              const n = new Notification({
+                title: `Meeting ${meetingTitle}`,
+                body,
+                actions: [{ type: 'button', text: 'See details' }],
+              });
+              const openDetails = () => {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                  mainWindow.show();
+                  mainWindow.focus();
+                  mainWindow.webContents.send('meeting:open-details', {
+                    meetingId,
+                    focusTab: 'sorWrites',
+                  });
+                }
+              };
+              n.on('action', openDetails);
+              n.on('click', openDetails);
+              n.show();
+            }
+          } catch (notifyErr: any) {
+            log('error', 'pipeline:sor-notification-failed', notifyErr.message);
+          }
         } catch (jiraErr: any) {
           log('error', 'pipeline:jira-auto-push-failed', jiraErr.message);
         }

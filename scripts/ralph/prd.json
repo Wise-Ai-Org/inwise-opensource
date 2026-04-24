@@ -44,7 +44,7 @@
         "Browser-verify with dev-browser skill: simulate a meeting that produces 3 Jira pushes (2 success, 1 failure); confirm notification with correct counts; open meeting detail; confirm section renders 3 rows with correct grouping; expand a row; click a Jira key; click [Retry] on the failed one and confirm it re-runs"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "The hero moment. This is the surface that lands the value prop visibly."
     },
     {
