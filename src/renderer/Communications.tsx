@@ -128,6 +128,381 @@ function formatRelativeTime(dateStr: string): string {
   return `${Math.floor(diffHours / 24)}d ago`;
 }
 
+// ── Pending approvals (US-006: Opt-in approval gate) ─────────────────────
+// Sits above the receipts feed. Each card represents a write that Inwise
+// held back because its confidence was below the user's threshold. The user
+// can Approve, Edit & Approve, or Reject each card.
+
+interface PendingApprovalRow {
+  writeEntry: SorWriteEntry;
+  pending: {
+    _id: string;
+    targetSystem: 'jira';
+    pushParams:
+      | { operation: 'create'; args: { title: string; description?: string; priority?: string; dueDate?: string; projectKey: string } }
+      | { operation: 'update'; args: { issueKey: string; updates: { title?: string; description?: string; priority?: string; dueDate?: string } } }
+      | { operation: 'transition'; args: { issueKey: string; targetStatus: string } }
+      | { operation: 'comment'; args: { issueKey: string; comment: string; meetingTitle?: string } };
+    meetingTitle: string | null;
+    linkedTaskId: string | null;
+    createdAt: string;
+  };
+}
+
+function daysSince(isoString: string): number {
+  const then = new Date(isoString).getTime();
+  if (Number.isNaN(then)) return 0;
+  return Math.floor((Date.now() - then) / (24 * 60 * 60 * 1000));
+}
+
+function PendingApprovalsSection() {
+  const [rows, setRows] = useState<PendingApprovalRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editBuf, setEditBuf] = useState<Record<string, any>>({});
+  const toast = useToast();
+
+  const reload = useCallback(async () => {
+    try {
+      const res = await api.sorListPendingApprovals();
+      setRows(Array.isArray(res) ? (res as PendingApprovalRow[]) : []);
+    } catch {
+      setRows([]);
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  useEffect(() => {
+    const onEvent = () => { reload(); };
+    api.on('sor:write-completed', onEvent);
+    return () => { api.off('sor:write-completed', onEvent); };
+  }, [reload]);
+
+  const startEditing = (row: PendingApprovalRow) => {
+    const p = row.pending.pushParams;
+    if (p.operation === 'create') {
+      setEditBuf({
+        title: p.args.title,
+        description: p.args.description ?? '',
+        priority: p.args.priority ?? '',
+        dueDate: p.args.dueDate ?? '',
+      });
+    } else if (p.operation === 'comment') {
+      setEditBuf({ comment: p.args.comment });
+    } else if (p.operation === 'update') {
+      setEditBuf({ ...p.args.updates });
+    } else {
+      setEditBuf({});
+    }
+    setEditingId(row.pending._id);
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditBuf({});
+  };
+
+  const approve = async (row: PendingApprovalRow, overrides?: Record<string, any>) => {
+    setBusyId(row.pending._id);
+    try {
+      const res = await api.sorApprove(row.pending._id, overrides);
+      if (res?.ok) {
+        toast({ title: 'Approved', status: 'success', duration: 2000 });
+        setEditingId(null);
+        setEditBuf({});
+        reload();
+      } else {
+        toast({
+          title: 'Approval failed',
+          description: res?.error || 'Unknown error',
+          status: 'error',
+          duration: 3000,
+        });
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const approveWithEdit = async (row: PendingApprovalRow) => {
+    const p = row.pending.pushParams;
+    let overrides: Record<string, any> = {};
+    if (p.operation === 'create') {
+      overrides = {
+        title: editBuf.title,
+        description: editBuf.description || undefined,
+        priority: editBuf.priority || undefined,
+        dueDate: editBuf.dueDate || undefined,
+      };
+    } else if (p.operation === 'comment') {
+      overrides = { comment: editBuf.comment };
+    } else if (p.operation === 'update') {
+      overrides = { updates: { ...editBuf } };
+    }
+    await approve(row, overrides);
+  };
+
+  const reject = async (row: PendingApprovalRow) => {
+    setBusyId(row.pending._id);
+    try {
+      const res = await api.sorReject(row.pending._id);
+      if (res?.ok) {
+        toast({ title: 'Rejected', status: 'info', duration: 2000 });
+        reload();
+      } else {
+        toast({
+          title: 'Reject failed',
+          description: res?.error || 'Unknown error',
+          status: 'error',
+          duration: 3000,
+        });
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (!loaded || rows.length === 0) return null;
+
+  return (
+    <Box mb={5} p={4} bg="white" borderRadius="lg" border="1px solid" borderColor="yellow.300">
+      <Flex justify="space-between" align="center" mb={3}>
+        <HStack spacing={2}>
+          <Text fontSize="sm" fontWeight="700" color="gray.800">Pending approvals</Text>
+          <Badge colorScheme="yellow" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+            {rows.length}
+          </Badge>
+        </HStack>
+      </Flex>
+
+      <VStack align="stretch" spacing={2}>
+        {rows.map((row) => {
+          const entry = row.writeEntry;
+          const pending = row.pending;
+          const meta = SOR_OP_META[entry.operation];
+          const isEditing = editingId === pending._id;
+          const isBusy = busyId === pending._id;
+          const pendingDays = daysSince(pending.createdAt);
+
+          return (
+            <Box
+              key={pending._id}
+              p={3}
+              borderRadius="8px"
+              border="1px solid"
+              borderColor="yellow.200"
+              bg="yellow.50"
+            >
+              <VStack align="stretch" spacing={2}>
+                <HStack spacing={2} flexWrap="wrap">
+                  <Badge colorScheme={meta.color} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                    {meta.label}
+                  </Badge>
+                  {entry.targetRecordId && entry.targetRecordId !== '(pending-create)' && (
+                    <Box
+                      as="button"
+                      onClick={() => {
+                        if (entry.targetRecordUrl) api.openExternal(entry.targetRecordUrl);
+                      }}
+                      color="#1a7080"
+                      fontSize="12px"
+                      fontWeight="600"
+                      cursor={entry.targetRecordUrl ? 'pointer' : 'default'}
+                      _hover={{ textDecoration: entry.targetRecordUrl ? 'underline' : 'none' }}
+                    >
+                      {entry.targetRecordId}
+                      {entry.targetRecordUrl && <ExternalLinkIcon boxSize="10px" ml={1} mb="2px" />}
+                    </Box>
+                  )}
+                  {typeof entry.confidence === 'number' && (
+                    <Badge variant="outline" colorScheme="gray" fontSize="10px" borderRadius="full" px={2}>
+                      confidence {Math.round(entry.confidence * 100)}%
+                    </Badge>
+                  )}
+                  <Text fontSize="10px" color="gray.500">
+                    Pending {pendingDays} day{pendingDays === 1 ? '' : 's'}
+                  </Text>
+                </HStack>
+
+                <Text fontSize="13px" color="gray.700">
+                  {sorOneLineSummary(entry)}
+                </Text>
+
+                {/* Proposed payload */}
+                {!isEditing && pending.pushParams.operation === 'create' && (
+                  <Box bg="white" borderRadius="6px" p={2} fontSize="12px" color="gray.700">
+                    <Text fontWeight="600" mb={1}>{pending.pushParams.args.title}</Text>
+                    {pending.pushParams.args.description && (
+                      <Text whiteSpace="pre-wrap" color="gray.600">
+                        {pending.pushParams.args.description}
+                      </Text>
+                    )}
+                  </Box>
+                )}
+
+                {!isEditing && pending.pushParams.operation === 'comment' && (
+                  <Box bg="white" borderRadius="6px" p={2} fontSize="12px" color="gray.700" whiteSpace="pre-wrap">
+                    {pending.pushParams.args.comment}
+                  </Box>
+                )}
+
+                {!isEditing && pending.pushParams.operation === 'update' && entry.fieldDiffs.length > 0 && (
+                  <Box fontSize="12px">
+                    <VStack align="stretch" spacing={1}>
+                      {entry.fieldDiffs.map((d, i) => (
+                        <HStack key={i} spacing={2} align="flex-start">
+                          <Text color="gray.500" minW="80px" fontWeight="500">{d.field}</Text>
+                          <HStack spacing={1} flex={1} flexWrap="wrap">
+                            <Text color="gray.500" textDecoration="line-through">
+                              {d.before === null || d.before === undefined ? '—' : String(d.before)}
+                            </Text>
+                            <Text color="gray.400">→</Text>
+                            <Text color="gray.800">
+                              {d.after === null || d.after === undefined ? '—' : String(d.after)}
+                            </Text>
+                          </HStack>
+                        </HStack>
+                      ))}
+                    </VStack>
+                  </Box>
+                )}
+
+                {/* Edit form */}
+                {isEditing && pending.pushParams.operation === 'create' && (
+                  <VStack align="stretch" spacing={2} bg="white" p={2} borderRadius="6px">
+                    <input
+                      style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4 }}
+                      value={editBuf.title ?? ''}
+                      onChange={(e) => setEditBuf({ ...editBuf, title: e.target.value })}
+                      placeholder="Title"
+                    />
+                    <textarea
+                      style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4, resize: 'vertical', minHeight: 60 }}
+                      value={editBuf.description ?? ''}
+                      onChange={(e) => setEditBuf({ ...editBuf, description: e.target.value })}
+                      placeholder="Description"
+                    />
+                    <HStack spacing={2}>
+                      <select
+                        style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4 }}
+                        value={editBuf.priority ?? ''}
+                        onChange={(e) => setEditBuf({ ...editBuf, priority: e.target.value })}
+                      >
+                        <option value="">Priority…</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                      </select>
+                      <input
+                        type="date"
+                        style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4 }}
+                        value={editBuf.dueDate ?? ''}
+                        onChange={(e) => setEditBuf({ ...editBuf, dueDate: e.target.value })}
+                      />
+                    </HStack>
+                  </VStack>
+                )}
+
+                {isEditing && pending.pushParams.operation === 'comment' && (
+                  <textarea
+                    style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4, resize: 'vertical', minHeight: 80 }}
+                    value={editBuf.comment ?? ''}
+                    onChange={(e) => setEditBuf({ ...editBuf, comment: e.target.value })}
+                  />
+                )}
+
+                {isEditing && pending.pushParams.operation === 'update' && (
+                  <VStack align="stretch" spacing={2} bg="white" p={2} borderRadius="6px">
+                    <input
+                      style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4 }}
+                      value={editBuf.title ?? ''}
+                      onChange={(e) => setEditBuf({ ...editBuf, title: e.target.value })}
+                      placeholder="Title"
+                    />
+                    <textarea
+                      style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4, resize: 'vertical', minHeight: 60 }}
+                      value={editBuf.description ?? ''}
+                      onChange={(e) => setEditBuf({ ...editBuf, description: e.target.value })}
+                      placeholder="Description"
+                    />
+                  </VStack>
+                )}
+
+                {entry.sourceTranscriptSpan?.snippet && (
+                  <Box
+                    borderLeft="3px solid"
+                    borderLeftColor="#9dd4d9"
+                    bg="#f0fafa"
+                    pl={3}
+                    py={2}
+                    borderRadius="0 6px 6px 0"
+                    fontSize="12px"
+                    color="gray.700"
+                    fontStyle="italic"
+                  >
+                    "{entry.sourceTranscriptSpan.snippet}"
+                  </Box>
+                )}
+
+                <HStack spacing={2} justify="flex-end">
+                  {isEditing ? (
+                    <>
+                      <Button size="xs" variant="ghost" onClick={cancelEditing} isDisabled={isBusy}>
+                        Cancel
+                      </Button>
+                      <Button
+                        size="xs"
+                        colorScheme="green"
+                        onClick={() => approveWithEdit(row)}
+                        isLoading={isBusy}
+                      >
+                        Save & Approve
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        colorScheme="red"
+                        onClick={() => reject(row)}
+                        isDisabled={isBusy}
+                      >
+                        Reject
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() => startEditing(row)}
+                        isDisabled={isBusy}
+                      >
+                        Edit & Approve
+                      </Button>
+                      <Button
+                        size="xs"
+                        colorScheme="green"
+                        onClick={() => approve(row)}
+                        isLoading={isBusy}
+                      >
+                        Approve
+                      </Button>
+                    </>
+                  )}
+                </HStack>
+              </VStack>
+            </Box>
+          );
+        })}
+      </VStack>
+    </Box>
+  );
+}
+
 // ── Recent sync activity (US-005: Inbox receipts feed) ──────────────────
 // Renders the last 25 writes from the last 7 days. Rows are dismissible
 // individually or in bulk; dismissed IDs are persisted in config.json at
@@ -1103,6 +1478,9 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
           )}
         </Box>
       )}
+
+      {/* ── Pending approvals (US-006) — must render above receipts ── */}
+      <PendingApprovalsSection />
 
       {/* ── Recent sync activity (US-005) ── */}
       <RecentSyncActivity />

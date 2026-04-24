@@ -183,6 +183,34 @@ export async function getWriteEntry(id: string): Promise<SorWriteEntry | null> {
   return (await db.findOneAsync({ _id: id })) as SorWriteEntry | null;
 }
 
+/**
+ * Patch fields on an existing entry that hasn't been pushed yet. Used by the
+ * `sor:approve` IPC when the user clicks Edit & Approve — we need to update
+ * the display payload (fieldDiffs / commentBody) and the push payload
+ * (pushParams) in lockstep, and set approvalPath to 'user' to record that a
+ * human made the final call.
+ */
+export async function applyApprovalEdit(
+  id: string,
+  updates: {
+    fieldDiffs?: FieldDiff[];
+    commentBody?: string | null;
+    pushParams?: PushParams;
+    approvalPath?: ApprovalPath;
+    result?: SorWriteResult;
+  },
+): Promise<void> {
+  const db = getDb();
+  const set: Record<string, any> = {};
+  if (updates.fieldDiffs !== undefined) set.fieldDiffs = updates.fieldDiffs;
+  if (updates.commentBody !== undefined) set.commentBody = updates.commentBody;
+  if (updates.pushParams !== undefined) set.pushParams = updates.pushParams;
+  if (updates.approvalPath !== undefined) set.approvalPath = updates.approvalPath;
+  if (updates.result !== undefined) set.result = updates.result;
+  if (Object.keys(set).length === 0) return;
+  await db.updateAsync({ _id: id }, { $set: set }, {});
+}
+
 // ── Queries ──────────────────────────────────────────────────────────────────
 
 export async function listRecent(limit = 50, sinceMs?: number): Promise<SorWriteEntry[]> {
@@ -273,6 +301,27 @@ export async function listStuckEntries(olderThanMs: number, now: Date = new Date
     createdAt: { $lt: cutoff },
   });
   return rows as SorWriteEntry[];
+}
+
+// ── Approval-gate logic (US-006) ─────────────────────────────────────────────
+
+/**
+ * Pure predicate for the opt-in approval gate. Gate applies only when:
+ *   1. The gate is enabled in config.
+ *   2. The extractor/matcher returned a numeric confidence (not null/undefined).
+ *   3. Confidence is strictly less than the user's threshold.
+ *
+ * When confidence is absent, writes always proceed auto — per PRD US-006:
+ * "treat all writes as having confidence:undefined and NEVER gate them".
+ */
+export function shouldGateWrite(
+  confidence: number | null | undefined,
+  gateEnabled: boolean,
+  threshold: number,
+): boolean {
+  if (!gateEnabled) return false;
+  if (typeof confidence !== 'number' || Number.isNaN(confidence)) return false;
+  return confidence < threshold;
 }
 
 // ── Pure field-diff helpers ──────────────────────────────────────────────────

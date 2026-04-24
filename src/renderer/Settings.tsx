@@ -740,7 +740,112 @@ function JiraSettings({ config, update }: { config: Config; update: (key: keyof 
               When enabled, tasks extracted from meetings are automatically pushed to your default project.
             </span>
           </div>
+
+          <ApprovalGateSettings />
         </>
+      )}
+    </div>
+  );
+}
+
+// ── Approval gate settings (US-006) ─────────────────────────────────────────
+// Self-managed slice: reads/writes `sor.jira` via api, independent of the
+// parent Settings form's save-button lifecycle. Saves on change (debounced
+// via React state + blur on slider) so the gate takes effect immediately
+// the next time auto-push runs — no "save to apply" footgun.
+
+function ApprovalGateSettings() {
+  const [enabled, setEnabled] = useState(false);
+  const [threshold, setThreshold] = useState(0.6);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const cfg = await (window as any).inwiseAPI.getConfig();
+        const jira = cfg?.sor?.jira ?? {};
+        setEnabled(jira.approvalGateEnabled === true);
+        const t = typeof jira.approvalThreshold === 'number' ? jira.approvalThreshold : 0.6;
+        setThreshold(Math.max(0, Math.min(1, t)));
+      } catch {
+        /* best-effort — keep defaults */
+      } finally {
+        setLoaded(true);
+      }
+    })();
+  }, []);
+
+  const persist = async (next: { approvalGateEnabled: boolean; approvalThreshold: number }) => {
+    // Merge-in rather than overwrite so we don't clobber sor.dismissedReceiptIds.
+    const cfg = await (window as any).inwiseAPI.getConfig();
+    const existingSor = cfg?.sor ?? {};
+    await (window as any).inwiseAPI.setConfig({
+      sor: {
+        ...existingSor,
+        jira: {
+          approvalGateEnabled: next.approvalGateEnabled,
+          approvalThreshold: next.approvalThreshold,
+        },
+      },
+    });
+  };
+
+  const toggle = async (value: boolean) => {
+    setEnabled(value);
+    await persist({ approvalGateEnabled: value, approvalThreshold: threshold });
+  };
+
+  const onThresholdChange = (value: number) => {
+    const clamped = Math.max(0, Math.min(1, value));
+    setThreshold(clamped);
+  };
+
+  const onThresholdCommit = async () => {
+    await persist({ approvalGateEnabled: enabled, approvalThreshold: threshold });
+  };
+
+  if (!loaded) return null;
+
+  const percent = Math.round(threshold * 100);
+
+  return (
+    <div className="form-group" style={{ marginTop: 12 }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => toggle(e.target.checked)}
+        />
+        <span className="form-label" style={{ margin: 0 }}>Require my approval for low-confidence writes</span>
+      </label>
+      <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block', paddingLeft: 24 }}>
+        When on, low-confidence writes wait in your Inbox for approval instead of pushing automatically.
+      </span>
+
+      {enabled && (
+        <div style={{ paddingLeft: 24, marginTop: 10 }}>
+          <label className="form-label" style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-700)' }}>
+            Approve writes when confidence is below {percent}%
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={percent}
+            onChange={(e) => onThresholdChange(Number(e.target.value) / 100)}
+            onMouseUp={onThresholdCommit}
+            onTouchEnd={onThresholdCommit}
+            onBlur={onThresholdCommit}
+            style={{ width: '100%', marginTop: 6 }}
+          />
+          <span style={{ fontSize: 11, color: 'var(--slate-500)', marginTop: 4, display: 'block', lineHeight: 1.5 }}>
+            Approval gate uses the Jira matcher's similarity score as confidence.
+            Writes created from meeting action items with no matching Jira story or a weak match
+            (below {percent}%) will wait for approval in your Inbox.
+            Writes without a confidence score are never gated.
+          </span>
+        </div>
       )}
     </div>
   );

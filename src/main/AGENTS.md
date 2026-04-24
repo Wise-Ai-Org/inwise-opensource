@@ -31,5 +31,43 @@ open meeting / task views.
 
 ## Testable pure helpers
 
-`computeCreateDiffs` and `computeUpdateDiffs` are pure — keep them that way so
-future integrations can unit-test their diff logic without HTTP.
+`computeCreateDiffs`, `computeUpdateDiffs`, and `shouldGateWrite` are pure —
+keep them that way so future integrations can unit-test their logic without
+HTTP or a live NeDB.
+
+## Approval gate (US-006)
+
+Auto-push writes whose confidence is below the user's threshold never hit the
+wire. Instead:
+
+1. `main.ts` calls `shouldGateWrite(confidence, enabled, threshold)` — pure
+   predicate, covered in `sor-write-log.test.ts`.
+2. When gated, `recordWrite(...)` is called directly with
+   `result: 'pending-approval'` and `approvalPath: 'opt-in-gated'`. The push
+   function is NOT invoked and the local task's `source` field is NOT patched
+   (both happen on approve).
+3. A row is also inserted into `sor-pending-approvals.db` carrying the
+   `pushParams`, `meetingTitle`, and `linkedTaskId` needed to re-run. Keyed by
+   the same id as the `sor-writes.db` entry.
+
+Approve path (`sor:approve` IPC): `approveJiraWrite(id, pushParams)` dispatches
+the stashed params and calls `markCompleted`. No `incrementRetry` — this is a
+first-time push, not a retry. After success the linked task's `source` field
+is patched (same linkage the auto path would have done) and the pending row is
+removed.
+
+Reject path (`sor:reject` IPC): `markCompleted(id, 'failed', 'User rejected')`
++ `removePending(id)`. Keeps the audit trail honest — rejected writes are
+visible in the receipts feed with their reason.
+
+**Gotcha: confidence source.** The PRD lets writes without a confidence value
+proceed unfiltered. Today the only signal available is the jira-matcher's
+`bestMatch.similarity` (0..1) — `main.ts` plumbs that as
+`provenance.confidence`. If a future extractor change produces per-item
+confidence, the gate starts firing on that signal too — no code change needed.
+
+**Gotcha: electron-store additive defaults.** `sor.jira` is newly nested inside
+the pre-existing `sor` key (added in US-005). electron-store only applies
+top-level defaults on first install, so existing users need the
+`getSorJiraPrefs()` safe accessor in `config.ts` — don't read `sor.jira.*`
+directly off `getConfig()` or you'll hit `undefined` on migrated stores.

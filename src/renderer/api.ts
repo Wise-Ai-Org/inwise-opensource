@@ -95,6 +95,11 @@ export const api = {
   sorRetry: (id: string) => inwiseAPI.sorRetry(id),
   sorRetryFailed: (system: string, sinceMs: number) => inwiseAPI.sorRetryFailed(system, sinceMs),
 
+  // ── SoR approval gate (US-006) ───────────────────────────────────────────
+  sorListPendingApprovals: () => inwiseAPI.sorListPendingApprovals(),
+  sorApprove: (id: string, overrides?: Record<string, any>) => inwiseAPI.sorApprove(id, overrides),
+  sorReject: (id: string) => inwiseAPI.sorReject(id),
+
   // ── Desktop Capture ──────────────────────────────────────────────────────
   getDesktopSourceId: () => inwiseAPI.getDesktopSourceId(),
 

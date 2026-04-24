@@ -571,18 +571,19 @@ function buildJiraIssueUrl(issueKey: string): string | null {
 }
 
 /**
- * Re-run a previously-logged Jira write using its stashed pushParams.
- * Updates the existing log entry — does NOT create a new one.
- * Increments retryCount.
+ * Dispatch raw Jira push using stored pushParams, then markCompleted on the
+ * existing sor-writes entry. Shared by `retryJiraWrite` (increments retryCount
+ * first) and `approveJiraWrite` (does NOT — approval is a first-time push, not
+ * a retry of a failed one).
+ *
+ * Returns `{ ok, error?, key?, url? }`. `key`/`url` are populated for `create`
+ * success so callers can patch the local task's source field.
  */
-export async function retryJiraWrite(id: string): Promise<{ ok: boolean; error?: string }> {
-  const entry = await getWriteEntry(id);
-  if (!entry) return { ok: false, error: 'Entry not found' };
-  if (entry.targetSystem !== 'jira') return { ok: false, error: `Cannot retry ${entry.targetSystem} writes from jira-client` };
-  if (!entry.pushParams) return { ok: false, error: 'No stored push params' };
-
-  await incrementRetry(id);
-  const p = entry.pushParams;
+async function executeJiraPushParams(
+  id: string,
+  pushParams: PushParams,
+): Promise<{ ok: boolean; error?: string; key?: string; url?: string | null }> {
+  const p = pushParams;
   try {
     if (p.operation === 'create') {
       const fields: any = {
@@ -597,6 +598,7 @@ export async function retryJiraWrite(id: string): Promise<{ ok: boolean; error?:
       const key = data.key;
       const url = buildJiraIssueUrl(key);
       await markCompleted(id, 'success', undefined, { targetRecordId: key, targetRecordUrl: url });
+      return { ok: true, key, url };
     } else if (p.operation === 'update') {
       const fields: any = {};
       if (p.args.updates.title) fields.summary = p.args.updates.title;
@@ -605,6 +607,7 @@ export async function retryJiraWrite(id: string): Promise<{ ok: boolean; error?:
       if (p.args.updates.dueDate) fields.duedate = p.args.updates.dueDate.slice(0, 10);
       await jiraFetch(`/issue/${p.args.issueKey}`, { method: 'PUT', body: JSON.stringify({ fields }) });
       await markCompleted(id, 'success');
+      return { ok: true };
     } else if (p.operation === 'transition') {
       const data = await jiraFetch(`/issue/${p.args.issueKey}/transitions`);
       const transitions = data.transitions || [];
@@ -626,6 +629,7 @@ export async function retryJiraWrite(id: string): Promise<{ ok: boolean; error?:
         body: JSON.stringify({ transition: { id: match.id } }),
       });
       await markCompleted(id, 'success');
+      return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
     } else if (p.operation === 'comment') {
       const prefix = p.args.meetingTitle
         ? `[Inwise] From "${p.args.meetingTitle}":\n\n`
@@ -635,12 +639,42 @@ export async function retryJiraWrite(id: string): Promise<{ ok: boolean; error?:
         body: JSON.stringify({ body: textToAdf(prefix + p.args.comment) }),
       });
       await markCompleted(id, 'success');
+      return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
     }
-    return { ok: true };
+    return { ok: false, error: 'Unknown operation' };
   } catch (err: any) {
     await markCompleted(id, 'failed', err.message);
     return { ok: false, error: err.message };
   }
+}
+
+/**
+ * Re-run a previously-logged Jira write using its stashed pushParams.
+ * Updates the existing log entry — does NOT create a new one.
+ * Increments retryCount.
+ */
+export async function retryJiraWrite(id: string): Promise<{ ok: boolean; error?: string }> {
+  const entry = await getWriteEntry(id);
+  if (!entry) return { ok: false, error: 'Entry not found' };
+  if (entry.targetSystem !== 'jira') return { ok: false, error: `Cannot retry ${entry.targetSystem} writes from jira-client` };
+  if (!entry.pushParams) return { ok: false, error: 'No stored push params' };
+
+  await incrementRetry(id);
+  const { ok, error } = await executeJiraPushParams(id, entry.pushParams);
+  return ok ? { ok } : { ok, error };
+}
+
+/**
+ * Run a pending-approval Jira write. Dispatches the stashed pushParams (exactly
+ * what would have auto-pushed), does NOT increment retryCount (this is a
+ * first-time push, not a retry), and returns key/url so the caller can patch
+ * the linked local task's source field.
+ */
+export async function approveJiraWrite(
+  id: string,
+  pushParams: PushParams,
+): Promise<{ ok: boolean; error?: string; key?: string; url?: string | null }> {
+  return executeJiraPushParams(id, pushParams);
 }
 
 export function isJiraConnected(): boolean {

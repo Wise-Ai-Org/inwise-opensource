@@ -89,6 +89,11 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   sorRetry: (id: string) => ipcRenderer.invoke('sor:retry', id),
   sorRetryFailed: (system: string, sinceMs: number) => ipcRenderer.invoke('sor:retryFailed', system, sinceMs),
 
+  // SoR approval gate (US-006)
+  sorListPendingApprovals: () => ipcRenderer.invoke('sor:listPendingApprovals'),
+  sorApprove: (id: string, overrides?: Record<string, any>) => ipcRenderer.invoke('sor:approve', id, overrides),
+  sorReject: (id: string) => ipcRenderer.invoke('sor:reject', id),
+
   // Desktop capture
   getDesktopSourceId: () => ipcRenderer.invoke('desktop:getSourceId'),
 

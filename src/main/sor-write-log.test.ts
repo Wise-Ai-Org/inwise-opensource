@@ -14,6 +14,8 @@ import {
   listStuckEntries,
   computeCreateDiffs,
   computeUpdateDiffs,
+  shouldGateWrite,
+  applyApprovalEdit,
   onWriteCompleted,
   SorWriteEntry,
 } from './sor-write-log';
@@ -276,6 +278,52 @@ async function run(): Promise<void> {
     assert.equal(calls[0]._id, id);
     assert.equal(calls[0].result, 'success');
     onWriteCompleted(null);
+  }
+
+  // ── shouldGateWrite predicate (US-006) ───────────────────────────────────
+  {
+    // Disabled gate: never gates, regardless of confidence.
+    assert.equal(shouldGateWrite(0.1, false, 0.6), false, 'disabled gate never fires');
+    assert.equal(shouldGateWrite(undefined, false, 0.6), false, 'disabled gate with undefined confidence');
+
+    // Enabled gate but confidence absent: per PRD, never gate.
+    assert.equal(shouldGateWrite(undefined, true, 0.6), false, 'undefined confidence never gates');
+    assert.equal(shouldGateWrite(null, true, 0.6), false, 'null confidence never gates');
+    assert.equal(shouldGateWrite(Number.NaN, true, 0.6), false, 'NaN confidence never gates');
+
+    // Enabled gate with confidence: strict < threshold.
+    assert.equal(shouldGateWrite(0.59, true, 0.6), true, 'below threshold gates');
+    assert.equal(shouldGateWrite(0.6, true, 0.6), false, 'equal to threshold does not gate');
+    assert.equal(shouldGateWrite(0.7, true, 0.6), false, 'above threshold does not gate');
+    assert.equal(shouldGateWrite(0, true, 0.6), true, 'zero confidence gates');
+  }
+
+  // ── applyApprovalEdit patches the entry (US-006) ─────────────────────────
+  {
+    await freshDb();
+    const id = await recordWrite({
+      targetSystem: 'jira',
+      targetRecordId: '(pending-create)',
+      operation: 'create',
+      fieldDiffs: [{ field: 'title', before: null, after: 'old title' }],
+      provenance: { approvalPath: 'opt-in-gated', confidence: 0.3 },
+      pushParams: { operation: 'create', args: { title: 'old title', projectKey: 'X' } },
+      result: 'pending-approval',
+    });
+    await applyApprovalEdit(id, {
+      fieldDiffs: [{ field: 'title', before: null, after: 'new title' }],
+      pushParams: { operation: 'create', args: { title: 'new title', projectKey: 'X' } },
+      approvalPath: 'user',
+      result: 'pending',
+    });
+    const after = await getWriteEntry(id);
+    assert.equal(after!.approvalPath, 'user');
+    assert.equal(after!.result, 'pending');
+    assert.equal(after!.fieldDiffs[0].after, 'new title');
+    assert.equal((after!.pushParams as any).args.title, 'new title');
+    // Existing fields untouched
+    assert.equal(after!.targetSystem, 'jira');
+    assert.equal(after!.confidence, 0.3);
   }
 
   console.log('sor-write-log: all tests passed');

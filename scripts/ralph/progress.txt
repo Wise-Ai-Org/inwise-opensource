@@ -221,3 +221,50 @@ Learnings for future iterations:
 - **`useRef(Date.now() - 7d).current` is the tidiest "compute once on mount" pattern.** Same trick Settings used in US-003. Avoids `useMemo([])` boilerplate and dependency-array confusion. Recurring enough to cement as the house style for point-in-time cutoffs.
 - **Best-effort persist, optimistic UI.** `persistDismissed` catches and swallows errors. Rationale: the user just clicked ✕; they expect the row to disappear. If writing to config fails for some reason, the state reverts on next reload, which is self-correcting. Don't block user intent on durable storage for low-stakes prefs.
 ---
+
+## 2026-04-24 10:30 PDT - US-006
+Thread: local (Claude Code)
+- Implemented opt-in approval gate for low-confidence Jira writes:
+  - `config.ts`: new `SorJiraPrefs` interface (`approvalGateEnabled: boolean`, `approvalThreshold: number`). `Config` gains `sor.jira?: SorJiraPrefs`. `getSorJiraPrefs()` safe accessor returns defaults when unset. `SorPrefs` type (from US-005) extended with `jira` sub-key.
+  - `sor-pending-approvals.ts` (new, 76 LOC): NeDB-backed store `sor-pending-approvals.db`. Exports `initPendingApprovalsDb()`, `savePendingApproval(writeId, pushParams)`, `getPendingApproval(writeId)`, `removePendingApproval(writeId)`, `listAllPendingApprovals()`, `__setPendingApprovalsDbForTests`. `PushParams` type unions JiraIssueCreate, JiraIssueUpdate, JiraTransition, JiraComment shapes.
+  - `sor-write-log.ts`: new `shouldGateWrite(confidence, prefs)` pure predicate — returns true when gate is enabled AND confidence is a number AND below threshold. New `applyApprovalEdit(entry, overrides)` — merges fieldDiffs/commentBody overrides onto the stored entry object for edit-and-approve flow.
+  - `jira-client.ts`: `executeJiraPushParams(params, provenance)` new dispatcher that routes a `PushParams` union to the correct push function. `approveJiraWrite(writeId)` loads pending entry, calls `executeJiraPushParams`, then `removePendingApproval` — used by `sor:approve` handler. Existing `createJiraIssue`, `updateJiraIssue`, `transitionJiraIssue`, `addJiraComment` refactored to accept an optional `PushParams` override so the approve path can replay with edited fields.
+  - `main.ts` after-meeting push pipeline: for each intended push, calls `shouldGateWrite(confidence, getSorJiraPrefs())`. If gated: calls `recordWrite(...)` with `result:'pending-approval'` + `approvalPath:'opt-in-gated'`, then `savePendingApproval(writeId, pushParams)` — NO actual Jira HTTP call. Otherwise proceeds as before (auto path).
+  - New IPC handlers: `sor:listPendingApprovals` (joins sor-writes entries with pending-approvals payloads), `sor:approve(id, overrides?)` (calls `approveJiraWrite`, marks entry success), `sor:reject(id)` (marks entry failed with 'User rejected', removes from pending).
+  - `preload.ts` + `api.ts`: `sorListPendingApprovals`, `sorApprove`, `sorReject` wrappers on both sides of the bridge.
+  - `Settings.tsx`: `ApprovalGateSettings` sub-component injected into the Jira card inside `IntegrationsSection`. Toggle 'Require my approval for low-confidence writes' + threshold slider (visible only when toggle is on, range 0–100% displayed, stored as 0..1). Helper text explains when the gate is a no-op (confidence not yet available per operation type). Persists via `api.setConfig`.
+  - `Communications.tsx`: `PendingApprovalsSection` component inserted above `RecentSyncActivity`. Loads via `api.sorListPendingApprovals()` on mount and on `sor:write-completed` IPC. Each card: target record + operation + proposed fieldDiffs or comment + source transcript snippet + confidence value if available + 'Pending N days' label. Buttons: [Approve], [Edit & Approve] (inline textarea for comment/fields), [Reject]. Approve/edit-approve call `api.sorApprove(id, overrides)`, reject calls `api.sorReject(id)`.
+  - `sor-pending-approvals.test.ts` (new, 95 LOC): unit tests for `savePendingApproval`, `getPendingApproval`, `removePendingApproval`, `listAllPendingApprovals` CRUD; `shouldGateWrite` predicate (gate off, gate on + above threshold, gate on + below threshold, confidence undefined); `applyApprovalEdit` merges correctly.
+
+Files changed:
+- src/main/config.ts (SorJiraPrefs type, sor.jira field, getSorJiraPrefs accessor)
+- src/main/sor-pending-approvals.ts (new)
+- src/main/sor-pending-approvals.test.ts (new)
+- src/main/sor-write-log.ts (shouldGateWrite, applyApprovalEdit)
+- src/main/sor-write-log.test.ts (tests for shouldGateWrite, applyApprovalEdit)
+- src/main/jira-client.ts (executeJiraPushParams, approveJiraWrite)
+- src/main/main.ts (gate check in after-meeting pipeline, 3 new IPC handlers, initPendingApprovalsDb)
+- src/main/preload.ts (3 new invoke wrappers)
+- src/renderer/api.ts (3 new typed methods)
+- src/renderer/Settings.tsx (ApprovalGateSettings component in Jira card)
+- src/renderer/Communications.tsx (PendingApprovalsSection at top of Inbox)
+- src/main/AGENTS.md (US-006 approval gate architecture documented)
+- scripts/ralph/prd.json (US-006 → passes:true)
+
+Quality gates:
+- `npx tsc -p tsconfig.main.json --noEmit` — clean.
+- `npx tsc -p tsconfig.renderer.json --noEmit` — clean.
+- `node dist/main/sor-write-log.test.js` — all tests passed.
+- `node dist/main/sor-pending-approvals.test.js` — all tests passed.
+- Regression: config / database / staleness-sweep / welcome-back / task-completion-inference / live-meeting-banner / self-identity — all still pass.
+
+Browser verification:
+- **Deferred to manual QA.** `dev-browser` skill not available in this runner. Flow reviewed statically: toggle on → threshold slider visible → persists to config.json at `sor.jira.approvalThreshold`; gate check fires in main-process pipeline before each push; low-confidence writes land in `sor-pending-approvals.db` without calling Jira; Pending Approvals section in Inbox renders cards with [Approve] / [Edit & Approve] / [Reject]; approve path calls `approveJiraWrite` which dispatches to the correct push function; entry moves from pending to success/failed in sor-writes; reject marks failed + clears pending; live-refresh via `sor:write-completed` drives both sections.
+
+**Learnings for future iterations:**
+- **Gate check is a pure predicate — keep it that way.** `shouldGateWrite(confidence, prefs)` has no side effects. The gating decision and the side effect (stash to pending-approvals.db) are separated. This makes the logic trivially testable and easy to audit.
+- **`executeJiraPushParams` as a dispatch table.** Rather than duplicating the push-function routing in both the approval handler and any future retry-from-pending path, one dispatcher function routing on `params.type` keeps the routing in one place. Any new Jira operation type only needs to be added here.
+- **Pending approvals never expire — design is intentional.** The PRD said "user must explicitly approve or reject; show 'Pending N days'." Don't add TTL-based auto-rejection without a deliberate PRD change; stale pending entries are user intent until the user acts.
+- **Confidence is optional and the gate is a no-op without it.** `shouldGateWrite` returns false when confidence is `undefined`. The toggle in Settings is safe to ship before confidence scores exist in the extractor — it does nothing until the extractor produces them. The helper text in the UI makes this explicit.
+- **Edit & Approve uses optimistic overrides, not a DB write.** The inline editor collects overrides client-side; `sorApprove(id, overrides)` sends them in one IPC call. The main process merges overrides into the PushParams before dispatching. No intermediate "pending edit" state in the DB — simpler and avoids partial-write edge cases.
+---
