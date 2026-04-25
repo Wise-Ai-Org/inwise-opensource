@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Box, Flex, Text, VStack, HStack, Badge, useColorModeValue, Spinner,
   Button, useDisclosure, useToast, AlertDialog, AlertDialogBody,
@@ -6,8 +6,8 @@ import {
   IconButton, Divider, Icon, Collapse, Grid, Tooltip, Modal
 } from '@chakra-ui/react';
 import {
-  ChevronLeftIcon, ChevronRightIcon, AddIcon, DeleteIcon, CalendarIcon,
-  CheckIcon, WarningIcon, ChatIcon, RepeatIcon, CloseIcon
+  ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, AddIcon, DeleteIcon, CalendarIcon,
+  CheckIcon, WarningIcon, ChatIcon, RepeatIcon, CloseIcon, ExternalLinkIcon
 } from '@chakra-ui/icons';
 import { FiMail, FiMessageSquare, FiVideo, FiCalendar, FiChevronDown, FiChevronUp } from 'react-icons/fi';
 import Card from './components/card/Card';
@@ -65,9 +65,752 @@ function getAgendaFor(title: string): string[] {
 const DAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
+// ── SoR receipts types + helpers (US-005) ─────────────────────────────────
+// 4th surface duplicating this pattern (TranscriptReviewModal, Settings,
+// TaskDetailSidebar are the others). Extraction into components/sor/ left for a
+// future refactor so US-005 doesn't churn the earlier surfaces.
+
+type SorOp = 'create' | 'update' | 'transition' | 'comment';
+type SorResult = 'pending' | 'success' | 'failed' | 'pending-approval' | 'retrying';
+type SorSystem = 'jira';
+
+interface SorFieldDiff { field: string; before: any; after: any }
+interface SorSpan { start: number; end: number; snippet: string }
+
+interface SorWriteEntry {
+  _id: string;
+  targetSystem: SorSystem;
+  targetRecordId: string;
+  targetRecordUrl: string | null;
+  operation: SorOp;
+  fieldDiffs: SorFieldDiff[];
+  commentBody: string | null;
+  sourceMeetingId: string | null;
+  sourceTranscriptSpan: SorSpan | null;
+  linkedTaskId: string | null;
+  confidence: number | null;
+  approvalPath: 'auto' | 'user' | 'opt-in-gated';
+  result: SorResult;
+  errorMessage: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  retryCount: number;
+}
+
+const SOR_OP_META: Record<SorOp, { label: string; color: string }> = {
+  create:     { label: 'Created',      color: 'green'  },
+  update:     { label: 'Updated',      color: 'blue'   },
+  transition: { label: 'Transitioned', color: 'purple' },
+  comment:    { label: 'Commented',    color: 'gray'   },
+};
+
+function sorOneLineSummary(entry: SorWriteEntry): string {
+  if (entry.operation === 'create') return 'New issue created';
+  if (entry.operation === 'comment') return 'Comment added';
+  if (entry.operation === 'transition') {
+    const d = entry.fieldDiffs.find(f => f.field === 'status');
+    if (d) return `Status: ${d.before ?? '—'} → ${d.after ?? '—'}`;
+    return 'Status transition';
+  }
+  const n = entry.fieldDiffs.length;
+  if (n === 0) return 'No field changes';
+  if (n === 1) return `${entry.fieldDiffs[0].field} changed`;
+  return `+${n} fields`;
+}
+
+function formatRelativeTime(dateStr: string): string {
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${Math.floor(diffHours / 24)}d ago`;
+}
+
+// ── Pending approvals (US-006: Opt-in approval gate) ─────────────────────
+// Sits above the receipts feed. Each card represents a write that Inwise
+// held back because its confidence was below the user's threshold. The user
+// can Approve, Edit & Approve, or Reject each card.
+
+interface PendingApprovalRow {
+  writeEntry: SorWriteEntry;
+  pending: {
+    _id: string;
+    targetSystem: 'jira';
+    pushParams:
+      | { operation: 'create'; args: { title: string; description?: string; priority?: string; dueDate?: string; projectKey: string } }
+      | { operation: 'update'; args: { issueKey: string; updates: { title?: string; description?: string; priority?: string; dueDate?: string } } }
+      | { operation: 'transition'; args: { issueKey: string; targetStatus: string } }
+      | { operation: 'comment'; args: { issueKey: string; comment: string; meetingTitle?: string } };
+    meetingTitle: string | null;
+    linkedTaskId: string | null;
+    createdAt: string;
+  };
+}
+
+function daysSince(isoString: string): number {
+  const then = new Date(isoString).getTime();
+  if (Number.isNaN(then)) return 0;
+  return Math.floor((Date.now() - then) / (24 * 60 * 60 * 1000));
+}
+
+function PendingApprovalsSection() {
+  const [rows, setRows] = useState<PendingApprovalRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editBuf, setEditBuf] = useState<Record<string, any>>({});
+  const toast = useToast();
+
+  const reload = useCallback(async () => {
+    try {
+      const res = await api.sorListPendingApprovals();
+      setRows(Array.isArray(res) ? (res as PendingApprovalRow[]) : []);
+    } catch {
+      setRows([]);
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  useEffect(() => {
+    const onEvent = () => { reload(); };
+    api.on('sor:write-completed', onEvent);
+    return () => { api.off('sor:write-completed', onEvent); };
+  }, [reload]);
+
+  const startEditing = (row: PendingApprovalRow) => {
+    const p = row.pending.pushParams;
+    if (p.operation === 'create') {
+      setEditBuf({
+        title: p.args.title,
+        description: p.args.description ?? '',
+        priority: p.args.priority ?? '',
+        dueDate: p.args.dueDate ?? '',
+      });
+    } else if (p.operation === 'comment') {
+      setEditBuf({ comment: p.args.comment });
+    } else if (p.operation === 'update') {
+      setEditBuf({ ...p.args.updates });
+    } else {
+      setEditBuf({});
+    }
+    setEditingId(row.pending._id);
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditBuf({});
+  };
+
+  const approve = async (row: PendingApprovalRow, overrides?: Record<string, any>) => {
+    setBusyId(row.pending._id);
+    try {
+      const res = await api.sorApprove(row.pending._id, overrides);
+      if (res?.ok) {
+        toast({ title: 'Approved', status: 'success', duration: 2000 });
+        setEditingId(null);
+        setEditBuf({});
+        reload();
+      } else {
+        toast({
+          title: 'Approval failed',
+          description: res?.error || 'Unknown error',
+          status: 'error',
+          duration: 3000,
+        });
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const approveWithEdit = async (row: PendingApprovalRow) => {
+    const p = row.pending.pushParams;
+    let overrides: Record<string, any> = {};
+    if (p.operation === 'create') {
+      overrides = {
+        title: editBuf.title,
+        description: editBuf.description || undefined,
+        priority: editBuf.priority || undefined,
+        dueDate: editBuf.dueDate || undefined,
+      };
+    } else if (p.operation === 'comment') {
+      overrides = { comment: editBuf.comment };
+    } else if (p.operation === 'update') {
+      overrides = { updates: { ...editBuf } };
+    }
+    await approve(row, overrides);
+  };
+
+  const reject = async (row: PendingApprovalRow) => {
+    setBusyId(row.pending._id);
+    try {
+      const res = await api.sorReject(row.pending._id);
+      if (res?.ok) {
+        toast({ title: 'Rejected', status: 'info', duration: 2000 });
+        reload();
+      } else {
+        toast({
+          title: 'Reject failed',
+          description: res?.error || 'Unknown error',
+          status: 'error',
+          duration: 3000,
+        });
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (!loaded || rows.length === 0) return null;
+
+  return (
+    <Box mb={5} p={4} bg="white" borderRadius="lg" border="1px solid" borderColor="yellow.300">
+      <Flex justify="space-between" align="center" mb={3}>
+        <HStack spacing={2}>
+          <Text fontSize="sm" fontWeight="700" color="gray.800">Pending approvals</Text>
+          <Badge colorScheme="yellow" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+            {rows.length}
+          </Badge>
+        </HStack>
+      </Flex>
+
+      <VStack align="stretch" spacing={2}>
+        {rows.map((row) => {
+          const entry = row.writeEntry;
+          const pending = row.pending;
+          const meta = SOR_OP_META[entry.operation];
+          const isEditing = editingId === pending._id;
+          const isBusy = busyId === pending._id;
+          const pendingDays = daysSince(pending.createdAt);
+
+          return (
+            <Box
+              key={pending._id}
+              p={3}
+              borderRadius="8px"
+              border="1px solid"
+              borderColor="yellow.200"
+              bg="yellow.50"
+            >
+              <VStack align="stretch" spacing={2}>
+                <HStack spacing={2} flexWrap="wrap">
+                  <Badge colorScheme={meta.color} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                    {meta.label}
+                  </Badge>
+                  {entry.targetRecordId && entry.targetRecordId !== '(pending-create)' && (
+                    <Box
+                      as="button"
+                      onClick={() => {
+                        if (entry.targetRecordUrl) api.openExternal(entry.targetRecordUrl);
+                      }}
+                      color="#1a7080"
+                      fontSize="12px"
+                      fontWeight="600"
+                      cursor={entry.targetRecordUrl ? 'pointer' : 'default'}
+                      _hover={{ textDecoration: entry.targetRecordUrl ? 'underline' : 'none' }}
+                    >
+                      {entry.targetRecordId}
+                      {entry.targetRecordUrl && <ExternalLinkIcon boxSize="10px" ml={1} mb="2px" />}
+                    </Box>
+                  )}
+                  {typeof entry.confidence === 'number' && (
+                    <Badge variant="outline" colorScheme="gray" fontSize="10px" borderRadius="full" px={2}>
+                      confidence {Math.round(entry.confidence * 100)}%
+                    </Badge>
+                  )}
+                  <Text fontSize="10px" color="gray.500">
+                    Pending {pendingDays} day{pendingDays === 1 ? '' : 's'}
+                  </Text>
+                </HStack>
+
+                <Text fontSize="13px" color="gray.700">
+                  {sorOneLineSummary(entry)}
+                </Text>
+
+                {/* Proposed payload */}
+                {!isEditing && pending.pushParams.operation === 'create' && (
+                  <Box bg="white" borderRadius="6px" p={2} fontSize="12px" color="gray.700">
+                    <Text fontWeight="600" mb={1}>{pending.pushParams.args.title}</Text>
+                    {pending.pushParams.args.description && (
+                      <Text whiteSpace="pre-wrap" color="gray.600">
+                        {pending.pushParams.args.description}
+                      </Text>
+                    )}
+                  </Box>
+                )}
+
+                {!isEditing && pending.pushParams.operation === 'comment' && (
+                  <Box bg="white" borderRadius="6px" p={2} fontSize="12px" color="gray.700" whiteSpace="pre-wrap">
+                    {pending.pushParams.args.comment}
+                  </Box>
+                )}
+
+                {!isEditing && pending.pushParams.operation === 'update' && entry.fieldDiffs.length > 0 && (
+                  <Box fontSize="12px">
+                    <VStack align="stretch" spacing={1}>
+                      {entry.fieldDiffs.map((d, i) => (
+                        <HStack key={i} spacing={2} align="flex-start">
+                          <Text color="gray.500" minW="80px" fontWeight="500">{d.field}</Text>
+                          <HStack spacing={1} flex={1} flexWrap="wrap">
+                            <Text color="gray.500" textDecoration="line-through">
+                              {d.before === null || d.before === undefined ? '—' : String(d.before)}
+                            </Text>
+                            <Text color="gray.400">→</Text>
+                            <Text color="gray.800">
+                              {d.after === null || d.after === undefined ? '—' : String(d.after)}
+                            </Text>
+                          </HStack>
+                        </HStack>
+                      ))}
+                    </VStack>
+                  </Box>
+                )}
+
+                {/* Edit form */}
+                {isEditing && pending.pushParams.operation === 'create' && (
+                  <VStack align="stretch" spacing={2} bg="white" p={2} borderRadius="6px">
+                    <input
+                      style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4 }}
+                      value={editBuf.title ?? ''}
+                      onChange={(e) => setEditBuf({ ...editBuf, title: e.target.value })}
+                      placeholder="Title"
+                    />
+                    <textarea
+                      style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4, resize: 'vertical', minHeight: 60 }}
+                      value={editBuf.description ?? ''}
+                      onChange={(e) => setEditBuf({ ...editBuf, description: e.target.value })}
+                      placeholder="Description"
+                    />
+                    <HStack spacing={2}>
+                      <select
+                        style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4 }}
+                        value={editBuf.priority ?? ''}
+                        onChange={(e) => setEditBuf({ ...editBuf, priority: e.target.value })}
+                      >
+                        <option value="">Priority…</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                      </select>
+                      <input
+                        type="date"
+                        style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4 }}
+                        value={editBuf.dueDate ?? ''}
+                        onChange={(e) => setEditBuf({ ...editBuf, dueDate: e.target.value })}
+                      />
+                    </HStack>
+                  </VStack>
+                )}
+
+                {isEditing && pending.pushParams.operation === 'comment' && (
+                  <textarea
+                    style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4, resize: 'vertical', minHeight: 80 }}
+                    value={editBuf.comment ?? ''}
+                    onChange={(e) => setEditBuf({ ...editBuf, comment: e.target.value })}
+                  />
+                )}
+
+                {isEditing && pending.pushParams.operation === 'update' && (
+                  <VStack align="stretch" spacing={2} bg="white" p={2} borderRadius="6px">
+                    <input
+                      style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4 }}
+                      value={editBuf.title ?? ''}
+                      onChange={(e) => setEditBuf({ ...editBuf, title: e.target.value })}
+                      placeholder="Title"
+                    />
+                    <textarea
+                      style={{ fontSize: 12, padding: 6, border: '1px solid #CBD5E0', borderRadius: 4, resize: 'vertical', minHeight: 60 }}
+                      value={editBuf.description ?? ''}
+                      onChange={(e) => setEditBuf({ ...editBuf, description: e.target.value })}
+                      placeholder="Description"
+                    />
+                  </VStack>
+                )}
+
+                {entry.sourceTranscriptSpan?.snippet && (
+                  <Box
+                    borderLeft="3px solid"
+                    borderLeftColor="#9dd4d9"
+                    bg="#f0fafa"
+                    pl={3}
+                    py={2}
+                    borderRadius="0 6px 6px 0"
+                    fontSize="12px"
+                    color="gray.700"
+                    fontStyle="italic"
+                  >
+                    "{entry.sourceTranscriptSpan.snippet}"
+                  </Box>
+                )}
+
+                <HStack spacing={2} justify="flex-end">
+                  {isEditing ? (
+                    <>
+                      <Button size="xs" variant="ghost" onClick={cancelEditing} isDisabled={isBusy}>
+                        Cancel
+                      </Button>
+                      <Button
+                        size="xs"
+                        colorScheme="green"
+                        onClick={() => approveWithEdit(row)}
+                        isLoading={isBusy}
+                      >
+                        Save & Approve
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        colorScheme="red"
+                        onClick={() => reject(row)}
+                        isDisabled={isBusy}
+                      >
+                        Reject
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() => startEditing(row)}
+                        isDisabled={isBusy}
+                      >
+                        Edit & Approve
+                      </Button>
+                      <Button
+                        size="xs"
+                        colorScheme="green"
+                        onClick={() => approve(row)}
+                        isLoading={isBusy}
+                      >
+                        Approve
+                      </Button>
+                    </>
+                  )}
+                </HStack>
+              </VStack>
+            </Box>
+          );
+        })}
+      </VStack>
+    </Box>
+  );
+}
+
+// ── Recent sync activity (US-005: Inbox receipts feed) ──────────────────
+// Renders the last 25 writes from the last 7 days. Rows are dismissible
+// individually or in bulk; dismissed IDs are persisted in config.json at
+// `sor.dismissedReceiptIds` so they stay hidden across restarts. New writes
+// arrive with new IDs, so they re-appear naturally even after "Clear all".
+
+const RECEIPTS_LIMIT = 25;
+const RECEIPTS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function RecentSyncActivity() {
+  const [entries, setEntries] = useState<SorWriteEntry[]>([]);
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const toast = useToast();
+  const sinceMs = useRef(Date.now() - RECEIPTS_WINDOW_MS).current;
+
+  const reload = useCallback(async () => {
+    try {
+      const [cfg, recent] = await Promise.all([
+        api.getConfig(),
+        api.sorListRecent(RECEIPTS_LIMIT, sinceMs),
+      ]);
+      const dismissed = new Set<string>(cfg?.sor?.dismissedReceiptIds ?? []);
+      setDismissedIds(dismissed);
+      setEntries(Array.isArray(recent) ? (recent as SorWriteEntry[]) : []);
+    } catch {
+      setEntries([]);
+    } finally {
+      setLoaded(true);
+    }
+  }, [sinceMs]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  // Live-refresh: any sor:write-completed event in the last 7d window can
+  // affect this feed (including retries of failed rows).
+  useEffect(() => {
+    const onWriteCompleted = () => { reload(); };
+    api.on('sor:write-completed', onWriteCompleted);
+    return () => { api.off('sor:write-completed', onWriteCompleted); };
+  }, [reload]);
+
+  const visibleEntries = useMemo(
+    () => entries.filter(e => !dismissedIds.has(e._id)),
+    [entries, dismissedIds],
+  );
+
+  const persistDismissed = async (next: Set<string>) => {
+    try {
+      await api.setConfig({ sor: { dismissedReceiptIds: Array.from(next) } });
+    } catch {
+      // Best-effort — UI already updated. If persistence fails the dismiss
+      // reverts on next reload, which is acceptable.
+    }
+  };
+
+  const dismissOne = (id: string) => {
+    const next = new Set(dismissedIds);
+    next.add(id);
+    setDismissedIds(next);
+    persistDismissed(next);
+  };
+
+  const dismissAllVisible = () => {
+    if (visibleEntries.length === 0) return;
+    const next = new Set(dismissedIds);
+    visibleEntries.forEach(e => next.add(e._id));
+    setDismissedIds(next);
+    persistDismissed(next);
+  };
+
+  const retryOne = async (id: string) => {
+    setRetryingId(id);
+    try {
+      await api.sorRetry(id);
+    } catch (err: any) {
+      toast({
+        title: 'Retry failed',
+        description: err?.message || 'Unknown error',
+        status: 'error',
+        duration: 3000,
+      });
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
+  if (!loaded || visibleEntries.length === 0) return null;
+
+  return (
+    <Box mb={5} p={4} bg="white" borderRadius="lg" border="1px solid" borderColor="gray.200">
+      <Flex justify="space-between" align="center" mb={collapsed ? 0 : 3}>
+        <HStack spacing={2}>
+          <Text fontSize="sm" fontWeight="700" color="gray.800">Recent sync activity</Text>
+          <Badge colorScheme="gray" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+            {visibleEntries.length}
+          </Badge>
+        </HStack>
+        <HStack spacing={1}>
+          <Button size="xs" variant="ghost" onClick={dismissAllVisible}>Clear all</Button>
+          <IconButton
+            aria-label={collapsed ? 'Expand section' : 'Collapse section'}
+            icon={collapsed ? <FiChevronDown /> : <FiChevronUp />}
+            size="xs"
+            variant="ghost"
+            onClick={() => setCollapsed(!collapsed)}
+          />
+        </HStack>
+      </Flex>
+
+      {!collapsed && (
+        <VStack align="stretch" spacing={2}>
+          {visibleEntries.map(entry => {
+            const meta = SOR_OP_META[entry.operation];
+            const isExpanded = expandedId === entry._id;
+            const isFailed = entry.result === 'failed';
+            const isPending = entry.result === 'pending' || entry.result === 'retrying' || entry.result === 'pending-approval';
+
+            return (
+              <Box
+                key={entry._id}
+                p={3}
+                borderRadius="8px"
+                border="1px solid"
+                borderColor={isFailed ? 'red.200' : 'gray.200'}
+                bg={isFailed ? 'red.50' : 'white'}
+              >
+                <HStack spacing={3} align="flex-start">
+                  <Box
+                    as="button"
+                    onClick={() => setExpandedId(isExpanded ? null : entry._id)}
+                    color="gray.400"
+                    cursor="pointer"
+                    lineHeight={0}
+                    mt="2px"
+                    _hover={{ color: 'gray.600' }}
+                    aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                  >
+                    {isExpanded ? <ChevronDownIcon boxSize="16px" /> : <ChevronRightIcon boxSize="16px" />}
+                  </Box>
+
+                  <VStack align="stretch" spacing={1} flex={1} minW={0}>
+                    <HStack spacing={2} flexWrap="wrap">
+                      <Badge colorScheme={meta.color} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                        {meta.label}
+                      </Badge>
+                      {entry.targetRecordId && entry.targetRecordId !== '(pending-create)' && (
+                        <Box
+                          as="button"
+                          onClick={(e: any) => {
+                            e.stopPropagation();
+                            if (entry.targetRecordUrl) api.openExternal(entry.targetRecordUrl);
+                          }}
+                          color="#1a7080"
+                          fontSize="12px"
+                          fontWeight="600"
+                          cursor={entry.targetRecordUrl ? 'pointer' : 'default'}
+                          _hover={{ textDecoration: entry.targetRecordUrl ? 'underline' : 'none' }}
+                        >
+                          {entry.targetRecordId}
+                          {entry.targetRecordUrl && <ExternalLinkIcon boxSize="10px" ml={1} mb="2px" />}
+                        </Box>
+                      )}
+                      {isFailed && (
+                        <Badge colorScheme="red" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                          Failed
+                        </Badge>
+                      )}
+                      {isPending && (
+                        <Badge colorScheme="yellow" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                          {entry.result === 'pending-approval' ? 'Pending approval' : 'In progress'}
+                        </Badge>
+                      )}
+                      <Text fontSize="10px" color="gray.400">{formatRelativeTime(entry.createdAt)}</Text>
+                      {entry.retryCount > 0 && (
+                        <Text fontSize="10px" color="gray.400">retry #{entry.retryCount}</Text>
+                      )}
+                    </HStack>
+
+                    <Text fontSize="13px" color="gray.700" noOfLines={isExpanded ? undefined : 1}>
+                      {sorOneLineSummary(entry)}
+                    </Text>
+
+                    {isFailed && entry.errorMessage && !isExpanded && (
+                      <Text fontSize="11px" color="red.600" noOfLines={1}>{entry.errorMessage}</Text>
+                    )}
+
+                    {isExpanded && (
+                      <VStack align="stretch" spacing={2} mt={2} pt={2} borderTop="1px solid" borderColor="gray.100">
+                        {entry.operation === 'comment' && entry.commentBody && (
+                          <Box
+                            bg="gray.50"
+                            borderRadius="6px"
+                            p={2}
+                            fontSize="12px"
+                            color="gray.700"
+                            whiteSpace="pre-wrap"
+                          >
+                            {entry.commentBody}
+                          </Box>
+                        )}
+
+                        {entry.operation !== 'comment' && entry.fieldDiffs.length > 0 && (
+                          <Box fontSize="12px">
+                            <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                              Field changes
+                            </Text>
+                            <VStack align="stretch" spacing={1}>
+                              {entry.fieldDiffs.map((d, i) => (
+                                <HStack key={i} spacing={2} align="flex-start">
+                                  <Text color="gray.500" minW="80px" fontWeight="500">{d.field}</Text>
+                                  <HStack spacing={1} flex={1} flexWrap="wrap">
+                                    <Text color="gray.500" textDecoration={entry.operation === 'create' ? 'none' : 'line-through'}>
+                                      {d.before === null || d.before === undefined ? '—' : String(d.before)}
+                                    </Text>
+                                    <Text color="gray.400">→</Text>
+                                    <Text color="gray.800">
+                                      {d.after === null || d.after === undefined ? '—' : String(d.after)}
+                                    </Text>
+                                  </HStack>
+                                </HStack>
+                              ))}
+                            </VStack>
+                          </Box>
+                        )}
+
+                        {entry.sourceTranscriptSpan?.snippet && (
+                          <Box>
+                            <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                              From transcript
+                            </Text>
+                            <Box
+                              borderLeft="3px solid"
+                              borderLeftColor="#9dd4d9"
+                              bg="#f0fafa"
+                              pl={3}
+                              py={2}
+                              borderRadius="0 6px 6px 0"
+                              fontSize="12px"
+                              color="gray.700"
+                              fontStyle="italic"
+                            >
+                              "{entry.sourceTranscriptSpan.snippet}"
+                            </Box>
+                          </Box>
+                        )}
+
+                        {isFailed && entry.errorMessage && (
+                          <Box
+                            bg="red.50"
+                            border="1px solid"
+                            borderColor="red.200"
+                            borderRadius="6px"
+                            p={2}
+                            fontSize="12px"
+                            color="red.700"
+                          >
+                            {entry.errorMessage}
+                          </Box>
+                        )}
+                      </VStack>
+                    )}
+                  </VStack>
+
+                  <HStack spacing={1} flexShrink={0}>
+                    {isFailed && (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        colorScheme="red"
+                        leftIcon={<RepeatIcon />}
+                        onClick={() => retryOne(entry._id)}
+                        isLoading={retryingId === entry._id}
+                      >
+                        Retry
+                      </Button>
+                    )}
+                    <IconButton
+                      aria-label="Dismiss"
+                      icon={<CloseIcon boxSize="10px" />}
+                      size="xs"
+                      variant="ghost"
+                      color="gray.400"
+                      _hover={{ color: 'gray.700', bg: 'gray.100' }}
+                      onClick={() => dismissOne(entry._id)}
+                    />
+                  </HStack>
+                </HStack>
+              </Box>
+            );
+          })}
+        </VStack>
+      )}
+    </Box>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────────────────────
 
-export default function CommunicationCenter() {
+interface Props {
+  pendingOpen?: { meetingId: string; focusTab?: string } | null;
+  onPendingOpenConsumed?: () => void;
+}
+
+export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed }: Props = {}) {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +825,7 @@ export default function CommunicationCenter() {
   const [jiraSyncDetails, setJiraSyncDetails] = useState<any>(null);
 
   const [reviewMeetingData, setReviewMeetingData] = useState<Meeting | null>(null);
+  const [reviewInitialTab, setReviewInitialTab] = useState<string | undefined>(undefined);
   const [expandedMeetings, setExpandedMeetings] = useState<Set<string>>(new Set());
   const [meetingInsights, setMeetingInsights] = useState<Record<string, any>>({});
   const [loadingInsightsFor, setLoadingInsightsFor] = useState<string | null>(null);
@@ -313,8 +1057,9 @@ export default function CommunicationCenter() {
 
   // ── Review ─────────────────────────────────────────────────────────────────
 
-  const handleOpenReview = (meeting: Meeting) => {
+  const handleOpenReview = (meeting: Meeting, initialTab?: string) => {
     setReviewMeetingData(meeting);
+    setReviewInitialTab(initialTab);
     onReviewOpen();
   };
 
@@ -325,6 +1070,16 @@ export default function CommunicationCenter() {
     if (data?.insights) setMeetingInsights(prev => ({ ...prev, [meetingId]: data.insights }));
     setExpandedMeetings(prev => new Set([...prev, meetingId]));
   };
+
+  // Deep-link from main-process SoR trace notification → open the review modal
+  // on the requested tab. App.tsx owns the pendingOpen state and clears it here.
+  useEffect(() => {
+    if (!pendingOpen?.meetingId || loading) return;
+    const match = meetings.find(m => m._id === pendingOpen.meetingId);
+    if (!match) return;
+    handleOpenReview(match, pendingOpen.focusTab);
+    onPendingOpenConsumed?.();
+  }, [pendingOpen, loading, meetings]);
 
   // ── Upload transcript ─────────────────────────────────────────────────────
 
@@ -724,6 +1479,12 @@ export default function CommunicationCenter() {
         </Box>
       )}
 
+      {/* ── Pending approvals (US-006) — must render above receipts ── */}
+      <PendingApprovalsSection />
+
+      {/* ── Recent sync activity (US-005) ── */}
+      <RecentSyncActivity />
+
       <Flex gap={5} align="start">
         {/* ── LEFT PANEL ── */}
         <Box w="25%" minW="220px" flexShrink={0}>
@@ -871,6 +1632,7 @@ export default function CommunicationCenter() {
           onClose={onReviewClose}
           meetingId={reviewMeetingData?._id ?? null}
           onApproved={handleReviewApproved}
+          initialTab={reviewInitialTab as any}
         />
       )}
 

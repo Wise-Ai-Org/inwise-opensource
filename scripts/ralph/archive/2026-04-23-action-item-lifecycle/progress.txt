@@ -1,0 +1,78 @@
+# Ralph Progress Log
+Started: Wed Apr 22 12:38:22 PDT 2026
+
+## Codebase Patterns
+- Main-process tests export `run()` + `if (require.main === module) { run().catch(...) }`; run via `node dist/main/<file>.test.js` after `npm run build:main`
+- Inject in-memory NeDB Datastores into database.ts with `__setTasksDbForTests` / `__setMeetingsDbForTests` / `__setPeopleDbForTests` to test helpers without Electron
+- NeDB supports dot-notation `$set`/`$unset` on array indices (e.g. `insights.actionItems.2.dismissed`); use it for atomic field writes instead of read-modify-write
+- `tasksDb.findAsync({ archivedAt: null })` is the canonical "live tasks" query
+- Action items live on `meeting.insights.actionItems[i]`; lifecycle state (convertedToTaskId, dismissed) must be persisted there, not on separate projections, or `getPerson()` will always re-render them as pending
+- IPC flow: `ipcMain.handle('domain:action', ...)` in main.ts → expose on `inwiseAPI` in preload.ts → wrap in `api` object in src/renderer/api.ts → consumed by components
+- Task schema is strict (createTask in database.ts sets `source`, `approval`, `provenance`, `snoozedAt`, `snoozedReason`, `likelyDone` etc.); new task-producing helpers must set the same shape or downstream queries break
+
+---
+
+## 2026-04-22 12:45 PDT — US-001
+- Implemented `convertActionItemToTask`, `dismissActionItem`, `undismissActionItem` in src/main/database.ts
+- Rewrote `getPerson()`'s action-item pipeline: joins on tasks collection, emits three partitioned arrays (pendingActionItems, activeActionItems, doneActionItems) and excludes dismissed items everywhere
+- Added `__setMeetingsDbForTests` / `__setPeopleDbForTests` test-only injectors mirroring the existing tasks helper
+- Extended ActionItem + PersonDetail interfaces in src/renderer/People.tsx with `dismissed`, `taskUpdatedAt`, `taskDueDate`, plus optional `activeActionItems` / `doneActionItems`
+- Added unit tests in database.test.ts covering: conversion persistence, dismiss/undismiss round-trip, three-tier partitioning, dismissed-exclusion, summary counts
+- Files changed: src/main/database.ts, src/main/database.test.ts, src/renderer/People.tsx
+- **Learnings for future iterations:**
+  - The prior bug was subtle: the mapping at `database.ts:464` hardcoded `convertedToTaskId: null` when reading insights, so even if main.ts had written the back-reference, `getPerson()` would overwrite it in memory. When fixing a "lifecycle state doesn't stick" bug, check the projection layer, not just the writer.
+  - NeDB dot-notation `$set: { 'insights.actionItems.${i}.convertedToTaskId': taskId }` works for both setting new fields and updating existing ones — no need to fetch-then-update.
+  - `getPerson()` currently fetches `tasksDb.findAsync({ archivedAt: null })` twice (once for the join I added, once for stale-task nudges). Left as-is for this story to keep the change minimal; future iterations could merge them.
+  - Summary counts `summary.activeActionItems` / `summary.doneActionItems` are new fields — downstream components that destructure `summary` should be treated as additive consumers.
+---
+
+
+## 2026-04-22 12:52 PDT — US-002
+- Imported `convertActionItemToTask`, `dismissActionItem`, `undismissActionItem` in src/main/main.ts
+- Registered three `ipcMain.handle` channels: `actionItem:convert`, `actionItem:dismiss`, `actionItem:undismiss`
+- Exposed `convertActionItem`, `dismissActionItem`, `undismissActionItem` on `inwiseAPI` in src/main/preload.ts
+- Mirrored the three methods on `api` in src/renderer/api.ts with typed `{ taskId }` / `boolean` return signatures
+- Main and renderer builds pass; all 7 main-process test suites green (config, database, live-meeting-banner, self-identity, staleness-sweep, task-completion-inference, welcome-back)
+- Files changed: src/main/main.ts, src/main/preload.ts, src/renderer/api.ts
+- **Learnings for future iterations:**
+  - Preload bridges can normalize IPC ergonomics: here the DB helpers take positional `(meetingId, actionItemIndex, taskFields)` but the renderer call sites (per US-003) want an object-arg shape `{ meetingId, actionItemIndex, taskFields }`. The preload wrapper is the right place to unpack — keeps the IPC contract positional (one handler, one arg list) while giving UI a named-arg API.
+  - `ipcMain.handle` handlers that return `void` from the underlying helper should explicitly `return true` (or the actual result) — a `return undefined` through IPC is harmless but the pattern in this codebase (see `db:reviewMeeting`, `db:archivePerson`) is to return `true` for successful fire-and-forget ops, which gives UI a predictable truthy value to await.
+  - Import order in main.ts for `./database`: the named-imports block is alphabetical-ish but grouped by domain (meetings, tasks, snoozed, likely-done, people, …). New DB helpers slot in next to the helpers they logically sit beside — keeps diffs small and the import block scannable.
+---
+
+
+## 2026-04-22 12:58 PDT — US-003
+- Renamed "Pending Action Items" heading → "Action items pending review" in PersonDetailDrawer (src/renderer/People.tsx)
+- Added MdClose import; extended ActionItemRow props with optional `onReject: (item) => Promise<void>`; rendered a second IconButton (aria-label='Reject', title='Reject') next to the existing + Create-task button — both buttons live inside an HStack and are mutually loading-disabled so users can't double-fire
+- Rewrote `handleCreateTask` to call `api.convertActionItem({ meetingId, actionItemIndex, taskFields })` so `convertedToTaskId` is persisted on the source insight (prior implementation called raw `api.createTask` which left the back-reference unset)
+- Added `reloadPerson` helper that re-fetches `api.getPerson(personId)` and setPersons the result — invoked after convert/reject/undo so the drawer reflects the new lifecycle tier immediately
+- Added `handleRejectActionItem`: calls `api.dismissActionItem`, reloads drawer, then surfaces a custom-render Chakra toast ("Rejected — won't show again") with an inline [Undo] link button that calls `api.undismissActionItem` + reloads; toast duration 5000ms
+- Only the pending-list section passes `onReject` to ActionItemRow; rows rendered inside CommunicationRow (per-meeting action items) stay read-only as before
+- Files changed: src/renderer/People.tsx
+- Main build + renderer build both green; all 7 main-process test suites pass (config, database, live-meeting-banner, self-identity, staleness-sweep, task-completion-inference, welcome-back)
+- Browser verification: dev-browser skill unavailable in this Ralph environment (Electron app, not web). PRD note reflects the limitation; manual `npm start` pass recommended before release.
+- **Learnings for future iterations:**
+  - Chakra `useToast` accepts a `render: ({ onClose }) => ReactNode` callback for fully-custom toast bodies — this is the idiomatic way to put action buttons (Undo, Retry) inside a toast. Duration still applies; clicking a button inside should call the passed `onClose` to dismiss early.
+  - Person drawer state lives in a single `person` useState, refreshed via a local `reloadPerson` callback — any mutation (convert, dismiss, undismiss, archive) should await the mutation *then* call `reloadPerson` so the UI reflects the new partition without optimistic bookkeeping.
+  - When a row has multiple action buttons (+ and ×), wrap them in an HStack and cross-disable via `isDisabled={otherLoading}` so an in-flight convert doesn't race with a reject on the same item.
+  - ActionItemRow is reused inside CommunicationRow too — keep the `onReject` prop optional so the component stays portable into contexts where reject doesn't apply.
+---
+
+
+## 2026-04-22 14:52 PDT — US-004
+- Added "Active action items" section to PersonDetailDrawer between the pending section and Communications
+- New `ActiveDoneItemRow` component in src/renderer/People.tsx renders title, owner, due date, task-status badge, and "from {meetingTitle}" secondary line; `variant='done'` dims + strikethrough + shows "Completed {date}"
+- New `TaskPreviewModal` read-only Chakra Modal (chose this over importing TaskDetailSidebar because that component requires `onEditClick` + a full EditTaskModal dependency) — shows title, status badge, description (lazy-fetched via api.getTasks() filtered by _id), due date, assignee, and linked meeting title
+- Show N completed toggle: renders only when doneActionItems.length > 0; label toggles between "Show N completed" and "Hide N completed"; Collapse-wrapped list below
+- Empty state "No active action items for this person" shown only when BOTH activeActionItems and doneActionItems are empty
+- Extended `taskStatusLabel` to include 'completed' / 'cancelled'; added `taskStatusColor` helper returning Chakra colorScheme strings
+- Files changed: src/renderer/People.tsx (+266 / -0)
+- Main + renderer builds both pass; all 7 main-process test suites green (config, database, live-meeting-banner, self-identity, staleness-sweep, task-completion-inference, welcome-back)
+- Browser verification: dev-browser skill unavailable in this Ralph environment (Electron app, not web). PRD note reflects the limitation; manual `npm start` pass recommended before release.
+- **Learnings for future iterations:**
+  - Chakra `useColorModeValue` is a hook — it MUST be called unconditionally. The cleanest pattern for a "dim text when isDone" visual is to call useColorModeValue once to capture the dim color, then ternary-pick it based on the variant prop. Don't call it inside a ternary.
+  - Importing TaskDetailSidebar from components/tasks/ brings an `onEditClick` dependency that wants an EditTaskModal wired alongside it — too heavy for a read-only preview on the Person drawer. A minimal Chakra Modal is a cleaner fit when the AC explicitly allows the fallback.
+  - getPerson() already populates taskUpdatedAt + taskDueDate on action items via the join — done rows can show "Completed {taskUpdatedAt}" without any additional fetch. Avoid duplicate round trips by using what getPerson already materializes.
+  - Nesting a Chakra Modal inside a Drawer is fine (overlay z-index stacks correctly), but put the modal AFTER `</DrawerContent>` and still inside `</Drawer>` so the close button + outside-click behavior are scoped to the drawer's portal.
+  - IIFEs `{(() => { ... return <JSX />; })()}` are an ok pattern for JSX-scoped derivations (e.g. computing `bothEmpty` from two arrays) when the parent component is already large — avoids polluting the outer scope with local helpers that only matter to one section.
+---

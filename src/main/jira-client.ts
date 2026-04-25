@@ -9,6 +9,11 @@ import * as crypto from 'crypto';
 import { shell } from 'electron';
 import { getConfig, setConfig } from './config';
 import { log } from './logger';
+import {
+  recordWrite, markCompleted, incrementRetry, getWriteEntry,
+  computeCreateDiffs, computeUpdateDiffs,
+  WriteProvenance, PushParams, FieldDiff,
+} from './sor-write-log';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -340,13 +345,16 @@ export async function getJiraStories(projectKey?: string, maxDays = 60, maxResul
   }));
 }
 
-export async function createJiraIssue(task: {
-  title: string;
-  description?: string;
-  priority?: string;
-  dueDate?: string;
-  projectKey: string;
-}): Promise<{ key: string; url: string }> {
+export async function createJiraIssue(
+  task: {
+    title: string;
+    description?: string;
+    priority?: string;
+    dueDate?: string;
+    projectKey: string;
+  },
+  provenance?: WriteProvenance,
+): Promise<{ key: string; url: string }> {
   const config = getConfig();
   const tokens = (config as any).jiraTokens as JiraTokens;
 
@@ -366,66 +374,307 @@ export async function createJiraIssue(task: {
     fields.duedate = task.dueDate.slice(0, 10); // YYYY-MM-DD
   }
 
-  const data = await jiraFetch('/issue', {
-    method: 'POST',
-    body: JSON.stringify({ fields }),
+  const logId = await recordWrite({
+    targetSystem: 'jira',
+    targetRecordId: '(pending-create)',
+    targetRecordUrl: null,
+    operation: 'create',
+    fieldDiffs: computeCreateDiffs({
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      dueDate: task.dueDate,
+      projectKey: task.projectKey,
+    }),
+    provenance,
+    pushParams: { operation: 'create', args: { ...task } },
   });
 
-  const key = data.key;
-  const url = `${tokens.cloudUrl}/browse/${key}`;
-  log('info', 'jira:issue-created', `${key} — ${task.title}`);
-  return { key, url };
+  try {
+    const data = await jiraFetch('/issue', {
+      method: 'POST',
+      body: JSON.stringify({ fields }),
+    });
+    const key = data.key;
+    const url = `${tokens.cloudUrl}/browse/${key}`;
+    await markCompleted(logId, 'success', undefined, { targetRecordId: key, targetRecordUrl: url });
+    log('info', 'jira:issue-created', `${key} — ${task.title}`);
+    return { key, url };
+  } catch (err: any) {
+    await markCompleted(logId, 'failed', err.message);
+    throw err;
+  }
 }
 
-export async function updateJiraIssue(issueKey: string, updates: {
-  title?: string;
-  description?: string;
-  priority?: string;
-  dueDate?: string;
-}): Promise<void> {
+export async function updateJiraIssue(
+  issueKey: string,
+  updates: {
+    title?: string;
+    description?: string;
+    priority?: string;
+    dueDate?: string;
+  },
+  provenance?: WriteProvenance,
+): Promise<void> {
+  // GET-before-write so fieldDiffs.before reflects current Jira state. Acceptable
+  // extra HTTP per PRD — accurate diffs are worth the round trip.
+  let fieldDiffs: FieldDiff[] = [];
+  try {
+    const fieldsParam = ['summary', 'description', 'priority', 'duedate'].join(',');
+    const current = await jiraFetch(`/issue/${issueKey}?fields=${fieldsParam}`);
+    const before = {
+      title: current?.fields?.summary ?? null,
+      description: current?.fields?.description ? adfToText(current.fields.description) : null,
+      priority: current?.fields?.priority?.name ?? null,
+      dueDate: current?.fields?.duedate ?? null,
+    };
+    fieldDiffs = computeUpdateDiffs(before, {
+      title: updates.title,
+      description: updates.description,
+      priority: updates.priority,
+      dueDate: updates.dueDate,
+    });
+  } catch {
+    // If the pre-fetch fails, proceed without before-values. The audit entry still
+    // records what was attempted (after-values); before-values render as null.
+    fieldDiffs = Object.entries(updates)
+      .filter(([, v]) => v !== undefined)
+      .map(([field, after]) => ({ field, before: null, after }));
+  }
+
+  const logId = await recordWrite({
+    targetSystem: 'jira',
+    targetRecordId: issueKey,
+    targetRecordUrl: buildJiraIssueUrl(issueKey),
+    operation: 'update',
+    fieldDiffs,
+    provenance,
+    pushParams: { operation: 'update', args: { issueKey, updates: { ...updates } } },
+  });
+
   const fields: any = {};
   if (updates.title) fields.summary = updates.title;
   if (updates.description) fields.description = textToAdf(updates.description);
   if (updates.priority) fields.priority = { name: PRIORITY_TO_JIRA[updates.priority] || 'Medium' };
   if (updates.dueDate) fields.duedate = updates.dueDate.slice(0, 10);
 
-  await jiraFetch(`/issue/${issueKey}`, {
-    method: 'PUT',
-    body: JSON.stringify({ fields }),
-  });
-  log('info', 'jira:issue-updated', issueKey);
-}
-
-export async function transitionJiraIssue(issueKey: string, targetStatus: string): Promise<void> {
-  // Get available transitions
-  const data = await jiraFetch(`/issue/${issueKey}/transitions`);
-  const transitions = data.transitions || [];
-
-  const statusMap: Record<string, string[]> = {
-    completed: ['Done', 'Complete', 'Closed', 'Resolved'],
-    inProgress: ['In Progress', 'Start Progress', 'In Development'],
-    todo: ['To Do', 'Open', 'Backlog', 'Reopen'],
-  };
-
-  const targetNames = statusMap[targetStatus] || [];
-  const match = transitions.find((t: any) => targetNames.some(n => t.name.toLowerCase().includes(n.toLowerCase())));
-
-  if (match) {
-    await jiraFetch(`/issue/${issueKey}/transitions`, {
-      method: 'POST',
-      body: JSON.stringify({ transition: { id: match.id } }),
+  try {
+    await jiraFetch(`/issue/${issueKey}`, {
+      method: 'PUT',
+      body: JSON.stringify({ fields }),
     });
-    log('info', 'jira:issue-transitioned', `${issueKey} → ${match.name}`);
+    await markCompleted(logId, 'success');
+    log('info', 'jira:issue-updated', issueKey);
+  } catch (err: any) {
+    await markCompleted(logId, 'failed', err.message);
+    throw err;
   }
 }
 
-export async function addJiraComment(issueKey: string, comment: string, meetingTitle?: string): Promise<void> {
-  const prefix = meetingTitle ? `[Inwise] From "${meetingTitle}":\n\n` : '[Inwise]\n\n';
-  await jiraFetch(`/issue/${issueKey}/comment`, {
-    method: 'POST',
-    body: JSON.stringify({ body: textToAdf(prefix + comment) }),
+export async function transitionJiraIssue(
+  issueKey: string,
+  targetStatus: string,
+  provenance?: WriteProvenance,
+): Promise<void> {
+  // GET current status for the before-value, AND the transitions list (one GET
+  // for status, one for transitions — Jira's transitions endpoint doesn't
+  // include the issue's current status).
+  let currentStatusName: string | null = null;
+  try {
+    const current = await jiraFetch(`/issue/${issueKey}?fields=status`);
+    currentStatusName = current?.fields?.status?.name ?? null;
+  } catch {
+    currentStatusName = null;
+  }
+
+  const logId = await recordWrite({
+    targetSystem: 'jira',
+    targetRecordId: issueKey,
+    targetRecordUrl: buildJiraIssueUrl(issueKey),
+    operation: 'transition',
+    fieldDiffs: [{ field: 'status', before: currentStatusName, after: targetStatus }],
+    provenance,
+    pushParams: { operation: 'transition', args: { issueKey, targetStatus } },
   });
-  log('info', 'jira:comment-added', issueKey);
+
+  try {
+    const data = await jiraFetch(`/issue/${issueKey}/transitions`);
+    const transitions = data.transitions || [];
+
+    const statusMap: Record<string, string[]> = {
+      completed: ['Done', 'Complete', 'Closed', 'Resolved'],
+      inProgress: ['In Progress', 'Start Progress', 'In Development'],
+      todo: ['To Do', 'Open', 'Backlog', 'Reopen'],
+    };
+
+    const targetNames = statusMap[targetStatus] || [];
+    const match = transitions.find((t: any) =>
+      targetNames.some((n) => t.name.toLowerCase().includes(n.toLowerCase())),
+    );
+
+    if (match) {
+      await jiraFetch(`/issue/${issueKey}/transitions`, {
+        method: 'POST',
+        body: JSON.stringify({ transition: { id: match.id } }),
+      });
+      log('info', 'jira:issue-transitioned', `${issueKey} → ${match.name}`);
+      await markCompleted(logId, 'success');
+    } else {
+      const msg = `No matching Jira transition for status '${targetStatus}'`;
+      log('warn', 'jira:issue-transition-no-match', `${issueKey}: ${msg}`);
+      await markCompleted(logId, 'failed', msg);
+    }
+  } catch (err: any) {
+    await markCompleted(logId, 'failed', err.message);
+    throw err;
+  }
+}
+
+export async function addJiraComment(
+  issueKey: string,
+  comment: string,
+  meetingTitle?: string,
+  provenance?: WriteProvenance,
+): Promise<void> {
+  const prefix = meetingTitle ? `[Inwise] From "${meetingTitle}":\n\n` : '[Inwise]\n\n';
+  const body = prefix + comment;
+
+  const logId = await recordWrite({
+    targetSystem: 'jira',
+    targetRecordId: issueKey,
+    targetRecordUrl: buildJiraIssueUrl(issueKey),
+    operation: 'comment',
+    fieldDiffs: [],
+    commentBody: body,
+    provenance,
+    pushParams: { operation: 'comment', args: { issueKey, comment, meetingTitle } },
+  });
+
+  try {
+    await jiraFetch(`/issue/${issueKey}/comment`, {
+      method: 'POST',
+      body: JSON.stringify({ body: textToAdf(body) }),
+    });
+    await markCompleted(logId, 'success');
+    log('info', 'jira:comment-added', issueKey);
+  } catch (err: any) {
+    await markCompleted(logId, 'failed', err.message);
+    throw err;
+  }
+}
+
+function buildJiraIssueUrl(issueKey: string): string | null {
+  const config = getConfig();
+  const tokens = (config as any).jiraTokens as JiraTokens | null;
+  if (!tokens?.cloudUrl) return null;
+  return `${tokens.cloudUrl}/browse/${issueKey}`;
+}
+
+/**
+ * Dispatch raw Jira push using stored pushParams, then markCompleted on the
+ * existing sor-writes entry. Shared by `retryJiraWrite` (increments retryCount
+ * first) and `approveJiraWrite` (does NOT — approval is a first-time push, not
+ * a retry of a failed one).
+ *
+ * Returns `{ ok, error?, key?, url? }`. `key`/`url` are populated for `create`
+ * success so callers can patch the local task's source field.
+ */
+async function executeJiraPushParams(
+  id: string,
+  pushParams: PushParams,
+): Promise<{ ok: boolean; error?: string; key?: string; url?: string | null }> {
+  const p = pushParams;
+  try {
+    if (p.operation === 'create') {
+      const fields: any = {
+        project: { key: p.args.projectKey },
+        summary: p.args.title,
+        issuetype: { name: 'Task' },
+      };
+      if (p.args.description) fields.description = textToAdf(p.args.description);
+      if (p.args.priority) fields.priority = { name: PRIORITY_TO_JIRA[p.args.priority] || 'Medium' };
+      if (p.args.dueDate) fields.duedate = p.args.dueDate.slice(0, 10);
+      const data = await jiraFetch('/issue', { method: 'POST', body: JSON.stringify({ fields }) });
+      const key = data.key;
+      const url = buildJiraIssueUrl(key);
+      await markCompleted(id, 'success', undefined, { targetRecordId: key, targetRecordUrl: url });
+      return { ok: true, key, url };
+    } else if (p.operation === 'update') {
+      const fields: any = {};
+      if (p.args.updates.title) fields.summary = p.args.updates.title;
+      if (p.args.updates.description) fields.description = textToAdf(p.args.updates.description);
+      if (p.args.updates.priority) fields.priority = { name: PRIORITY_TO_JIRA[p.args.updates.priority] || 'Medium' };
+      if (p.args.updates.dueDate) fields.duedate = p.args.updates.dueDate.slice(0, 10);
+      await jiraFetch(`/issue/${p.args.issueKey}`, { method: 'PUT', body: JSON.stringify({ fields }) });
+      await markCompleted(id, 'success');
+      return { ok: true };
+    } else if (p.operation === 'transition') {
+      const data = await jiraFetch(`/issue/${p.args.issueKey}/transitions`);
+      const transitions = data.transitions || [];
+      const statusMap: Record<string, string[]> = {
+        completed: ['Done', 'Complete', 'Closed', 'Resolved'],
+        inProgress: ['In Progress', 'Start Progress', 'In Development'],
+        todo: ['To Do', 'Open', 'Backlog', 'Reopen'],
+      };
+      const targetNames = statusMap[p.args.targetStatus] || [];
+      const match = transitions.find((t: any) =>
+        targetNames.some((n) => t.name.toLowerCase().includes(n.toLowerCase())),
+      );
+      if (!match) {
+        await markCompleted(id, 'failed', `No matching Jira transition for status '${p.args.targetStatus}'`);
+        return { ok: false, error: 'No matching transition' };
+      }
+      await jiraFetch(`/issue/${p.args.issueKey}/transitions`, {
+        method: 'POST',
+        body: JSON.stringify({ transition: { id: match.id } }),
+      });
+      await markCompleted(id, 'success');
+      return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
+    } else if (p.operation === 'comment') {
+      const prefix = p.args.meetingTitle
+        ? `[Inwise] From "${p.args.meetingTitle}":\n\n`
+        : '[Inwise]\n\n';
+      await jiraFetch(`/issue/${p.args.issueKey}/comment`, {
+        method: 'POST',
+        body: JSON.stringify({ body: textToAdf(prefix + p.args.comment) }),
+      });
+      await markCompleted(id, 'success');
+      return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
+    }
+    return { ok: false, error: 'Unknown operation' };
+  } catch (err: any) {
+    await markCompleted(id, 'failed', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Re-run a previously-logged Jira write using its stashed pushParams.
+ * Updates the existing log entry — does NOT create a new one.
+ * Increments retryCount.
+ */
+export async function retryJiraWrite(id: string): Promise<{ ok: boolean; error?: string }> {
+  const entry = await getWriteEntry(id);
+  if (!entry) return { ok: false, error: 'Entry not found' };
+  if (entry.targetSystem !== 'jira') return { ok: false, error: `Cannot retry ${entry.targetSystem} writes from jira-client` };
+  if (!entry.pushParams) return { ok: false, error: 'No stored push params' };
+
+  await incrementRetry(id);
+  const { ok, error } = await executeJiraPushParams(id, entry.pushParams);
+  return ok ? { ok } : { ok, error };
+}
+
+/**
+ * Run a pending-approval Jira write. Dispatches the stashed pushParams (exactly
+ * what would have auto-pushed), does NOT increment retryCount (this is a
+ * first-time push, not a retry), and returns key/url so the caller can patch
+ * the linked local task's source field.
+ */
+export async function approveJiraWrite(
+  id: string,
+  pushParams: PushParams,
+): Promise<{ ok: boolean; error?: string; key?: string; url?: string | null }> {
+  return executeJiraPushParams(id, pushParams);
 }
 
 export function isJiraConnected(): boolean {

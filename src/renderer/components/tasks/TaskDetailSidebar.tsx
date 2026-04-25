@@ -5,8 +5,8 @@ import {
   Button, Input, Textarea, Select, Progress, IconButton,
   useColorModeValue, useToast
 } from '@chakra-ui/react';
-import { WarningIcon, CheckIcon, CloseIcon, EditIcon } from '@chakra-ui/icons';
-import { MdUpdate, MdChat, MdPeople, MdAccountTree, MdVideoCall, MdChat as MdSlack, MdEmail, MdTask } from 'react-icons/md';
+import { WarningIcon, CheckIcon, CloseIcon, EditIcon, ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, RepeatIcon } from '@chakra-ui/icons';
+import { MdUpdate, MdChat, MdPeople, MdAccountTree, MdVideoCall, MdChat as MdSlack, MdEmail, MdTask, MdSync } from 'react-icons/md';
 import { FiGitPullRequest } from 'react-icons/fi';
 import { api } from '../../api';
 import { SELECT_PROPS, AiSuggestionBanner } from '../modal/FlowModalShell';
@@ -292,6 +292,356 @@ function MetaRow({ label, children }: { label: string; children: React.ReactNode
       <Text fontSize="sm" color={labelColor} flexShrink={0} mr={4}>{label}</Text>
       <Box>{children}</Box>
     </Flex>
+  );
+}
+
+// ── SoR sync history (US-004) ─────────────────────────────────────────────
+
+type SorOp = 'create' | 'update' | 'transition' | 'comment';
+type SorResult = 'pending' | 'success' | 'failed' | 'pending-approval' | 'retrying';
+type SorSystem = 'jira';
+
+interface SorFieldDiff { field: string; before: any; after: any }
+interface SorSpan { start: number; end: number; snippet: string }
+
+interface SorWriteEntry {
+  _id: string;
+  targetSystem: SorSystem;
+  targetRecordId: string;
+  targetRecordUrl: string | null;
+  operation: SorOp;
+  fieldDiffs: SorFieldDiff[];
+  commentBody: string | null;
+  sourceMeetingId: string | null;
+  sourceTranscriptSpan: SorSpan | null;
+  linkedTaskId: string | null;
+  confidence: number | null;
+  approvalPath: 'auto' | 'user' | 'opt-in-gated';
+  result: SorResult;
+  errorMessage: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  retryCount: number;
+}
+
+const SOR_OP_META: Record<SorOp, { label: string; color: string }> = {
+  create:     { label: 'Created',      color: 'green'  },
+  update:     { label: 'Updated',      color: 'blue'   },
+  transition: { label: 'Transitioned', color: 'purple' },
+  comment:    { label: 'Commented',    color: 'gray'   },
+};
+
+function sorOneLineSummary(entry: SorWriteEntry): string {
+  if (entry.operation === 'create') return 'New issue created';
+  if (entry.operation === 'comment') return 'Comment added';
+  if (entry.operation === 'transition') {
+    const d = entry.fieldDiffs.find(f => f.field === 'status');
+    if (d) return `Status: ${d.before ?? '—'} → ${d.after ?? '—'}`;
+    return 'Status transition';
+  }
+  const n = entry.fieldDiffs.length;
+  if (n === 0) return 'No field changes';
+  if (n === 1) return `${entry.fieldDiffs[0].field} changed`;
+  return `+${n} fields`;
+}
+
+const SYNC_HISTORY_PAGE_SIZE = 50;
+
+function SyncHistory({ taskId }: { taskId: string }) {
+  const [entries, setEntries] = useState<SorWriteEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const toast = useToast();
+  const labelColor = useColorModeValue('gray.500', 'gray.400');
+
+  const load = async () => {
+    try {
+      const rows = await api.sorListByTaskId(taskId);
+      setEntries(Array.isArray(rows) ? (rows as SorWriteEntry[]) : []);
+    } catch {
+      setEntries([]);
+    } finally {
+      setLoaded(true);
+    }
+  };
+
+  useEffect(() => {
+    setLoaded(false);
+    setExpandedId(null);
+    setShowAll(false);
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId]);
+
+  // Live-refresh: re-query when a write completes for this task.
+  useEffect(() => {
+    const onWriteCompleted = (entry: SorWriteEntry) => {
+      if (entry?.linkedTaskId === taskId) load();
+    };
+    api.on('sor:write-completed', onWriteCompleted);
+    return () => { api.off('sor:write-completed', onWriteCompleted); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId]);
+
+  const retryOne = async (id: string) => {
+    setRetryingId(id);
+    try {
+      await api.sorRetry(id);
+    } catch (err: any) {
+      toast({
+        title: 'Retry failed',
+        description: err?.message || 'Unknown error',
+        status: 'error',
+        duration: 3000,
+      });
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
+  if (!loaded) {
+    return (
+      <Section label="Sync history" icon={MdSync}>
+        <Flex justify="center" py={4}><Spinner size="sm" /></Flex>
+      </Section>
+    );
+  }
+
+  if (entries.length === 0) {
+    return (
+      <Section label="Sync history" icon={MdSync}>
+        <Text fontSize="13px" color={labelColor}>
+          No Jira sync yet. Auto-push runs when this task is updated or after the next meeting referencing it.
+        </Text>
+      </Section>
+    );
+  }
+
+  // Derive header info from the most recent entry with a real targetRecordId.
+  const mostRecent = entries[0];
+  const keyedEntry = entries.find(e => e.targetRecordId && e.targetRecordId !== '(pending-create)') || mostRecent;
+  const jiraKey = keyedEntry.targetRecordId && keyedEntry.targetRecordId !== '(pending-create)'
+    ? keyedEntry.targetRecordId
+    : null;
+  const jiraUrl = keyedEntry.targetRecordUrl || null;
+  const lastWriteAt = mostRecent.createdAt;
+
+  const visibleEntries = showAll ? entries : entries.slice(0, SYNC_HISTORY_PAGE_SIZE);
+  const hasMore = entries.length > SYNC_HISTORY_PAGE_SIZE;
+
+  return (
+    <Section label="Sync history" icon={MdSync}>
+      {/* Header row: Jira key + last write + total count */}
+      <HStack spacing={2} flexWrap="wrap" mb={3} fontSize="13px" color={labelColor}>
+        <Text as="span">Synced to</Text>
+        {jiraKey ? (
+          <Box
+            as="button"
+            onClick={() => { if (jiraUrl) api.openExternal(jiraUrl); }}
+            color="#1a7080"
+            fontWeight="600"
+            cursor={jiraUrl ? 'pointer' : 'default'}
+            _hover={{ textDecoration: jiraUrl ? 'underline' : 'none' }}
+          >
+            {jiraKey}
+            {jiraUrl && <ExternalLinkIcon boxSize="10px" ml={1} mb="2px" />}
+          </Box>
+        ) : (
+          <Text as="span" color={labelColor}>Jira</Text>
+        )}
+        <Text as="span" color={labelColor}>·</Text>
+        <Text as="span">last write {formatRelativeTime(lastWriteAt)}</Text>
+        <Text as="span" color={labelColor}>·</Text>
+        <Text as="span">{entries.length} {entries.length === 1 ? 'write' : 'writes'} total</Text>
+      </HStack>
+
+      <VStack align="stretch" spacing={2}>
+        {visibleEntries.map(entry => {
+          const meta = SOR_OP_META[entry.operation];
+          const isExpanded = expandedId === entry._id;
+          const isFailed = entry.result === 'failed';
+          const isPending = entry.result === 'pending' || entry.result === 'retrying' || entry.result === 'pending-approval';
+
+          return (
+            <Box
+              key={entry._id}
+              p={3}
+              borderRadius="8px"
+              border="1px solid"
+              borderColor={isFailed ? 'red.200' : 'gray.200'}
+              bg={isFailed ? 'red.50' : 'white'}
+            >
+              <HStack spacing={3} align="flex-start">
+                <Box
+                  as="button"
+                  onClick={() => setExpandedId(isExpanded ? null : entry._id)}
+                  color="gray.400"
+                  cursor="pointer"
+                  lineHeight={0}
+                  mt="2px"
+                  _hover={{ color: 'gray.600' }}
+                  aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                >
+                  {isExpanded ? <ChevronDownIcon boxSize="16px" /> : <ChevronRightIcon boxSize="16px" />}
+                </Box>
+
+                <VStack align="stretch" spacing={1} flex={1} minW={0}>
+                  <HStack spacing={2} flexWrap="wrap">
+                    <Badge colorScheme={meta.color} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                      {meta.label}
+                    </Badge>
+                    {entry.targetRecordId && entry.targetRecordId !== '(pending-create)' && (
+                      <Box
+                        as="button"
+                        onClick={(e: any) => {
+                          e.stopPropagation();
+                          if (entry.targetRecordUrl) api.openExternal(entry.targetRecordUrl);
+                        }}
+                        color="#1a7080"
+                        fontSize="12px"
+                        fontWeight="600"
+                        cursor={entry.targetRecordUrl ? 'pointer' : 'default'}
+                        _hover={{ textDecoration: entry.targetRecordUrl ? 'underline' : 'none' }}
+                      >
+                        {entry.targetRecordId}
+                        {entry.targetRecordUrl && <ExternalLinkIcon boxSize="10px" ml={1} mb="2px" />}
+                      </Box>
+                    )}
+                    {isFailed && (
+                      <Badge colorScheme="red" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                        Failed
+                      </Badge>
+                    )}
+                    {isPending && (
+                      <Badge colorScheme="yellow" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                        {entry.result === 'pending-approval' ? 'Pending approval' : 'In progress'}
+                      </Badge>
+                    )}
+                    <Text fontSize="10px" color="gray.400">{formatRelativeTime(entry.createdAt)}</Text>
+                    {entry.retryCount > 0 && (
+                      <Text fontSize="10px" color="gray.400">retry #{entry.retryCount}</Text>
+                    )}
+                  </HStack>
+
+                  <Text fontSize="13px" color="gray.700" noOfLines={isExpanded ? undefined : 1}>
+                    {sorOneLineSummary(entry)}
+                  </Text>
+
+                  {isFailed && entry.errorMessage && !isExpanded && (
+                    <Text fontSize="11px" color="red.600" noOfLines={1}>{entry.errorMessage}</Text>
+                  )}
+
+                  {isExpanded && (
+                    <VStack align="stretch" spacing={2} mt={2} pt={2} borderTop="1px solid" borderColor="gray.100">
+                      {entry.operation === 'comment' && entry.commentBody && (
+                        <Box
+                          bg="gray.50"
+                          borderRadius="6px"
+                          p={2}
+                          fontSize="12px"
+                          color="gray.700"
+                          whiteSpace="pre-wrap"
+                        >
+                          {entry.commentBody}
+                        </Box>
+                      )}
+
+                      {entry.operation !== 'comment' && entry.fieldDiffs.length > 0 && (
+                        <Box fontSize="12px">
+                          <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                            Field changes
+                          </Text>
+                          <VStack align="stretch" spacing={1}>
+                            {entry.fieldDiffs.map((d, i) => (
+                              <HStack key={i} spacing={2} align="flex-start">
+                                <Text color="gray.500" minW="80px" fontWeight="500">{d.field}</Text>
+                                <HStack spacing={1} flex={1} flexWrap="wrap">
+                                  <Text color="gray.500" textDecoration={entry.operation === 'create' ? 'none' : 'line-through'}>
+                                    {d.before === null || d.before === undefined ? '—' : String(d.before)}
+                                  </Text>
+                                  <Text color="gray.400">→</Text>
+                                  <Text color="gray.800">
+                                    {d.after === null || d.after === undefined ? '—' : String(d.after)}
+                                  </Text>
+                                </HStack>
+                              </HStack>
+                            ))}
+                          </VStack>
+                        </Box>
+                      )}
+
+                      {entry.sourceTranscriptSpan?.snippet && (
+                        <Box>
+                          <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                            From transcript
+                          </Text>
+                          <Box
+                            borderLeft="3px solid"
+                            borderLeftColor="#9dd4d9"
+                            bg="#f0fafa"
+                            pl={3}
+                            py={2}
+                            borderRadius="0 6px 6px 0"
+                            fontSize="12px"
+                            color="gray.700"
+                            fontStyle="italic"
+                          >
+                            "{entry.sourceTranscriptSpan.snippet}"
+                          </Box>
+                        </Box>
+                      )}
+
+                      {isFailed && entry.errorMessage && (
+                        <Box
+                          bg="red.50"
+                          border="1px solid"
+                          borderColor="red.200"
+                          borderRadius="6px"
+                          p={2}
+                          fontSize="12px"
+                          color="red.700"
+                        >
+                          {entry.errorMessage}
+                        </Box>
+                      )}
+                    </VStack>
+                  )}
+                </VStack>
+
+                {isFailed && (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    colorScheme="red"
+                    leftIcon={<RepeatIcon />}
+                    onClick={() => retryOne(entry._id)}
+                    isLoading={retryingId === entry._id}
+                    flexShrink={0}
+                  >
+                    Retry
+                  </Button>
+                )}
+              </HStack>
+            </Box>
+          );
+        })}
+      </VStack>
+
+      {hasMore && !showAll && (
+        <Text
+          fontSize="12px"
+          color="#1a7080"
+          mt={3}
+          cursor="pointer"
+          onClick={() => setShowAll(true)}
+          _hover={{ textDecoration: 'underline' }}
+        >
+          Show older ({entries.length - SYNC_HISTORY_PAGE_SIZE} more)
+        </Text>
+      )}
+    </Section>
   );
 }
 
@@ -691,6 +1041,9 @@ export default function TaskDetailSidebar({
                   </VStack>
                 </Section>
               )}
+
+              {/* ── SoR sync history (US-004) ── */}
+              <SyncHistory taskId={task._id} />
 
             </VStack>
           )}

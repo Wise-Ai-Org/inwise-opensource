@@ -92,9 +92,17 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     OUTPUT=$(cat "$SCRIPT_DIR/prompt.md" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
   else
     # Claude Code: use --dangerously-skip-permissions for autonomous operation, --print for output
-    OUTPUT=$(claude --dangerously-skip-permissions --print < "$SCRIPT_DIR/CLAUDE.md" 2>&1 | tee /dev/stderr) || true
+    OUTPUT=$(claude --dangerously-skip-permissions --print --model claude-sonnet-4-6 < "$SCRIPT_DIR/CLAUDE.md" 2>&1 | tee /dev/stderr) || true
   fi
   
+  # Fail-fast on fatal API/auth errors so we don't burn N iterations against a dead endpoint
+  if echo "$OUTPUT" | grep -qE "monthly usage limit|rate limit exceeded|invalid api key|Unauthorized|Forbidden"; then
+    echo ""
+    echo "Aborting: fatal API/auth error detected in iteration $i output."
+    echo "Likely cause: spend cap, rate limit, or invalid credentials. Fix and re-run."
+    exit 2
+  fi
+
   # Check for completion signal
   if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
     echo ""
@@ -102,7 +110,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     echo "Completed at iteration $i of $MAX_ITERATIONS"
     exit 0
   fi
-  
+
   echo "Iteration $i complete. Continuing..."
   sleep 2
 done

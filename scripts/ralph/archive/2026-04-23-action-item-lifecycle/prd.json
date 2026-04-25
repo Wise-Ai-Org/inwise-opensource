@@ -1,7 +1,7 @@
 {
   "project": "inwise-opensource",
   "branchName": "ralph/sor-transparency",
-  "description": "Add a durable local audit log of every system-of-record write (Jira-only today, schema extensible to Salesforce/HubSpot/Linear) plus four user-facing surfaces over it: per-meeting 'what this meeting wrote' trace, Settings \u00e2\u2020\u2019 Integrations status block, per-entity sync history side panel, and Inbox receipts feed. Plus an opt-in approval gate that lets cautious users require approval for low-confidence writes while keeping auto-push as the default.",
+  "description": "Add a durable local audit log of every system-of-record write (Jira-only today, schema extensible to Salesforce/HubSpot/Linear) plus four user-facing surfaces over it: per-meeting 'what this meeting wrote' trace, Settings → Integrations status block, per-entity sync history side panel, and Inbox receipts feed. Plus an opt-in approval gate that lets cautious users require approval for low-confidence writes while keeping auto-push as the default.",
   "userStories": [
     {
       "id": "US-001",
@@ -18,55 +18,55 @@
         "Push functions take an optional provenance parameter so future callers can supply or omit context cleanly",
         "Add IPC handlers: sor:listRecent, sor:listByMeeting, sor:listByTaskId, sor:listByTargetRecord, sor:aggregateByIntegration, sor:retry (re-runs original push using stored params, increments retryCount)",
         "Emit sor:write-completed IPC on every markCompleted so renderers can refresh live",
-        "On app startup, scan for entries stuck in 'pending-approval' or 'retrying' older than 24 hours; surface a one-time notification 'N Jira writes were interrupted. Open Settings \u00e2\u2020\u2019 Integrations to retry.'",
+        "On app startup, scan for entries stuck in 'pending-approval' or 'retrying' older than 24 hours; surface a one-time notification 'N Jira writes were interrupted. Open Settings → Integrations to retry.'",
         "Typecheck passes",
-        "Tests pass: unit tests for recordWrite \u00e2\u2020\u2019 markCompleted lifecycle; fieldDiffs computed correctly for update vs create vs comment; aggregate query returns correct totals; retry increments retryCount and re-runs"
+        "Tests pass: unit tests for recordWrite → markCompleted lifecycle; fieldDiffs computed correctly for update vs create vs comment; aggregate query returns correct totals; retry increments retryCount and re-runs"
       ],
       "priority": 1,
-      "passes": true,
-      "notes": "Foundation story. All other stories depend on this. The fieldDiffs GET-before-write pattern is the only non-trivial design call \u00e2\u20ac\u201d accept the extra HTTP cost in exchange for accurate diffs."
+      "passes": false,
+      "notes": "Foundation story. All other stories depend on this. The fieldDiffs GET-before-write pattern is the only non-trivial design call — accept the extra HTTP cost in exchange for accurate diffs."
     },
     {
       "id": "US-002",
       "title": "Per-meeting 'what this meeting wrote' trace",
-      "description": "As a user, when a meeting wraps and Inwise pushes things to Jira, I want to immediately see what got pushed \u00e2\u20ac\u201d both as a desktop notification and persistently on the meeting's detail view.",
+      "description": "As a user, when a meeting wraps and Inwise pushes things to Jira, I want to immediately see what got pushed — both as a desktop notification and persistently on the meeting's detail view.",
       "acceptanceCriteria": [
         "After the after-meeting auto-push pipeline (src/main/main.ts:390) completes, query sor-writes.db for entries with sourceMeetingId === thisMeeting.id",
         "Desktop Notification (replaces the current generic auto-synced event): 'Meeting {title}: {N} updates pushed to Jira.' or '{N} pushed, {M} failed' if failures exist. Action button [See details] opens main window to the meeting detail view scrolled to the new section",
-        "In src/renderer/views/communications/TranscriptReviewModal.tsx (or the canonical post-meeting view \u00e2\u20ac\u201d verify and use the right one), add a 'What this meeting wrote' section. Group by targetSystem (today: Jira only, but render the grouping)",
-        "Each row: operation badge (Created/Updated/Transitioned/Commented) + Jira key (clickable, opens targetRecordUrl via shell.openExternal) + one-line summary ('Status: Demo \u00e2\u2020\u2019 Proposal' for transition; '+2 fields' for update; 'Comment added' for comment; 'New issue created' for create)",
+        "In src/renderer/views/communications/TranscriptReviewModal.tsx (or the canonical post-meeting view — verify and use the right one), add a 'What this meeting wrote' section. Group by targetSystem (today: Jira only, but render the grouping)",
+        "Each row: operation badge (Created/Updated/Transitioned/Commented) + Jira key (clickable, opens targetRecordUrl via shell.openExternal) + one-line summary ('Status: Demo → Proposal' for transition; '+2 fields' for update; 'Comment added' for comment; 'New issue created' for create)",
         "Click a row to expand: full fieldDiffs table OR comment body; the source transcript snippet shown as a quote with timestamp",
         "Failed writes shown with red badge + error message + [Retry] button (calls sor:retry)",
-        "Use existing tasks/communications styling \u00e2\u20ac\u201d no new design system. Match JiraMappingModal.tsx patterns where applicable",
-        "If sor-writes.db returns zero entries for this meeting, the section is hidden \u00e2\u20ac\u201d don't render an empty state",
+        "Use existing tasks/communications styling — no new design system. Match JiraMappingModal.tsx patterns where applicable",
+        "If sor-writes.db returns zero entries for this meeting, the section is hidden — don't render an empty state",
         "Listen for sor:write-completed IPC in renderer to refresh the section live (e.g., a retry succeeds while the user is looking at the meeting)",
         "Typecheck passes",
         "Browser-verify with dev-browser skill: simulate a meeting that produces 3 Jira pushes (2 success, 1 failure); confirm notification with correct counts; open meeting detail; confirm section renders 3 rows with correct grouping; expand a row; click a Jira key; click [Retry] on the failed one and confirm it re-runs"
       ],
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "notes": "The hero moment. This is the surface that lands the value prop visibly."
     },
     {
       "id": "US-003",
-      "title": "Settings \u00e2\u2020\u2019 Integrations status block",
+      "title": "Settings → Integrations status block",
       "description": "As a user, I want a small block in Settings that tells me at a glance: is each integration connected, when did it last write, how many writes this month, how many failed.",
       "acceptanceCriteria": [
         "In src/renderer/Settings.tsx, add a new 'Integrations' section (or extend existing Jira section). Per-integration card:",
         "Header: integration name + connection status pill (Connected / Disconnected / Auth expired)",
-        "Counts row (computed via sor:aggregateByIntegration for the last 30 days): '{success} writes \u00c2\u00b7 {failed} failed \u00c2\u00b7 last write {relative time}'. If no writes yet: 'No writes yet.'",
-        "Recent activity (collapsible, default collapsed): last 10 entries from sor:listRecent filtered to this integration. Same row format as US-002. Click \u00e2\u2020\u2019 opens the meeting detail (if sourceMeetingId present) or the SoR record",
-        "Action row: [Retry failed (N)] button (enabled only when N > 0) \u00e2\u20ac\u201d bulk-retries all result:'failed' writes for this integration in the last 30 days. [Disconnect] button (existing functionality)",
+        "Counts row (computed via sor:aggregateByIntegration for the last 30 days): '{success} writes · {failed} failed · last write {relative time}'. If no writes yet: 'No writes yet.'",
+        "Recent activity (collapsible, default collapsed): last 10 entries from sor:listRecent filtered to this integration. Same row format as US-002. Click → opens the meeting detail (if sourceMeetingId present) or the SoR record",
+        "Action row: [Retry failed (N)] button (enabled only when N > 0) — bulk-retries all result:'failed' writes for this integration in the last 30 days. [Disconnect] button (existing functionality)",
         "Today: only the Jira card renders. Layout reusable so future SoRs add a card without restructuring",
         "Connection status comes from existing jira:status IPC. Counts come from sor:aggregateByIntegration({sinceMs: 30d ago})",
         "Live-refresh: re-query on sor:write-completed IPC",
-        "No charts, no graphs, no per-day breakdowns \u00e2\u20ac\u201d just numbers + recent-activity list",
+        "No charts, no graphs, no per-day breakdowns — just numbers + recent-activity list",
         "Typecheck passes",
-        "Browser-verify: connect Jira; confirm card shows 'Connected \u00c2\u00b7 No writes yet'; trigger a meeting with pushes; confirm counts update; force-fail one push (e.g., disconnect mid-write); confirm [Retry failed (1)] enables and works"
+        "Browser-verify: connect Jira; confirm card shows 'Connected · No writes yet'; trigger a meeting with pushes; confirm counts update; force-fail one push (e.g., disconnect mid-write); confirm [Retry failed (1)] enables and works"
       ],
       "priority": 3,
-      "passes": true,
-      "notes": "Trimmed from the originally-discussed 'integrations health dashboard' \u00e2\u20ac\u201d solo OSS user does not need 30-day trend charts."
+      "passes": false,
+      "notes": "Trimmed from the originally-discussed 'integrations health dashboard' — solo OSS user does not need 30-day trend charts."
     },
     {
       "id": "US-004",
@@ -74,7 +74,7 @@
       "description": "As a user, when I'm looking at a Task in Inwise that's linked to a Jira issue, I want to see the full timeline of what Inwise has written to that Jira issue, with field-level diffs.",
       "acceptanceCriteria": [
         "In src/renderer/components/tasks/TaskDetailSidebar.tsx (verify path; this is the canonical task detail view), add a 'Sync history' panel below existing detail content",
-        "Header row: 'Synced to {Jira key} \u00c2\u00b7 last write {relative time} \u00c2\u00b7 {N} writes total' + clickable Jira key (opens targetRecordUrl)",
+        "Header row: 'Synced to {Jira key} · last write {relative time} · {N} writes total' + clickable Jira key (opens targetRecordUrl)",
         "Timeline: reverse-chronological list of all sor-writes.db entries where linkedTaskId === task.id. Same row format as US-002",
         "Each row expandable to show full fieldDiffs / comment / source transcript snippet",
         "Failed entries get the [Retry] button",
@@ -85,7 +85,7 @@
         "Browser-verify: open a task that has Jira writes; confirm timeline renders correctly; expand a row; click Jira key; trigger a new write while panel is open; confirm it appears live"
       ],
       "priority": 4,
-      "passes": true,
+      "passes": false,
       "notes": "Lower-frequency but high-trust surface. Cheap to build once US-001 exists."
     },
     {
@@ -96,7 +96,7 @@
         "Verify which file is the Inbox view today (likely a section in src/renderer/Communications.tsx or MyTasks.tsx, or to-be-built unified Inbox from 7-page unification). Use the canonical Inbox surface that exists today; if Inbox doesn't exist as a discrete page yet, add the receipts feed as a section in Communications.tsx and note this for future unification work",
         "Add a 'Recent sync activity' section. Renders the last 25 entries from sor:listRecent({limit:25, sinceMs: 7d ago})",
         "Row format mirrors US-002 / US-003: operation badge, target record, one-line summary, relative timestamp",
-        "Each row dismissible (small \u00e2\u0153\u2022 that hides it locally \u00e2\u20ac\u201d track dismissed ids in NeDB key-value or in config.json as sor.dismissedReceiptIds:string[]; new writes that arrive after the dismissed-list timestamp re-appear naturally as a side effect of being newer)",
+        "Each row dismissible (small ✕ that hides it locally — track dismissed ids in NeDB key-value or in config.json as sor.dismissedReceiptIds:string[]; new writes that arrive after the dismissed-list timestamp re-appear naturally as a side effect of being newer)",
         "'Clear all' button at the section header dismisses everything currently visible",
         "Failed writes shown with [Retry] affordance",
         "Live-refresh on sor:write-completed",
@@ -104,28 +104,28 @@
         "Browser-verify: trigger several pushes; confirm receipts appear in Inbox; dismiss one; confirm it disappears; trigger a new push; confirm it shows; click 'Clear all' and confirm"
       ],
       "priority": 5,
-      "passes": true,
-      "notes": "Passive feed. Read-only. Receipts only \u00e2\u20ac\u201d not approvals (those are US-006)."
+      "passes": false,
+      "notes": "Passive feed. Read-only. Receipts only — not approvals (those are US-006)."
     },
     {
       "id": "US-006",
       "title": "Opt-in approval gate with confidence threshold",
       "description": "As a cautious user, I want to require my approval before low-confidence Jira writes happen, so I keep auto-push on for the obvious wins but get a chance to review the risky ones.",
       "acceptanceCriteria": [
-        "Add config in Settings \u00e2\u2020\u2019 Integrations Jira card: toggle 'Require my approval for low-confidence writes' (default: off); threshold slider (visible only when toggle is on) 'Approve writes when confidence is below ___%' (default 60). Stored in config.json as sor.jira.approvalThreshold (0..1)",
+        "Add config in Settings → Integrations Jira card: toggle 'Require my approval for low-confidence writes' (default: off); threshold slider (visible only when toggle is on) 'Approve writes when confidence is below ___%' (default 60). Stored in config.json as sor.jira.approvalThreshold (0..1)",
         "Helper text under the toggle: 'When on, low-confidence writes wait in your Inbox for approval instead of pushing automatically.'",
         "In after-meeting auto-push pipeline (src/main/main.ts:390): for each intended push, before calling the push function, check: if toggle is on AND confidence is available AND confidence < threshold, then DON'T call the push. Instead call recordWrite(...) with result:'pending-approval', approvalPath:'opt-in-gated', and stash the full push parameters in a new collection sor-pending-approvals.db keyed to the sor-writes.db entry id",
         "Otherwise, push as today (auto path)",
         "New IPCs: sor:listPendingApprovals (returns entries with result:'pending-approval' joined with stashed payloads); sor:approve(id) (looks up stashed payload, calls appropriate push function with approvalPath:'user' provenance, removes from sor-pending-approvals.db, updates original entry's result); sor:reject(id) (marks entry as result:'failed' with errorMessage:'User rejected', removes from pending)",
         "New 'Pending approvals' section at top of Inbox (US-005), separate from receipts feed. One card per pending entry showing: target record + operation + proposed fieldDiffs or comment + source transcript snippet that triggered it + confidence value if available",
         "Buttons per pending card: [Approve], [Edit & Approve], [Reject]. [Edit & Approve] opens an inline editor on the proposed fields/comment; on save, calls sor:approve with the edited payload (extends sor:approve to take optional override)",
-        "Confidence source: if existing extractor returns a confidence value, use it; if not, treat all writes as having confidence:undefined and NEVER gate them (toggle effectively does nothing until extractor produces confidence). Document this clearly in helper text: 'Approval gate requires the extractor to provide confidence scores. Currently active for: {list of operation types that have confidence; if none, \"No operations support confidence yet \u00e2\u20ac\u201d toggle has no effect.\"}'",
+        "Confidence source: if existing extractor returns a confidence value, use it; if not, treat all writes as having confidence:undefined and NEVER gate them (toggle effectively does nothing until extractor produces confidence). Document this clearly in helper text: 'Approval gate requires the extractor to provide confidence scores. Currently active for: {list of operation types that have confidence; if none, \"No operations support confidence yet — toggle has no effect.\"}'",
         "Pending approvals never expire on their own (user must explicitly approve or reject); show 'Pending {N} days' in the row",
         "Typecheck passes",
         "Browser-verify: turn toggle on; set threshold to 50%; simulate a meeting that produces a push with confidence 0.4; confirm push does NOT go through and a pending entry appears in Inbox; click [Approve]; confirm push runs and entry moves to receipts; turn toggle off; simulate another low-confidence push; confirm it auto-pushes as before"
       ],
       "priority": 6,
-      "passes": true,
+      "passes": false,
       "notes": "Last because it changes existing auto-push behavior. Opt-in only. If the existing extractor doesn't produce confidence, the toggle is harmless and waits for that capability."
     }
   ]

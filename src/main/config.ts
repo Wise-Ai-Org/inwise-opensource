@@ -11,6 +11,20 @@ export interface CalendarSubscription {
   enabled: boolean;
 }
 
+export interface SorJiraPrefs {
+  /** When true, writes with confidence < approvalThreshold wait for user approval instead of auto-pushing. */
+  approvalGateEnabled: boolean;
+  /** 0..1. Writes strictly below this confidence are gated. Ignored when approvalGateEnabled is false or confidence is undefined. */
+  approvalThreshold: number;
+}
+
+export interface SorPrefs {
+  /** IDs of sor-writes entries the user has dismissed from the Inbox receipts feed (US-005). */
+  dismissedReceiptIds: string[];
+  /** Per-system approval-gate settings (US-006). */
+  jira: SorJiraPrefs;
+}
+
 interface Config {
   apiProvider: 'anthropic' | 'openai';
   apiKey: string;
@@ -32,6 +46,7 @@ interface Config {
   jiraDefaultProject: string;
   lastOpenedAt: string | null;
   welcomeBackLastSeenAt: string | null;
+  sor: SorPrefs;
 }
 
 const store = new Store<Config>({
@@ -54,11 +69,30 @@ const store = new Store<Config>({
     jiraDefaultProject: '',
     lastOpenedAt: null,
     welcomeBackLastSeenAt: null,
+    sor: {
+      dismissedReceiptIds: [],
+      jira: { approvalGateEnabled: false, approvalThreshold: 0.6 },
+    },
   },
 });
 
 export function getConfig(): Config {
   return store.store;
+}
+
+/**
+ * Safe accessor for SoR Jira prefs. electron-store only applies top-level
+ * defaults on first install, so users who first ran the app before the `jira`
+ * sub-object existed will have `sor: { dismissedReceiptIds: [] }` without
+ * `sor.jira`. Return sensible defaults instead of `undefined`.
+ */
+export function getSorJiraPrefs(): SorJiraPrefs {
+  const sor = store.get('sor') as SorPrefs | undefined;
+  const jira = sor?.jira;
+  return {
+    approvalGateEnabled: jira?.approvalGateEnabled ?? false,
+    approvalThreshold: typeof jira?.approvalThreshold === 'number' ? jira.approvalThreshold : 0.6,
+  };
 }
 
 export function setConfig(updates: Partial<Config>): void {

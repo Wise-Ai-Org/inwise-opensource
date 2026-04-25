@@ -84,6 +84,22 @@ export const api = {
     inwiseAPI.jiraLinkTask(taskId, jiraKey, jiraUrl),
   jiraMatchTasks: (items: any[], projectKey?: string) => inwiseAPI.jiraMatchTasks(items, projectKey),
 
+  // ── SoR audit log (US-001, US-002) ───────────────────────────────────────
+  sorListRecent: (limit?: number, sinceMs?: number) => inwiseAPI.sorListRecent(limit, sinceMs),
+  sorListByMeeting: (meetingId: string) => inwiseAPI.sorListByMeeting(meetingId),
+  sorListByTaskId: (taskId: string) => inwiseAPI.sorListByTaskId(taskId),
+  sorListByTargetRecord: (system: string, recordId: string) =>
+    inwiseAPI.sorListByTargetRecord(system, recordId),
+  sorAggregateByIntegration: (sinceMs?: number) => inwiseAPI.sorAggregateByIntegration(sinceMs),
+  sorListFailed: (system: string, sinceMs: number) => inwiseAPI.sorListFailed(system, sinceMs),
+  sorRetry: (id: string) => inwiseAPI.sorRetry(id),
+  sorRetryFailed: (system: string, sinceMs: number) => inwiseAPI.sorRetryFailed(system, sinceMs),
+
+  // ── SoR approval gate (US-006) ───────────────────────────────────────────
+  sorListPendingApprovals: () => inwiseAPI.sorListPendingApprovals(),
+  sorApprove: (id: string, overrides?: Record<string, any>) => inwiseAPI.sorApprove(id, overrides),
+  sorReject: (id: string) => inwiseAPI.sorReject(id),
+
   // ── Desktop Capture ──────────────────────────────────────────────────────
   getDesktopSourceId: () => inwiseAPI.getDesktopSourceId(),
 

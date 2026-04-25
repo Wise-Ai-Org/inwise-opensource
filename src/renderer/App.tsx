@@ -51,6 +51,10 @@ export default function App() {
   const [liveMeeting, setLiveMeeting] = useState<LiveMeetingInfo | null>(null);
   const [liveMeetingSuppressesWelcomeBack, setLiveMeetingSuppressesWelcomeBack] = useState(false);
   const dismissedLiveMeetingIds = useRef<Set<string>>(new Set());
+  const [pendingMeetingOpen, setPendingMeetingOpen] = useState<
+    | { meetingId: string; focusTab?: string }
+    | null
+  >(null);
 
   useEffect(() => {
     const api = (window as any).inwiseAPI;
@@ -94,11 +98,18 @@ export default function App() {
       setConflict(payload);
     };
     const onResolved = () => setConflict(null);
+    const onOpenDetails = (payload: { meetingId: string; focusTab?: string }) => {
+      if (!payload?.meetingId) return;
+      setView('communications');
+      setPendingMeetingOpen({ meetingId: payload.meetingId, focusTab: payload.focusTab });
+    };
     api.on('meeting:conflict', onConflict);
     api.on('meeting:conflict:resolved', onResolved);
+    api.on('meeting:open-details', onOpenDetails);
     return () => {
       api.off?.('meeting:conflict', onConflict);
       api.off?.('meeting:conflict:resolved', onResolved);
+      api.off?.('meeting:open-details', onOpenDetails);
     };
   }, []);
 
@@ -144,7 +155,12 @@ export default function App() {
           />
         )}
         <ErrorBoundary>
-          {view === 'communications' && <Communications />}
+          {view === 'communications' && (
+            <Communications
+              pendingOpen={pendingMeetingOpen}
+              onPendingOpenConsumed={() => setPendingMeetingOpen(null)}
+            />
+          )}
           {view === 'tasks'          && <MyTasks onNavigate={(v: string) => setView(v as View)} />}
           {view === 'people'         && <People />}
           {view === 'settings'       && <Settings />}

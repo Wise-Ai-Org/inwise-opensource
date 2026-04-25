@@ -79,6 +79,21 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   jiraLinkTask: (taskId: string, jiraKey: string, jiraUrl: string) => ipcRenderer.invoke('jira:linkTask', taskId, jiraKey, jiraUrl),
   jiraMatchTasks: (items: any[], projectKey?: string) => ipcRenderer.invoke('jira:matchTasks', items, projectKey),
 
+  // SoR audit log (US-001)
+  sorListRecent: (limit?: number, sinceMs?: number) => ipcRenderer.invoke('sor:listRecent', limit, sinceMs),
+  sorListByMeeting: (meetingId: string) => ipcRenderer.invoke('sor:listByMeeting', meetingId),
+  sorListByTaskId: (taskId: string) => ipcRenderer.invoke('sor:listByTaskId', taskId),
+  sorListByTargetRecord: (system: string, recordId: string) => ipcRenderer.invoke('sor:listByTargetRecord', system, recordId),
+  sorAggregateByIntegration: (sinceMs?: number) => ipcRenderer.invoke('sor:aggregateByIntegration', sinceMs),
+  sorListFailed: (system: string, sinceMs: number) => ipcRenderer.invoke('sor:listFailed', system, sinceMs),
+  sorRetry: (id: string) => ipcRenderer.invoke('sor:retry', id),
+  sorRetryFailed: (system: string, sinceMs: number) => ipcRenderer.invoke('sor:retryFailed', system, sinceMs),
+
+  // SoR approval gate (US-006)
+  sorListPendingApprovals: () => ipcRenderer.invoke('sor:listPendingApprovals'),
+  sorApprove: (id: string, overrides?: Record<string, any>) => ipcRenderer.invoke('sor:approve', id, overrides),
+  sorReject: (id: string) => ipcRenderer.invoke('sor:reject', id),
+
   // Desktop capture
   getDesktopSourceId: () => ipcRenderer.invoke('desktop:getSourceId'),
 
@@ -121,7 +136,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 
   // Events from main → renderer
   on: (channel: string, cb: (...args: any[]) => void) => {
-    const allowed = ['recording:status', 'meeting:new', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'tasks:likely-done-updated', 'jira:auto-synced', 'pipeline:error', 'audio:health'];
+    const allowed = ['recording:status', 'meeting:new', 'meeting:open-details', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'tasks:likely-done-updated', 'jira:auto-synced', 'sor:write-completed', 'pipeline:error', 'audio:health'];
     if (allowed.includes(channel)) {
       ipcRenderer.on(channel, (_event, ...args) => cb(...args));
     }
