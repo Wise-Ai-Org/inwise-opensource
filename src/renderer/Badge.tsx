@@ -1,11 +1,46 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-type Status = 'recording' | 'processing' | 'done' | 'error' | 'received';
+type Status = 'preflight' | 'countdown' | 'recording' | 'processing' | 'done' | 'error' | 'received';
+
+interface PreflightChecks {
+  mic: boolean;
+  audio: boolean;
+  ready: boolean;
+}
 
 interface State {
   status: Status;
   message?: string;
   title: string;
+  preflight?: PreflightChecks;
+  countdown?: number; // 3, 2, 1
+  glowActive?: boolean;
+}
+
+const INWISE_TEAL = '#0F738C';
+
+// Synthesizes a soft 2-tone ascending chime — no audio asset required.
+function playStartChime(): void {
+  try {
+    const ctx = new (window as any).AudioContext();
+    const playTone = (freq: number, startOffset: number, duration: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      const start = ctx.currentTime + startOffset;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.18, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+      osc.start(start);
+      osc.stop(start + duration);
+    };
+    playTone(523.25, 0, 0.20);    // C5
+    playTone(783.99, 0.10, 0.25); // G5 — ascending fifth = "starting" feel
+    setTimeout(() => { try { ctx.close(); } catch { /* ignore */ } }, 600);
+  } catch { /* audio failed; non-critical */ }
 }
 
 const BAR_COUNT = 12;
@@ -116,9 +151,29 @@ export default function Badge() {
     (window as any).inwiseAPI.on('recording:start', (title: string, calendarEventId?: string) => {
       titleRef.current = title;
       calendarEventIdRef.current = calendarEventId;
-      setState({ status: 'recording', title });
-      startRef.current = Date.now();
-      startMic(title);
+
+      // Pre-flight sequence: 3 checks tick on, then 3-2-1 countdown, then chime + actual start, then glow.
+      // Total time-to-recording: ~3.2s. Glow at +1s after chime.
+      setState({ status: 'preflight', title, preflight: { mic: false, audio: false, ready: false } });
+      setTimeout(() => setState(s => ({ ...s, preflight: { mic: true, audio: false, ready: false } })), 350);
+      setTimeout(() => setState(s => ({ ...s, preflight: { mic: true, audio: true, ready: false } })), 700);
+      setTimeout(() => setState(s => ({ ...s, preflight: { mic: true, audio: true, ready: true } })), 1050);
+
+      setTimeout(() => setState(s => ({ ...s, status: 'countdown', countdown: 3 })), 1400);
+      setTimeout(() => setState(s => ({ ...s, countdown: 2 })), 2000);
+      setTimeout(() => setState(s => ({ ...s, countdown: 1 })), 2600);
+
+      setTimeout(() => {
+        playStartChime();
+        startRef.current = Date.now();
+        setState({ status: 'recording', title });
+        startMic(title);
+      }, 3200);
+
+      // Glow fades in 1 second after the chime
+      setTimeout(() => {
+        setState(s => ({ ...s, glowActive: true }));
+      }, 4200);
     });
 
     (window as any).inwiseAPI.on('recording:status', ({ status, message }: { status: Status; message?: string }) => {
@@ -327,6 +382,63 @@ export default function Badge() {
 
   const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
+  if (state.status === 'preflight') {
+    const p = state.preflight ?? { mic: false, audio: false, ready: false };
+    const Check = ({ done, label }: { done: boolean; label: string }) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <span style={{
+          width: 14,
+          height: 14,
+          borderRadius: '50%',
+          background: done ? INWISE_TEAL : 'rgba(255,255,255,0.12)',
+          color: 'white',
+          fontSize: 10,
+          fontWeight: 700,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          transition: 'background 220ms ease',
+        }}>{done ? '✓' : ''}</span>
+        <span style={{
+          color: done ? '#f8fafc' : '#64748b',
+          fontSize: 11,
+          fontWeight: 500,
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          transition: 'color 220ms ease',
+        }}>{label}</span>
+      </div>
+    );
+    return (
+      <div style={styles.wrap}>
+        <div style={{ ...styles.badge, gap: 12 }}>
+          <Check done={p.mic} label="Mic" />
+          <Check done={p.audio} label="Audio" />
+          <Check done={p.ready} label="Ready" />
+          <span style={{ ...styles.label, color: '#94a3b8', fontSize: 11, fontWeight: 500 }}>· starting…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.status === 'countdown') {
+    return (
+      <div style={styles.wrap}>
+        <div style={{ ...styles.badge, gap: 10 }}>
+          <span style={styles.label}>{state.title}</span>
+          <span style={{ color: '#94a3b8', fontSize: 12, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>· starting in</span>
+          <span style={{
+            color: INWISE_TEAL,
+            fontSize: 20,
+            fontWeight: 700,
+            fontFamily: 'monospace',
+            minWidth: 18,
+            textAlign: 'center',
+          }}>{state.countdown}</span>
+        </div>
+      </div>
+    );
+  }
+
   if (state.status === 'done') {
     return (
       <div style={styles.wrap}>
@@ -372,10 +484,34 @@ export default function Badge() {
   }
 
 
+  const recordingBadgeStyle = state.glowActive ? {
+    ...styles.badge,
+    animation: 'inwise-glow-pulse 4.5s ease-in-out infinite',
+  } : {
+    ...styles.badge,
+    transition: 'box-shadow 700ms ease-out',
+  };
+
   return (
     <div style={styles.wrap}>
+      <style>{`
+        @keyframes inwise-glow-pulse {
+          0%, 100% {
+            box-shadow:
+              0 8px 32px rgba(0,0,0,0.45),
+              0 0 24px 3px rgba(15, 115, 140, 0.42),
+              0 0 48px 10px rgba(15, 115, 140, 0.16);
+          }
+          50% {
+            box-shadow:
+              0 8px 32px rgba(0,0,0,0.45),
+              0 0 32px 5px rgba(15, 115, 140, 0.55),
+              0 0 64px 14px rgba(15, 115, 140, 0.22);
+          }
+        }
+      `}</style>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-        <div style={styles.badge}>
+        <div style={recordingBadgeStyle}>
           <div style={{ ...styles.dot, animation: 'pulse 1s infinite' }} />
           <span style={styles.label}>{state.title}</span>
           <Waveform active />

@@ -1,13 +1,22 @@
 import { Tray, Menu, BrowserWindow, nativeImage, app } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
 
 let tray: Tray | null = null;
 
-export function createTray(mainWindow: BrowserWindow): void {
-  const iconPath = path.join(__dirname, '../../assets/favicon.png');
-  const icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+const IDLE_ICON_REL = '../../assets/favicon.png';
+const RECORDING_ICON_REL = '../../assets/favicon-recording.png';
 
-  tray = new Tray(icon);
+function loadTrayIcon(isRecording: boolean) {
+  const recordingPath = path.join(__dirname, RECORDING_ICON_REL);
+  const target = isRecording && fs.existsSync(recordingPath)
+    ? recordingPath
+    : path.join(__dirname, IDLE_ICON_REL);
+  return nativeImage.createFromPath(target).resize({ width: 16, height: 16 });
+}
+
+export function createTray(mainWindow: BrowserWindow): void {
+  tray = new Tray(loadTrayIcon(false));
   tray.setToolTip('Inwise');
 
   updateTrayMenu(mainWindow, false);
@@ -21,9 +30,17 @@ export function createTray(mainWindow: BrowserWindow): void {
 export function updateTrayMenu(mainWindow: BrowserWindow, isRecording: boolean): void {
   if (!tray) return;
 
+  // Swap icon to recording variant when available; falls back to idle icon if asset missing
+  try {
+    const icon = loadTrayIcon(isRecording);
+    if (!icon.isEmpty()) tray.setImage(icon);
+  } catch { /* swallow — tray icon update is non-critical */ }
+
+  tray.setToolTip(isRecording ? 'Inwise — Recording in progress' : 'Inwise');
+
   const menu = Menu.buildFromTemplate([
     {
-      label: isRecording ? '● Recording…' : 'Inwise',
+      label: isRecording ? '● Recording in progress' : 'Inwise',
       enabled: false,
     },
     { type: 'separator' },
