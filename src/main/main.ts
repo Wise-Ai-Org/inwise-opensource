@@ -127,8 +127,8 @@ function createOverlayWindow(title: string, calendarEventId?: string): void {
   }
 
   overlayWindow = new BrowserWindow({
-    width: 400,
-    height: 110,
+    width: 480,
+    height: 170,
     x: 20,
     y: 20,
     alwaysOnTop: true,

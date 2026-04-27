@@ -19,6 +19,57 @@ interface State {
 
 const INWISE_TEAL = '#0F738C';
 
+// Pre-flight check: verify the saved (or default) mic exists and getUserMedia succeeds.
+// Acquires briefly, then releases — startMic() re-acquires for real recording.
+async function checkMic(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const cfg = await (window as any).inwiseAPI?.getConfig?.();
+    const savedDeviceId = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
+
+    if (savedDeviceId) {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const mics = devices.filter(d => d.kind === 'audioinput');
+      if (!mics.some(d => d.deviceId === savedDeviceId)) {
+        return { ok: false, error: 'Saved mic not found — open Settings to reconnect' };
+      }
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: savedDeviceId ? { deviceId: { exact: savedDeviceId } } : true,
+    });
+    stream.getTracks().forEach(t => t.stop());
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Mic permission denied' };
+  }
+}
+
+// Pre-flight check: verify desktopCapturer returns a usable system-audio source id.
+// Non-blocking failure — recording proceeds mic-only if this fails (existing behavior).
+async function checkSystemAudio(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const sourceId = await (window as any).inwiseAPI?.getDesktopSourceId?.();
+    if (!sourceId) {
+      return { ok: false, error: 'System audio source not available' };
+    }
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'System audio check failed' };
+  }
+}
+
+// Pre-flight check: verify the IPC bridge is up + config is loadable.
+async function checkReady(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    if (!(window as any).inwiseAPI) return { ok: false, error: 'IPC bridge not initialized' };
+    const cfg = await (window as any).inwiseAPI.getConfig();
+    if (!cfg) return { ok: false, error: 'Config not loaded' };
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'IPC not ready' };
+  }
+}
+
 // Synthesizes a soft 2-tone ascending chime — no audio asset required.
 function playStartChime(): void {
   try {
@@ -148,32 +199,60 @@ export default function Badge() {
   const calendarEventIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    (window as any).inwiseAPI.on('recording:start', (title: string, calendarEventId?: string) => {
+    (window as any).inwiseAPI.on('recording:start', async (title: string, calendarEventId?: string) => {
       titleRef.current = title;
       calendarEventIdRef.current = calendarEventId;
 
-      // Pre-flight sequence: 3 checks tick on, then 3-2-1 countdown, then chime + actual start, then glow.
-      // Total time-to-recording: ~3.2s. Glow at +1s after chime.
+      // Pre-flight: run REAL checks (not setTimeouts). Each dot lights up only when its
+      // corresponding check actually passes. Hard failures (mic, ready) abort the countdown.
+      // Soft failures (system audio) light the dot red and recording proceeds mic-only.
       setState({ status: 'preflight', title, preflight: { mic: false, audio: false, ready: false } });
-      setTimeout(() => setState(s => ({ ...s, preflight: { mic: true, audio: false, ready: false } })), 350);
-      setTimeout(() => setState(s => ({ ...s, preflight: { mic: true, audio: true, ready: false } })), 700);
-      setTimeout(() => setState(s => ({ ...s, preflight: { mic: true, audio: true, ready: true } })), 1050);
 
-      setTimeout(() => setState(s => ({ ...s, status: 'countdown', countdown: 3 })), 1400);
-      setTimeout(() => setState(s => ({ ...s, countdown: 2 })), 2000);
-      setTimeout(() => setState(s => ({ ...s, countdown: 1 })), 2600);
+      // Run all three checks in parallel for speed
+      const [micResult, audioResult, readyResult] = await Promise.all([
+        checkMic(),
+        checkSystemAudio(),
+        checkReady(),
+      ]);
 
-      setTimeout(() => {
-        playStartChime();
-        startRef.current = Date.now();
-        setState({ status: 'recording', title });
-        startMic(title);
-      }, 3200);
+      // Hard fail: mic not available — abort with actionable error
+      if (!micResult.ok) {
+        setState({ status: 'error', title, message: 'Mic check failed: ' + micResult.error });
+        return;
+      }
+      setState(s => ({ ...s, preflight: { mic: true, audio: s.preflight!.audio, ready: s.preflight!.ready } }));
+      await new Promise(r => setTimeout(r, 250));
+
+      // Soft fail: system audio missing — proceed but flag it
+      setState(s => ({ ...s, preflight: { ...s.preflight!, audio: audioResult.ok } }));
+      if (!audioResult.ok) setSysAudioWarning(true);
+      await new Promise(r => setTimeout(r, 250));
+
+      // Hard fail: IPC / config not ready
+      if (!readyResult.ok) {
+        setState({ status: 'error', title, message: 'Not ready: ' + readyResult.error });
+        return;
+      }
+      setState(s => ({ ...s, preflight: { ...s.preflight!, ready: true } }));
+      await new Promise(r => setTimeout(r, 350));
+
+      // Countdown
+      setState(s => ({ ...s, status: 'countdown', countdown: 3 }));
+      await new Promise(r => setTimeout(r, 600));
+      setState(s => ({ ...s, countdown: 2 }));
+      await new Promise(r => setTimeout(r, 600));
+      setState(s => ({ ...s, countdown: 1 }));
+      await new Promise(r => setTimeout(r, 600));
+
+      // Start
+      playStartChime();
+      startRef.current = Date.now();
+      setState({ status: 'recording', title });
+      startMic(title);
 
       // Glow fades in 1 second after the chime
-      setTimeout(() => {
-        setState(s => ({ ...s, glowActive: true }));
-      }, 4200);
+      await new Promise(r => setTimeout(r, 1000));
+      setState(s => ({ ...s, glowActive: true }));
     });
 
     (window as any).inwiseAPI.on('recording:status', ({ status, message }: { status: Status; message?: string }) => {
@@ -498,15 +577,17 @@ export default function Badge() {
         @keyframes inwise-glow-pulse {
           0%, 100% {
             box-shadow:
-              0 8px 32px rgba(0,0,0,0.45),
-              0 0 24px 3px rgba(15, 115, 140, 0.42),
-              0 0 48px 10px rgba(15, 115, 140, 0.16);
+              0 0 0 1.5px rgba(15, 115, 140, 0.65),
+              0 0 18px 5px rgba(15, 115, 140, 0.85),
+              0 0 38px 12px rgba(15, 115, 140, 0.55),
+              0 0 70px 22px rgba(15, 115, 140, 0.28);
           }
           50% {
             box-shadow:
-              0 8px 32px rgba(0,0,0,0.45),
-              0 0 32px 5px rgba(15, 115, 140, 0.55),
-              0 0 64px 14px rgba(15, 115, 140, 0.22);
+              0 0 0 2px rgba(15, 115, 140, 0.78),
+              0 0 24px 7px rgba(15, 115, 140, 0.95),
+              0 0 48px 16px rgba(15, 115, 140, 0.65),
+              0 0 88px 28px rgba(15, 115, 140, 0.38);
           }
         }
       `}</style>
