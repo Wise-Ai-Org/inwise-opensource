@@ -734,10 +734,10 @@ function JiraSettings({ config, update }: { config: Config; update: (key: keyof 
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
               <input type="checkbox" checked={config.jiraAutoPush as any === true || config.jiraAutoPush === 'true' as any}
                 onChange={e => update('jiraAutoPush' as any, e.target.checked as any)} />
-              <span className="form-label" style={{ margin: 0 }}>Auto-push new tasks to Jira</span>
+              <span className="form-label" style={{ margin: 0 }}>Auto-push tasks to your systems</span>
             </label>
             <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block', paddingLeft: 24 }}>
-              When enabled, tasks extracted from meetings are automatically pushed to your default project.
+              Tasks from meetings push to the right destination automatically.
             </span>
           </div>
 
@@ -816,37 +816,37 @@ function ApprovalGateSettings() {
           checked={enabled}
           onChange={(e) => toggle(e.target.checked)}
         />
-        <span className="form-label" style={{ margin: 0 }}>Require my approval for low-confidence writes</span>
+        <span className="form-label" style={{ margin: 0 }}>Wait for my approval on weak matches</span>
       </label>
-      <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block', paddingLeft: 24 }}>
-        When on, low-confidence writes wait in your Inbox for approval instead of pushing automatically.
+      <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block', paddingLeft: 24, lineHeight: 1.5 }}>
+        Anything below{' '}
+        <input
+          type="number"
+          min={0}
+          max={100}
+          step={5}
+          value={percent}
+          disabled={!enabled}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            if (Number.isFinite(v)) onThresholdChange(Math.max(0, Math.min(100, v)) / 100);
+          }}
+          onBlur={onThresholdCommit}
+          aria-label="Confidence threshold percent"
+          style={{
+            width: 48,
+            padding: '1px 4px',
+            margin: '0 2px',
+            fontSize: 12,
+            fontWeight: 600,
+            textAlign: 'center',
+            border: '1px solid var(--slate-300)',
+            borderRadius: 4,
+            background: enabled ? 'white' : 'var(--slate-50)',
+            color: enabled ? 'var(--slate-700)' : 'var(--slate-400)',
+          }}
+        />% match confidence waits in your Inbox for approval.
       </span>
-
-      {enabled && (
-        <div style={{ paddingLeft: 24, marginTop: 10 }}>
-          <label className="form-label" style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-700)' }}>
-            Approve writes when confidence is below {percent}%
-          </label>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            step={5}
-            value={percent}
-            onChange={(e) => onThresholdChange(Number(e.target.value) / 100)}
-            onMouseUp={onThresholdCommit}
-            onTouchEnd={onThresholdCommit}
-            onBlur={onThresholdCommit}
-            style={{ width: '100%', marginTop: 6 }}
-          />
-          <span style={{ fontSize: 11, color: 'var(--slate-500)', marginTop: 4, display: 'block', lineHeight: 1.5 }}>
-            Approval gate uses the Jira matcher's similarity score as confidence.
-            Writes created from meeting action items with no matching Jira story or a weak match
-            (below {percent}%) will wait for approval in your Inbox.
-            Writes without a confidence score are never gated.
-          </span>
-        </div>
-      )}
     </div>
   );
 }
