@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
+import { AudioTab } from '@inwise/desktop-shared';
 
 interface Config {
   apiProvider: 'anthropic' | 'openai';
   apiKey: string;
   whisperModel: 'tiny' | 'base' | 'small' | 'medium';
   micDeviceId: string;
+  speakerDeviceId: string;
   userName: string;
   selfEmails: string[];
   jiraClientId: string;
@@ -110,8 +112,8 @@ function CalendarStatus() {
       background: '#F0FDF9', border: '1px solid #CCFBF1',
     }}>
       <div style={{ fontSize: 13, color: '#115E59' }}>
-        <span style={{ fontWeight: 600 }}>Calendar connected</span> — {health.eventCount} upcoming event{health.eventCount !== 1 ? 's' : ''} found
-        {ago && <span style={{ color: '#5EEAD4', marginLeft: 8 }}>· synced {ago}</span>}
+        <span style={{ fontWeight: 600 }}>Calendar connected</span> â€” {health.eventCount} upcoming event{health.eventCount !== 1 ? 's' : ''} found
+        {ago && <span style={{ color: '#5EEAD4', marginLeft: 8 }}>Â· synced {ago}</span>}
       </div>
     </div>
   );
@@ -170,7 +172,7 @@ function CalendarRowView({
     const result = await (window as any).inwiseAPI.testCalendarUrl(url.trim());
     if (result.ok) {
       setTestStatus('ok');
-      setTestMsg(`Connected — ${result.eventCount} upcoming event${result.eventCount !== 1 ? 's' : ''} found`);
+      setTestMsg(`Connected â€” ${result.eventCount} upcoming event${result.eventCount !== 1 ? 's' : ''} found`);
     } else {
       setTestStatus('error');
       setTestMsg(result.error || 'Could not read calendar. Double-check the URL.');
@@ -230,7 +232,7 @@ function CalendarRowView({
             if (urlDebouncer.current) window.clearTimeout(urlDebouncer.current);
             onPatch(row.id, { url });
           }}
-          placeholder="https://… (paste your secret ICS link)"
+          placeholder="https://â€¦ (paste your secret ICS link)"
         />
         <button
           className="btn btn-secondary btn-sm"
@@ -238,7 +240,7 @@ function CalendarRowView({
           disabled={!url.trim() || testStatus === 'testing'}
           style={{ flexShrink: 0 }}
         >
-          {testStatus === 'testing' ? 'Testing…' : 'Test'}
+          {testStatus === 'testing' ? 'Testingâ€¦' : 'Test'}
         </button>
         <button
           className="btn btn-secondary btn-sm"
@@ -251,7 +253,7 @@ function CalendarRowView({
 
       {testStatus !== 'idle' && (
         <div style={{ fontSize: 12, color: statusColor, marginTop: 8 }}>
-          {testStatus === 'ok' && '✓ '}{testStatus === 'error' && '✕ '}{testMsg}
+          {testStatus === 'ok' && 'âœ“ '}{testStatus === 'error' && 'âœ• '}{testMsg}
         </div>
       )}
     </div>
@@ -307,7 +309,7 @@ function CalendarList() {
           lineHeight: 1.5,
           marginBottom: 12,
         }}>
-          Add your first calendar to get started — paste a secret ICS link from your calendar settings.
+          Add your first calendar to get started â€” paste a secret ICS link from your calendar settings.
         </div>
       ) : (
         rows.map(row => (
@@ -324,287 +326,9 @@ function CalendarList() {
         + Add calendar
       </button>
       <div style={{ fontSize: 12, color: 'var(--slate-400)', marginTop: 10, lineHeight: 1.5 }}>
-        ⏱ Changes to calendars refresh automatically. New events from Google can take 5–15 minutes to appear;
-        Outlook ICS feeds can take 15–60 minutes. Disabled calendars are skipped on the next poll.
+        â± Changes to calendars refresh automatically. New events from Google can take 5â€“15 minutes to appear;
+        Outlook ICS feeds can take 15â€“60 minutes. Disabled calendars are skipped on the next poll.
       </div>
-    </div>
-  );
-}
-
-function MicTest({ deviceId }: { deviceId: string }) {
-  const [status, setStatus] = useState<'idle' | 'testing' | 'transcribing' | 'done' | 'error'>('idle');
-  const [level, setLevel] = useState(0);
-  const [transcript, setTranscript] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
-  const rafRef = useRef<number>(0);
-  const streamRef = useRef<MediaStream | null>(null);
-
-  const runTest = async () => {
-    setStatus('testing');
-    setLevel(0);
-    setTranscript('');
-    setErrorMsg('');
-    try {
-      const constraint = deviceId && deviceId !== 'default' ? { deviceId: { exact: deviceId } } : true;
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: constraint as any });
-      streamRef.current = stream;
-
-      // Level meter
-      const ctx = new AudioContext();
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      const data = new Uint8Array(analyser.frequencyBinCount);
-      const tick = () => {
-        analyser.getByteFrequencyData(data);
-        const avg = data.reduce((a, b) => a + b, 0) / data.length;
-        setLevel(Math.min(100, (avg / 128) * 100));
-        rafRef.current = requestAnimationFrame(tick);
-      };
-      tick();
-
-      // Capture audio
-      const chunks: Blob[] = [];
-      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-      mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-      mr.start(250);
-
-      setTimeout(async () => {
-        try {
-          cancelAnimationFrame(rafRef.current);
-          mr.stop();
-          stream.getTracks().forEach(t => t.stop());
-          setLevel(0);
-          setStatus('transcribing');
-
-          await new Promise<void>(resolve => { mr.onstop = () => resolve(); });
-
-          // Convert to WAV
-          const blob = new Blob(chunks, { type: 'audio/webm' });
-          const arrayBuffer = await blob.arrayBuffer();
-          const audioCtx = new AudioContext({ sampleRate: 16000 });
-          const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-          audioCtx.close();
-          ctx.close();
-
-          const pcm = decoded.getChannelData(0);
-          const samples = new Int16Array(pcm.length);
-          for (let i = 0; i < pcm.length; i++) {
-            samples[i] = Math.max(-32768, Math.min(32767, Math.round(pcm[i] * 32767)));
-          }
-          const dataLength = samples.length * 2;
-          const wav = new ArrayBuffer(44 + dataLength);
-          const view = new DataView(wav);
-          const write = (off: number, str: string) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
-          write(0, 'RIFF'); view.setUint32(4, 36 + dataLength, true);
-          write(8, 'WAVE'); write(12, 'fmt '); view.setUint32(16, 16, true);
-          view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-          view.setUint32(24, 16000, true); view.setUint32(28, 32000, true);
-          view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-          write(36, 'data'); view.setUint32(40, dataLength, true);
-          new Int16Array(wav, 44).set(samples);
-
-          const result = await (window as any).inwiseAPI.testMic(new Uint8Array(wav));
-          if (result.ok) {
-            setTranscript(result.transcript);
-            setStatus('done');
-          } else {
-            setErrorMsg(result.error || 'Transcription failed');
-            setStatus('error');
-          }
-        } catch (e: any) {
-          setErrorMsg(e.message || 'Processing failed');
-          setStatus('error');
-        }
-      }, 3000);
-    } catch (e: any) {
-      setStatus('error');
-      setErrorMsg(e.message || 'Could not access microphone');
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      streamRef.current?.getTracks().forEach(t => t.stop());
-    };
-  }, []);
-
-  return (
-    <div style={{ marginTop: 12 }}>
-      {status === 'testing' && (
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--slate-500)', marginBottom: 6 }}>Speak now — recording for 3 seconds…</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ flex: 1, height: 8, background: 'var(--slate-200)', borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{ width: `${level}%`, height: '100%', background: '#6366f1', borderRadius: 4, transition: 'width 0.05s' }} />
-            </div>
-            <span style={{ fontSize: 12, color: 'var(--slate-500)', minWidth: 32 }}>{Math.round(level)}%</span>
-          </div>
-        </div>
-      )}
-      {status === 'transcribing' && (
-        <div style={{ fontSize: 12, color: 'var(--slate-500)' }}>Transcribing…</div>
-      )}
-      {(status === 'idle' || status === 'done' || status === 'error') && (
-        <button className="btn btn-secondary btn-sm" onClick={runTest}>
-          {status === 'done' || status === 'error' ? 'Test Again' : 'Test Microphone'}
-        </button>
-      )}
-      {status === 'done' && (
-        <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--slate-100)', borderRadius: 8, fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.5 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--teal)', display: 'block', marginBottom: 4 }}>TRANSCRIPT</span>
-          {transcript}
-        </div>
-      )}
-      {status === 'error' && (
-        <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 6 }}>✕ {errorMsg}</div>
-      )}
-    </div>
-  );
-}
-
-function SystemAudioTest() {
-  const [status, setStatus] = useState<'idle' | 'testing' | 'transcribing' | 'done' | 'error'>('idle');
-  const [level, setLevel] = useState(0);
-  const [transcript, setTranscript] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
-  const rafRef = useRef<number>(0);
-  const streamRef = useRef<MediaStream | null>(null);
-
-  const runTest = async () => {
-    setStatus('testing');
-    setLevel(0);
-    setTranscript('');
-    setErrorMsg('');
-    try {
-      const sourceId = await (window as any).inwiseAPI.getDesktopSourceId();
-      if (!sourceId) {
-        setErrorMsg('System audio capture not available on this device');
-        setStatus('error');
-        return;
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } } as any,
-        video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } } as any,
-      });
-      // Drop video tracks
-      stream.getVideoTracks().forEach(t => t.stop());
-      streamRef.current = stream;
-
-      // Level meter
-      const ctx = new AudioContext();
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      const data = new Uint8Array(analyser.frequencyBinCount);
-      const tick = () => {
-        analyser.getByteFrequencyData(data);
-        const avg = data.reduce((a, b) => a + b, 0) / data.length;
-        setLevel(Math.min(100, (avg / 128) * 100));
-        rafRef.current = requestAnimationFrame(tick);
-      };
-      tick();
-
-      // Capture audio
-      const chunks: Blob[] = [];
-      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-      mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-      mr.start(250);
-
-      setTimeout(async () => {
-        try {
-          cancelAnimationFrame(rafRef.current);
-          mr.stop();
-          stream.getTracks().forEach(t => t.stop());
-          setLevel(0);
-          setStatus('transcribing');
-
-          await new Promise<void>(resolve => { mr.onstop = () => resolve(); });
-
-          const blob = new Blob(chunks, { type: 'audio/webm' });
-          const arrayBuffer = await blob.arrayBuffer();
-          const audioCtx = new AudioContext({ sampleRate: 16000 });
-          const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-          audioCtx.close();
-          ctx.close();
-
-          const pcm = decoded.getChannelData(0);
-          const samples = new Int16Array(pcm.length);
-          for (let i = 0; i < pcm.length; i++) {
-            samples[i] = Math.max(-32768, Math.min(32767, Math.round(pcm[i] * 32767)));
-          }
-          const dataLength = samples.length * 2;
-          const wav = new ArrayBuffer(44 + dataLength);
-          const view = new DataView(wav);
-          const write = (off: number, str: string) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
-          write(0, 'RIFF'); view.setUint32(4, 36 + dataLength, true);
-          write(8, 'WAVE'); write(12, 'fmt '); view.setUint32(16, 16, true);
-          view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-          view.setUint32(24, 16000, true); view.setUint32(28, 32000, true);
-          view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-          write(36, 'data'); view.setUint32(40, dataLength, true);
-          new Int16Array(wav, 44).set(samples);
-
-          const result = await (window as any).inwiseAPI.testMic(new Uint8Array(wav));
-          if (result.ok) {
-            setTranscript(result.transcript);
-            setStatus('done');
-          } else {
-            setErrorMsg(result.error || 'Transcription failed');
-            setStatus('error');
-          }
-        } catch (e: any) {
-          setErrorMsg(e.message || 'Processing failed');
-          setStatus('error');
-        }
-      }, 5000);
-    } catch (e: any) {
-      setStatus('error');
-      setErrorMsg(e.message || 'Could not capture system audio');
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      streamRef.current?.getTracks().forEach(t => t.stop());
-    };
-  }, []);
-
-  return (
-    <div style={{ marginTop: 12 }}>
-      {status === 'testing' && (
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--slate-500)', marginBottom: 6 }}>Play audio on your device now — recording for 5 seconds…</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ flex: 1, height: 8, background: 'var(--slate-200)', borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{ width: `${level}%`, height: '100%', background: '#f59e0b', borderRadius: 4, transition: 'width 0.05s' }} />
-            </div>
-            <span style={{ fontSize: 12, color: 'var(--slate-500)', minWidth: 32 }}>{Math.round(level)}%</span>
-          </div>
-        </div>
-      )}
-      {status === 'transcribing' && (
-        <div style={{ fontSize: 12, color: 'var(--slate-500)' }}>Transcribing…</div>
-      )}
-      {(status === 'idle' || status === 'done' || status === 'error') && (
-        <button className="btn btn-secondary btn-sm" onClick={runTest}>
-          {status === 'done' || status === 'error' ? 'Test Again' : 'Test System Audio'}
-        </button>
-      )}
-      {status === 'done' && (
-        <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--slate-100)', borderRadius: 8, fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.5 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: '#f59e0b', display: 'block', marginBottom: 4 }}>SYSTEM AUDIO TRANSCRIPT</span>
-          {transcript}
-        </div>
-      )}
-      {status === 'error' && (
-        <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 6 }}>✕ {errorMsg}</div>
-      )}
     </div>
   );
 }
@@ -682,11 +406,11 @@ function JiraSettings({ config, update }: { config: Config; update: (key: keyof 
               onChange={e => update('jiraClientSecret', e.target.value)} placeholder="Secret from your Atlassian app" />
           </div>
 
-          {error && <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 12 }}>✕ {error}</div>}
+          {error && <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 12 }}>âœ• {error}</div>}
 
           <button className="btn btn-primary btn-sm" onClick={handleConnect}
             disabled={connecting || !config.jiraClientId || !config.jiraClientSecret}>
-            {connecting ? 'Connecting…' : 'Connect Jira'}
+            {connecting ? 'Connectingâ€¦' : 'Connect Jira'}
           </button>
         </>
       ) : (
@@ -748,11 +472,11 @@ function JiraSettings({ config, update }: { config: Config; update: (key: keyof 
   );
 }
 
-// ── Approval gate settings (US-006) ─────────────────────────────────────────
+// â”€â”€ Approval gate settings (US-006) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Self-managed slice: reads/writes `sor.jira` via api, independent of the
 // parent Settings form's save-button lifecycle. Saves on change (debounced
 // via React state + blur on slider) so the gate takes effect immediately
-// the next time auto-push runs — no "save to apply" footgun.
+// the next time auto-push runs â€” no "save to apply" footgun.
 
 function ApprovalGateSettings() {
   const [enabled, setEnabled] = useState(false);
@@ -768,7 +492,7 @@ function ApprovalGateSettings() {
         const t = typeof jira.approvalThreshold === 'number' ? jira.approvalThreshold : 0.6;
         setThreshold(Math.max(0, Math.min(1, t)));
       } catch {
-        /* best-effort — keep defaults */
+        /* best-effort â€” keep defaults */
       } finally {
         setLoaded(true);
       }
@@ -851,7 +575,7 @@ function ApprovalGateSettings() {
   );
 }
 
-// ── Integrations status block (US-003) ──────────────────────────────────────
+// â”€â”€ Integrations status block (US-003) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type SorOp = 'create' | 'update' | 'transition' | 'comment';
 type SorResult = 'pending' | 'success' | 'failed' | 'pending-approval' | 'retrying';
@@ -907,7 +631,7 @@ function sorOneLineSummary(entry: SorWriteEntry): string {
   if (entry.operation === 'comment') return 'Comment added';
   if (entry.operation === 'transition') {
     const d = entry.fieldDiffs.find(x => x.field === 'status');
-    if (d) return `Status: ${d.before ?? '—'} → ${d.after ?? '—'}`;
+    if (d) return `Status: ${d.before ?? 'â€”'} â†’ ${d.after ?? 'â€”'}`;
     return 'Status transition';
   }
   const n = entry.fieldDiffs.length;
@@ -943,7 +667,7 @@ function SorWriteRow({ entry, onRetry, retrying }: {
             color: 'var(--slate-400)', fontSize: 12, padding: 0, marginTop: 2, width: 14, flexShrink: 0,
           }}
         >
-          {expanded ? '▾' : '▸'}
+          {expanded ? 'â–¾' : 'â–¸'}
         </button>
 
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1025,11 +749,11 @@ function SorWriteRow({ entry, onRetry, retrying }: {
                         color: 'var(--slate-500)',
                         textDecoration: entry.operation === 'create' ? 'none' : 'line-through',
                       }}>
-                        {d.before === null || d.before === undefined ? '—' : String(d.before)}
+                        {d.before === null || d.before === undefined ? 'â€”' : String(d.before)}
                       </span>
-                      <span style={{ color: 'var(--slate-400)' }}>→</span>
+                      <span style={{ color: 'var(--slate-400)' }}>â†’</span>
                       <span style={{ color: 'var(--slate-800)' }}>
-                        {d.after === null || d.after === undefined ? '—' : String(d.after)}
+                        {d.after === null || d.after === undefined ? 'â€”' : String(d.after)}
                       </span>
                     </div>
                   ))}
@@ -1072,7 +796,7 @@ function SorWriteRow({ entry, onRetry, retrying }: {
             onClick={() => onRetry(entry._id)}
             disabled={retrying}
           >
-            {retrying ? '…' : '↻ Retry'}
+            {retrying ? 'â€¦' : 'â†» Retry'}
           </button>
         )}
       </div>
@@ -1109,7 +833,7 @@ function IntegrationsSection() {
       setRecentByIntegration({ jira: recentRows.filter(r => r.targetSystem === 'jira') });
       setFailedCount({ jira: Array.isArray(failed) ? failed.length : 0 });
     } catch {
-      /* best-effort — leave prior state */
+      /* best-effort â€” leave prior state */
     }
   };
 
@@ -1180,7 +904,7 @@ function IntegrationsSection() {
     parts.push(`${jiraAgg.success} write${jiraAgg.success !== 1 ? 's' : ''}`);
     if (jiraAgg.failed > 0) parts.push(`${jiraAgg.failed} failed`);
     if (jiraAgg.lastWriteAt) parts.push(`last write ${formatAgo(new Date(jiraAgg.lastWriteAt).getTime())}`);
-    return parts.join(' · ');
+    return parts.join(' Â· ');
   })();
 
   const jiraRecent = recentByIntegration.jira;
@@ -1219,7 +943,7 @@ function IntegrationsSection() {
             onClick={handleRetryFailed}
             disabled={jiraFailedN === 0 || bulkRetrying || !jiraStatus?.connected}
           >
-            {bulkRetrying ? 'Retrying…' : `Retry failed${jiraFailedN > 0 ? ` (${jiraFailedN})` : ''}`}
+            {bulkRetrying ? 'Retryingâ€¦' : `Retry failed${jiraFailedN > 0 ? ` (${jiraFailedN})` : ''}`}
           </button>
           {jiraStatus?.connected && (
             <button
@@ -1246,7 +970,7 @@ function IntegrationsSection() {
                 padding: 0, display: 'flex', alignItems: 'center', gap: 4,
               }}
             >
-              <span>{expanded.jira ? '▾' : '▸'}</span>
+              <span>{expanded.jira ? 'â–¾' : 'â–¸'}</span>
               <span>Recent activity ({jiraRecent.length})</span>
             </button>
             {expanded.jira && (
@@ -1396,7 +1120,7 @@ function SelfEmailsEditor({ emails, onChange }: { emails: string[]; onChange: (n
                 padding: 0,
               }}
             >
-              ×
+              Ã—
             </button>
           </span>
         ))}
@@ -1474,7 +1198,7 @@ function VoiceEnrollment() {
         setMissingAudio(prev => ({ ...prev, [id]: true }));
         return null;
       }
-      // IPC may deliver Uint8Array as a plain object — normalize
+      // IPC may deliver Uint8Array as a plain object â€” normalize
       const raw = result.audioClip;
       const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(Object.values(raw) as number[]);
       const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'audio/wav' });
@@ -1529,7 +1253,7 @@ function VoiceEnrollment() {
       startPlayback(id, cachedUrl);
       return;
     }
-    // Cache miss (prefetch pending or previously failed) — fetch then play.
+    // Cache miss (prefetch pending or previously failed) â€” fetch then play.
     void fetchBlobUrl(id).then(url => {
       if (url) startPlayback(id, url);
     });
@@ -1723,7 +1447,7 @@ function VoiceEnrollment() {
                   >
                     {missingAudio[p._id]
                       ? '(no audio)'
-                      : (playingId === p._id ? '⏹ Stop' : '▶ Play')}
+                      : (playingId === p._id ? 'â¹ Stop' : 'â–¶ Play')}
                   </button>
                   {playError[p._id] && (
                     <span
@@ -1749,7 +1473,7 @@ function VoiceEnrollment() {
                   background: 'none', border: 'none', cursor: 'pointer',
                   color: 'var(--slate-400)', fontSize: 14, padding: '2px 6px',
                 }} onClick={() => deletePrint(p._id)} title="Delete voice print">
-                  ✕
+                  âœ•
                 </button>
               )}
             </div>
@@ -1779,7 +1503,7 @@ function VoiceEnrollment() {
               {isUserEnroll ? 'Record Your Voice' : 'Record a Voice'}
             </span>
             <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--slate-400)', fontSize: 16 }}
-              onClick={cancelEnroll}>✕</button>
+              onClick={cancelEnroll}>âœ•</button>
           </div>
 
           <div className="form-group" style={{ marginBottom: 12 }}>
@@ -1798,7 +1522,7 @@ function VoiceEnrollment() {
           {recStatus === 'recording' && (
             <div>
               <div style={{ fontSize: 12, color: 'var(--slate-500)', marginBottom: 6 }}>
-                {isUserEnroll ? 'Speak naturally' : `Have ${enrollName.trim() || 'them'} speak`} — {countdown}s remaining
+                {isUserEnroll ? 'Speak naturally' : `Have ${enrollName.trim() || 'them'} speak`} â€” {countdown}s remaining
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div style={{ flex: 1, height: 8, background: 'var(--slate-200)', borderRadius: 4, overflow: 'hidden' }}>
@@ -1810,16 +1534,16 @@ function VoiceEnrollment() {
           )}
 
           {recStatus === 'saving' && (
-            <div style={{ fontSize: 12, color: 'var(--slate-500)' }}>Saving…</div>
+            <div style={{ fontSize: 12, color: 'var(--slate-500)' }}>Savingâ€¦</div>
           )}
 
           {recStatus === 'done' && (
-            <div style={{ fontSize: 13, color: 'var(--teal)' }}>✓ Enrolled "{enrollName.trim()}"</div>
+            <div style={{ fontSize: 13, color: 'var(--teal)' }}>âœ“ Enrolled "{enrollName.trim()}"</div>
           )}
 
           {recStatus === 'error' && (
             <div>
-              <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 6 }}>✕ {errMsg}</div>
+              <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 6 }}>âœ• {errMsg}</div>
               <button className="btn btn-secondary btn-sm" onClick={() => setRecStatus('idle')}>Try Again</button>
             </div>
           )}
@@ -1837,13 +1561,9 @@ function VoiceEnrollment() {
 export default function Settings() {
   const [config, setConfig] = useState<Config | null>(null);
   const [saved, setSaved] = useState(false);
-  const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
 
   useEffect(() => {
     (window as any).inwiseAPI.getConfig().then(setConfig);
-    navigator.mediaDevices.enumerateDevices().then(devices => {
-      setMics(devices.filter(d => d.kind === 'audioinput'));
-    });
   }, []);
 
   if (!config) return null;
@@ -1851,6 +1571,16 @@ export default function Settings() {
   const update = (key: keyof Config, value: string) => {
     setConfig(c => c ? { ...c, [key]: value } : c);
     setSaved(false);
+  };
+
+  const handleAudioChange = ({ micId, speakerId }: { micId?: string; speakerId?: string }) => {
+    const updates: Partial<Config> = {};
+    if (micId !== undefined) updates.micDeviceId = micId;
+    if (speakerId !== undefined) updates.speakerDeviceId = speakerId;
+    if (Object.keys(updates).length > 0) {
+      setConfig(c => c ? { ...c, ...updates } : c);
+      (window as any).inwiseAPI.setConfig(updates);
+    }
   };
 
   const save = async () => {
@@ -1893,7 +1623,7 @@ export default function Settings() {
                 className="form-input"
                 value={config.apiKey}
                 onChange={e => update('apiKey', e.target.value)}
-                placeholder={config.apiProvider === 'anthropic' ? 'sk-ant-…' : 'sk-…'}
+                placeholder={config.apiProvider === 'anthropic' ? 'sk-ant-â€¦' : 'sk-â€¦'}
               />
             </div>
           </div>
@@ -1901,30 +1631,11 @@ export default function Settings() {
           {/* Transcription */}
           <div className="settings-section">
             <div className="settings-section-title">Transcription</div>
-            <div className="form-group">
-              <label className="form-label">Microphone</label>
-              <select
-                className="form-select"
-                value={config.micDeviceId}
-                onChange={e => update('micDeviceId', e.target.value)}
-              >
-                <option value="default">System Default</option>
-                {mics.map(mic => (
-                  <option key={mic.deviceId} value={mic.deviceId}>
-                    {mic.label || `Microphone ${mic.deviceId.slice(0, 8)}`}
-                  </option>
-                ))}
-              </select>
-              <MicTest deviceId={config.micDeviceId} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">System Audio</label>
-              <span style={{ fontSize: 12, color: 'var(--slate-500)', marginBottom: 4, display: 'block' }}>
-                Captures audio playing through your speakers (e.g. the other person on a call).
-                Play a video or music, then click test.
-              </span>
-              <SystemAudioTest />
-            </div>
+            <AudioTab
+              initialMicId={config.micDeviceId}
+              initialSpeakerId={config.speakerDeviceId}
+              onSelectionChange={handleAudioChange}
+            />
             <div className="form-group">
               <label className="form-label">Whisper Model</label>
               <select
@@ -1932,13 +1643,13 @@ export default function Settings() {
                 value={config.whisperModel}
                 onChange={e => update('whisperModel', e.target.value)}
               >
-                <option value="tiny">Tiny (~75 MB) — fastest</option>
-                <option value="base">Base (~148 MB) — recommended</option>
-                <option value="small">Small (~488 MB) — better accuracy</option>
-                <option value="medium">Medium (~1.5 GB) — best accuracy</option>
+                <option value="tiny">Tiny (~75 MB) â€” fastest</option>
+                <option value="base">Base (~148 MB) â€” recommended</option>
+                <option value="small">Small (~488 MB) â€” better accuracy</option>
+                <option value="medium">Medium (~1.5 GB) â€” best accuracy</option>
               </select>
               <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4 }}>
-                Downloaded automatically on first use. Runs 100% locally — no audio ever leaves your device.
+                Downloaded automatically on first use. Runs 100% locally â€” no audio ever leaves your device.
               </span>
             </div>
           </div>
@@ -1948,7 +1659,7 @@ export default function Settings() {
             <div className="settings-section-title">Calendar</div>
             <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 20, lineHeight: 1.6 }}>
               Inwise uses your calendar's private ICS link to detect upcoming meetings.
-              No login or app registration required — just a URL you copy in about 30 seconds.
+              No login or app registration required â€” just a URL you copy in about 30 seconds.
               The link is only used locally on your machine.
             </p>
 
@@ -2001,7 +1712,7 @@ export default function Settings() {
 
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <button className="btn btn-primary" onClick={save}>Save Settings</button>
-            {saved && <span style={{ fontSize: 13, color: 'var(--teal)' }}>✓ Saved</span>}
+            {saved && <span style={{ fontSize: 13, color: 'var(--teal)' }}>âœ“ Saved</span>}
           </div>
 
           {/* Data Management */}
