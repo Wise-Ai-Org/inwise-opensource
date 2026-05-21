@@ -69,6 +69,7 @@
     "asar": true
   },
   "dependencies": {
+    "@inwise/desktop-shared": "file:src/shared",
     "@anthropic-ai/sdk": "^0.30.0",
     "@chakra-ui/icons": "^2.1.1",
     "@chakra-ui/react": "^2.8.2",
