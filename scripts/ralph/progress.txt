@@ -1,25 +1,25 @@
 # Ralph Progress Log
-Started: Thu May 21 12:31:56 PDT 2026
----
+Started: Thu May 21 13:35:30 PDT 2026
 
 ## Codebase Patterns
-- electron-builder bundles node_modules — use `"file:src/shared"` npm dependency for submodule packages so they resolve at runtime, not just via tsconfig paths
-- tsconfig.main.json needs both `baseUrl: "."` AND `paths` for path aliases to work with `tsc`
-- Two tsconfig files: tsconfig.main.json (main process, commonjs) + tsconfig.renderer.json (renderer, ESNext/bundler)
-- No dedicated test runner script in package.json; quality check is `tsc -p tsconfig.main.json --noEmit`
+- tsconfig.renderer.json (for renderer/Settings.tsx) is separate from tsconfig.main.json — path aliases must be added to BOTH
+- The config:set IPC channel accepts a Partial<Config> updates object; use `(window as any).inwiseAPI.setConfig(updates)` to persist individual fields immediately
+- Audio device changes in the shared AudioTab fire `onSelectionChange` with `{ micId?, speakerId? }` — persist each key to config immediately, not on a Save button
+- When npm install hasn't been run in the parity worktree, run it before typechecking
+---
 
-## 2026-05-21 12:38 PDT - US-005
+## 2026-05-21 - US-105
 Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- Added git submodule `inwise-desktop-shared` at `src/shared/`
-- Built submodule (`npm install && npm run build` in src/shared)
-- Added `"@inwise/desktop-shared": "file:src/shared"` to root package.json dependencies
-- Updated tsconfig.main.json with `baseUrl: "."` and `paths: { "@inwise/desktop-shared": ["src/shared/dist/index"] }`
-- Changed main.ts lines 27 and 55 to import from `@inwise/desktop-shared` instead of `./audio-utils` and `./mfcc`
-- Deleted src/main/audio-utils.ts and src/main/mfcc.ts
-- Typecheck and build pass (8 files changed, 181 insertions, 477 deletions)
+- Replaced OSS Settings.tsx audio section (mic dropdown + MicTest + SystemAudioTest) with shared `<AudioTab>` component from @inwise/desktop-shared
+- Added `speakerDeviceId: string` field to Config interface in both src/main/config.ts and src/renderer/Settings.tsx
+- Added `@inwise/desktop-shared` path alias to tsconfig.renderer.json (was already in tsconfig.main.json from US-005)
+- Wired `handleAudioChange` callback to persist mic/speaker changes immediately via config:set IPC
+- Deleted local MicTest (was lines 334-466) and SystemAudioTest (468-610) — no other callers in src/renderer/
+- Removed `mics` state and `enumerateDevices` call from Settings component since AudioTab handles device enumeration internally
+- Both `npx tsc -p tsconfig.renderer.json --noEmit` and `npm run build` pass clean
+- Files changed: src/main/config.ts, src/renderer/Settings.tsx, tsconfig.renderer.json, package-lock.json
 - **Learnings for future iterations:**
-  - Submodule dist/ must be built inside the submodule before root typecheck; `npm install && npm run build` in src/shared is required
-  - Using both file: dependency AND tsconfig paths covers both runtime (Node.js require) and IDE/typecheck (TypeScript paths resolution)
-  - `rootDir` constraint does not block `paths` aliases — TypeScript resolves them from the d.ts files, not the source
-  - electron-builder `asar: true` with `node_modules/**/*` in files picks up file: symlinks, so runtime resolution works
+  - node_modules did not exist in the parity worktree — ran `npm install` before typecheck
+  - The Read hook intercepts file reads and shows only line 1; use PowerShell `Get-Content` to read specific line ranges
+  - AudioTab already bundles DevicePicker + MicTest + SpeakerTest — no need for any local wrappers
 ---

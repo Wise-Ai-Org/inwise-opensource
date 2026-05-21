@@ -20,7 +20,7 @@
         "Typecheck passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "OSS uses tsconfig.renderer.json for renderer-side code (Settings.tsx is a renderer file). Path alias @inwise/desktop-shared was added to tsconfig.main.json in US-005 — likely needs adding to tsconfig.renderer.json too. Do NOT touch main.ts unless adding a new IPC channel for speakerDeviceId. Branched from ralph/phase-0-foundation in worktree — does not block main checkout. Driver script handles submodule pointer commit separately — do not commit src/shared bump as part of this story."
     }
   ]
