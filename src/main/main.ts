@@ -975,6 +975,10 @@ ipcMain.handle('seed:clear', async () => {
   }
 });
 
+ipcMain.handle('db:export', () => {
+  shell.showItemInFolder(app.getPath('userData'));
+});
+
 ipcMain.handle('calendar:testUrl', (_e, url: string) => calendarWatcher.testUrl(url));
 ipcMain.handle('calendar:health', () => calendarWatcher.getHealth());
 

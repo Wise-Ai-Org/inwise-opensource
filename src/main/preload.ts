@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   chooseMeetingForConflict: (chosenId: string) => ipcRenderer.invoke('meeting:conflict:choose', chosenId),
   seedDemoData: () => ipcRenderer.invoke('seed:demo'),
   clearDemoData: () => ipcRenderer.invoke('seed:clear'),
+  exportDb: () => ipcRenderer.invoke('db:export'),
 
   // Meetings
   getMeetings: () => ipcRenderer.invoke('db:getMeetings'),
