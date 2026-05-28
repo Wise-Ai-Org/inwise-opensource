@@ -110,7 +110,7 @@
                                                        "Commit: feat: US-805 — OSS Onboarding + WelcomeBack use shared components"
                                                    ],
                             "priority":  40,
-                            "passes":  false
+                            "passes":  true
                         }
                     ]
 }

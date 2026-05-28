@@ -123,3 +123,19 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - generatePersonInsights / generateAgenda may return string or array — normalize to string in adapter
   - App.tsx renders <People /> with no props — replacement wrapper needs no prop forwarding
 ---
+
+## 2026-05-28 12:30 - US-805
+Thread: https://ampcode.com/threads/
+- Created ossOnboardingAdapter.ts (calendar/jira/voiceprint sub-adapters; getStep/setStep via config)
+- Created ossWelcomeBackAdapter.ts (maps WelcomeBackResult wins → WelcomeBackPayload actions; liveMeeting$ via one-shot IPC)
+- Replaced Onboarding.tsx (630 lines → 11 lines) with shared OnboardingFlow
+- Replaced WelcomeBack.tsx (414 lines → 11 lines) with shared WelcomeBackModal
+- Replaced FirstTimeUserFlow.tsx (250 lines → 9 lines) with null no-op (spotlight tour superseded)
+- Typecheck and build both pass clean; committed as c7862d3
+- **Learnings for future iterations:**
+  - ossOnboardingAdapter reuses the same jira/voice sub-adapter logic already in ossSettingsAdapter — could DRY up by exporting from there
+  - WelcomeBackResult (OSS) → WelcomeBackPayload (shared) requires mapping wins/gapDays to actions/dayBrief — not a direct pass-through
+  - welcomeBack:liveMeeting is a one-shot invoke (not a subscription); liveMeeting wraps it with a no-op unsubscribe
+  - welcomeBackCompute/Dismiss/liveMeeting are NOT in api.ts — use (window as any).inwiseAPI directly
+  - FirstTimeUserFlow.tsx (spotlight tour) has no shared equivalent — returning null is the correct approach
+---
