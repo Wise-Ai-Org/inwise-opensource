@@ -83,7 +83,7 @@
                                                        "Commit: feat: US-605 — OSS Tasks/Jira uses shared view"
                                                    ],
                             "priority":  60,
-                            "passes":  false
+                            "passes":  true
                         },
                         {
                             "id":  "US-705",

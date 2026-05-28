@@ -83,3 +83,24 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - getConversationMappings / updateConversationMapping have no OSS IPC equivalent — return empty/noop stubs
   - The views/communications/ directory only contained the 3 modal files; safe to delete the directory entirely after removal
 ---
+
+## 2026-05-28 12:15pm PDT - US-605
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Created src/renderer/adapters/ossTasksAdapter.ts implementing TasksAdapter (~30 methods)
+- listTasks: bridges getTasks(); when includeSnoozed=true also fetches getSnoozedTasks() and deduplicates by _id
+- createTask/updateTask/deleteTask: delegate directly to api.*
+- snoozeTask/bringBackTask/bringBackAllTasks/confirmLikelyDone/rejectLikelyDone: delegate directly to api.*
+- suggestTaskFields(title): calls api.suggestTaskFields({ title, modalType: 'task-creation' })
+- scoredTasks: calls api.getScoredTasks(), maps { taskId, score, rationale/reasoning }
+- jira sub-adapter: bridges all 11 JiraTaskAdapter methods to api.jira* calls; matchTasks() fetches tasks first then calls jiraMatchTasks
+- sor sub-adapter: bridges sorListByTaskId, sorListByTargetRecord, sorListFailed(system, 0), sorRetry with try/catch returning { ok, error }
+- Replaced MyTasks.tsx (1551 lines) with 12-line TasksView mount — net -3524 lines
+- Deleted src/renderer/components/tasks/{CreateTaskModal,EditTaskModal,TaskDetailSidebar}.tsx (moved to shared)
+- Files changed: src/renderer/MyTasks.tsx (-1551+12), src/renderer/adapters/ossTasksAdapter.ts (new, 172 lines), 3 components/tasks/*.tsx deleted
+- **Learnings for future iterations:**
+  - listTasks with includeSnoozed=true requires combining getTasks() + getSnoozedTasks() — two separate IPC calls, deduplicate by _id
+  - jira.matchTasks() needs to fetch tasks first (no cached list in adapter) before calling jiraMatchTasks(tasks)
+  - sor.listFailed(system) maps to sorListFailed(system, 0) — pass sinceMs=0 for all history
+  - sor.retryFailed wraps sorRetry in try/catch since the interface returns { ok, error } not void
+  - The components/tasks/ directory only contained the 3 modal files — safe to delete entirely after removal
+---
