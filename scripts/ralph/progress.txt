@@ -1,25 +1,22 @@
 # Ralph Progress Log
-Started: Thu May 21 13:35:30 PDT 2026
-
-## Codebase Patterns
-- tsconfig.renderer.json (for renderer/Settings.tsx) is separate from tsconfig.main.json — path aliases must be added to BOTH
-- The config:set IPC channel accepts a Partial<Config> updates object; use `(window as any).inwiseAPI.setConfig(updates)` to persist individual fields immediately
-- Audio device changes in the shared AudioTab fire `onSelectionChange` with `{ micId?, speakerId? }` — persist each key to config immediately, not on a Save button
-- When npm install hasn't been run in the parity worktree, run it before typechecking
+Started: Thu May 28 11:20:33 PDT 2026
 ---
 
-## 2026-05-21 - US-105
-Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- Replaced OSS Settings.tsx audio section (mic dropdown + MicTest + SystemAudioTest) with shared `<AudioTab>` component from @inwise/desktop-shared
-- Added `speakerDeviceId: string` field to Config interface in both src/main/config.ts and src/renderer/Settings.tsx
-- Added `@inwise/desktop-shared` path alias to tsconfig.renderer.json (was already in tsconfig.main.json from US-005)
-- Wired `handleAudioChange` callback to persist mic/speaker changes immediately via config:set IPC
-- Deleted local MicTest (was lines 334-466) and SystemAudioTest (468-610) — no other callers in src/renderer/
-- Removed `mics` state and `enumerateDevices` call from Settings component since AudioTab handles device enumeration internally
-- Both `npx tsc -p tsconfig.renderer.json --noEmit` and `npm run build` pass clean
-- Files changed: src/main/config.ts, src/renderer/Settings.tsx, tsconfig.renderer.json, package-lock.json
+## 2026-05-28 11:35am PDT - US-205
+Thread: https://ampcode.com/threads/\
+- Created src/renderer/adapters/ossCalendarAdapter.ts implementing CalendarAdapter
+- listConnections: bridges inwiseAPI.listCalendars() → CalendarConnection[], filters to google/outlook providers only
+- connectGoogle/connectOutlook: throw NotSupportedError (OSS is ICS-based, not OAuth)
+- remove: bridges inwiseAPI.removeCalendar(id)
+- getHealth: bridges inwiseAPI.getCalendarHealth() → CalendarHealth shape
+- Settings.tsx: added CalendarTab + ossCalendarAdapter imports; deleted CalendarStatus, formatAgo, CalendarRowView, CalendarList (287 lines removed); replaced calendar section with <CalendarTab adapter={ossCalendarAdapter} />
+- formatAgo was reused by non-calendar SOR/Jira sections — restored as standalone utility
+- Files changed: src/renderer/adapters/ossCalendarAdapter.ts (new), src/renderer/Settings.tsx (-312+62)
 - **Learnings for future iterations:**
-  - node_modules did not exist in the parity worktree — ran `npm install` before typecheck
-  - The Read hook intercepts file reads and shows only line 1; use PowerShell `Get-Content` to read specific line ranges
-  - AudioTab already bundles DevicePicker + MicTest + SpeakerTest — no need for any local wrappers
+  - OSS calendar section uses ICS-based model (not OAuth); CalendarTab's connectGoogle/connectOutlook must throw NotSupportedError
+  - formatAgo utility was used outside calendar components — must not delete it blindly
+  - Read hook intercepts file reads and shows only line 1 to save tokens; use PowerShell Get-Content for full file reads
+  - CalendarHealthInfo.googleConfigured/outlookConfigured map to CalendarHealth.googleConnected/outlookConnected
+  - CalendarRow.enabled maps to CalendarConnection.status: enabled → 'ok', disabled → 'sync-stalled'
+  - Line count after US-105: 1755; after US-205 deletions: 1446 (net -309)
 ---

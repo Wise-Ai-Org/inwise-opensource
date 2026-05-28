@@ -1,27 +1,116 @@
-{
-  "project": "inwise-opensource (parity worktree)",
-  "branchName": "ralph/sdk-parity-driver",
-  "description": "ACTIVE PRD GUARD: Phase 1 — OSS consumes shared AudioTab. Master PRD: C:\\Users\\Shrav\\Inwise\\desktop-recording-sdk\\PRD\\sdk-parity-audit.md Section 5 Phase 1. SCOPE: US-105 ONLY. Phase 0 (US-001..US-006) and Phase 1 shared stories (US-101..US-104) are pre-requisites and completed; do not re-execute. If progress.txt contains any US-IDs other than US-105, HALT and request progress.txt reset. MODEL: claude-sonnet-4-6. This worktree is at C:\\Users\\Shrav\\Inwise\\inwise-opensource-parity, separate from the main checkout, branched off ralph/phase-0-foundation (so src/shared submodule is already wired). Driver script updates submodule to latest shared main HEAD before launching this run.",
-  "userStories": [
-    {
-      "id": "US-105",
-      "title": "Replace OSS audio settings with shared AudioTab",
-      "description": "OSS's Settings.tsx currently has an Audio Settings section that uses local components. Replace that section with the shared AudioTab component from @inwise/desktop-shared. Wire the onSelectionChange callback to the existing OSS config store via the existing config:set IPC channel (keys micDeviceId / speakerDeviceId).",
-      "acceptanceCriteria": [
-        "src/shared submodule is already pointed at latest shared main HEAD (driver script did this — confirm src/shared/src/components/AudioTab/AudioTab.tsx exists and is built into src/shared/dist/)",
-        "Read C:\\Users\\Shrav\\Inwise\\inwise-opensource-parity\\src\\renderer\\Settings.tsx — locate the audio-settings section (look for getUserMedia, enumerateDevices, mic-test logic, or section header text 'Audio' or 'Microphone')",
-        "Replace the audio-settings section's UI with `<AudioTab initialMicId={config.micDeviceId} initialSpeakerId={config.speakerDeviceId} onSelectionChange={handleAudioChange} />` imported from '@inwise/desktop-shared'",
-        "handleAudioChange: on each call, persist micId and speakerId via the existing config:set IPC channel (the same path used to save other config keys). If config.ts does not currently store speakerDeviceId, add the field — it's a string in Config interface, persisted to config.json",
-        "Delete the now-unused local audio-test helpers from Settings.tsx ONLY if they have no other callers — grep first for cross-references in src/renderer/",
-        "Verify tsconfig.renderer.json has the @inwise/desktop-shared path alias (added in US-005 to tsconfig.main.json — copy to renderer config if missing). Path: 'src/shared/dist/index'",
-        "Run `npx tsc -p tsconfig.renderer.json --noEmit` — passes",
-        "Run `npm run build` end-to-end in OSS — passes",
-        "Commit ALL changes (modified Settings.tsx, possibly modified config.ts/main.ts for new IPC, possibly updated tsconfig.renderer.json) with message: feat: US-105 — OSS Settings audio section uses shared AudioTab",
-        "Typecheck passes"
-      ],
-      "priority": 1,
-      "passes": true,
-      "notes": "OSS uses tsconfig.renderer.json for renderer-side code (Settings.tsx is a renderer file). Path alias @inwise/desktop-shared was added to tsconfig.main.json in US-005 — likely needs adding to tsconfig.renderer.json too. Do NOT touch main.ts unless adding a new IPC channel for speakerDeviceId. Branched from ralph/phase-0-foundation in worktree — does not block main checkout. Driver script handles submodule pointer commit separately — do not commit src/shared bump as part of this story."
-    }
-  ]
+﻿{
+    "project":  "inwise-opensource (consolidated Phase 2-8 parity worktree)",
+    "branchName":  "ralph/sdk-parity-driver",
+    "description":  "Consolidated OSS parity stories Phase 2-8. Each story wires a thin adapter implementation that bridges a shared component to OSS\u0027s existing IPC channels. Master PRD: C:\\Users\\Shrav\\Inwise\\desktop-recording-sdk\\PRD\\sdk-parity-audit.md. Ralph picks highest-priority passes=false. MODEL: claude-sonnet-4-6. DO NOT proceed with a phase X story until the matching shared component story for phase X is passes=true in inwise-desktop-shared. Driver script handles submodule pointer commits.",
+    "userStories":  [
+                        {
+                            "id":  "US-205",
+                            "title":  "OSS adopts shared CalendarTab with user-keys OAuth adapter",
+                            "description":  "Create OSSCalendarAdapter bridging existing calendar:* IPC channels (calendar:list, calendar:add, calendar:remove, calendar:health). Replace Settings.tsx calendar section with \u003cCalendarTab adapter={ossCalendarAdapter} /\u003e.",
+                            "acceptanceCriteria":  [
+                                                       "Driver already updated src/shared submodule pointer — confirm src/shared/src/adapters/calendar.ts + components/CalendarTab exist",
+                                                       "Create src/renderer/adapters/ossCalendarAdapter.ts implementing CalendarAdapter from @inwise/desktop-shared",
+                                                       "listConnections calls window.inwiseAPI.calendar.list (verify exact channel via Settings.tsx)",
+                                                       "connectGoogle/connectOutlook call calendar:add with provider arg",
+                                                       "remove calls calendar:remove; getHealth calls calendar:health",
+                                                       "Replace existing calendar section in Settings.tsx with \u003cCalendarTab adapter={ossCalendarAdapter} /\u003e",
+                                                       "Verify @inwise/desktop-shared path alias in tsconfig.renderer.json",
+                                                       "npx tsc -p tsconfig.renderer.json --noEmit + npm run build pass",
+                                                       "Commit: feat: US-205 — OSS Settings uses shared CalendarTab"
+                                                   ],
+                            "priority":  100,
+                            "passes":  true,
+                            "notes":  "Thin bridge; minimum logic translating IPC responses into CalendarConnection/CalendarHealth shapes. Do not commit submodule bump."
+                        },
+                        {
+                            "id":  "US-305",
+                            "title":  "OSS adopts shared MeetingToast via CalendarWatcher bridge adapter",
+                            "description":  "Create OSSToastWindowAdapter that bridges shared ToastWindowAdapter to the existing CalendarWatcher event stream (meeting-reminder + meeting-starting events from src/main/calendar-watcher.ts). Replace badge.html/badge.tsx with shared \u003cMeetingToast\u003e; update createReminderBadge in src/main/main.ts to render shared component inside the existing 340x72 frameless window (or 360x64 per spec — pick whichever matches existing prod window).",
+                            "acceptanceCriteria":  [
+                                                       "Create src/renderer/adapters/ossToastAdapter.ts implementing ToastWindowAdapter",
+                                                       "onMeetingStarting subscribes to existing IPC \u0027meeting:reminder\u0027 channel (preload.ts:139)",
+                                                       "dismiss calls existing toast-close IPC (or new toast:dismiss if none exists)",
+                                                       "openJoinUrl calls existing \u0027meeting:open-link\u0027 or equivalent",
+                                                       "Replace badge.tsx with mount of \u003cMeetingToast adapter={ossToastAdapter} /\u003e",
+                                                       "Verify window dimensions match shared component (resize createReminderBadge if needed; document chosen dimension in progress.txt)",
+                                                       "Typecheck + build clean",
+                                                       "Commit: feat: US-305 — OSS uses shared MeetingToast"
+                                                   ],
+                            "priority":  90,
+                            "passes":  false,
+                            "notes":  "Existing OSS toast is 340x72 top-left; shared spec is 360x64 bottom-right. Pick one and align both; document choice in progress.txt."
+                        },
+                        {
+                            "id":  "US-405",
+                            "title":  "OSS adopts shared SettingsShell with all section adapters",
+                            "description":  "Create OSSSettingsAdapter aggregating subadapters for AI provider, Transcription, Integrations/SoR, Voice enrollment, Data management. Replace Settings.tsx body with \u003cSettingsShell adapter={ossSettingsAdapter} /\u003e. All subadapter methods bridge to existing OSS IPC (config:set/get, sor:*, audio:*, jira:*, seed:*, db:export).",
+                            "acceptanceCriteria":  [
+                                                       "Create src/renderer/adapters/ossSettingsAdapter.ts with full SettingsAdapter implementation",
+                                                       "Subadapter methods map 1:1 to existing IPC (verify each channel name in src/main/main.ts)",
+                                                       "Replace entire Settings.tsx body (preserve only window chrome) with \u003cSettingsShell\u003e mount",
+                                                       "Tab list includes: Audio | Calendar | AI | Transcription | Integrations | Voice | Data",
+                                                       "Delete inline section code from Settings.tsx (lines moved to shared)",
+                                                       "Typecheck + build clean",
+                                                       "Commit: feat: US-405 — OSS Settings uses shared SettingsShell"
+                                                   ],
+                            "priority":  80,
+                            "passes":  false,
+                            "notes":  "OSS Settings.tsx is 2044 LOC — most of it gets deleted in this story (sections now live in shared)."
+                        },
+                        {
+                            "id":  "US-505",
+                            "title":  "OSS adopts shared CommunicationsView with NeDB adapter",
+                            "description":  "Create OSSCommunicationsAdapter bridging to existing db:getMeetings, db:getMeeting, db:deleteMeeting, db:reviewMeeting, db:createMeetingFromTranscript, ai:generateAgenda, jira:linkTask channels. Replace src/renderer/Communications.tsx with \u003cCommunicationsView adapter={ossCommunicationsAdapter} /\u003e.",
+                            "acceptanceCriteria":  [
+                                                       "Create src/renderer/adapters/ossCommunicationsAdapter.ts",
+                                                       "Replace Communications.tsx body with shared component mount",
+                                                       "Delete TranscriptReviewModal/TranscriptUploadModal/JiraMappingModal (moved to shared)",
+                                                       "Typecheck + build clean",
+                                                       "Commit: feat: US-505 — OSS Communications uses shared view"
+                                                   ],
+                            "priority":  70,
+                            "passes":  false
+                        },
+                        {
+                            "id":  "US-605",
+                            "title":  "OSS adopts shared TasksView with NeDB+Jira adapter",
+                            "description":  "Create OSSTasksAdapter bridging to db:getTasks/createTask/updateTask/deleteTask/snoozeTask/bringBackTask/confirmLikelyDone/rejectLikelyDone, ai:suggestTaskFields, tasks:scored, full jira:* channel set, sor:* channels. Replace MyTasks.tsx + task modal files with shared TasksView.",
+                            "acceptanceCriteria":  [
+                                                       "Create src/renderer/adapters/ossTasksAdapter.ts (largest adapter — ~30 methods)",
+                                                       "Replace MyTasks.tsx body with shared \u003cTasksView\u003e",
+                                                       "Delete CreateTaskModal/EditTaskModal/TaskDetailSidebar (moved to shared)",
+                                                       "Typecheck + build clean",
+                                                       "Commit: feat: US-605 — OSS Tasks/Jira uses shared view"
+                                                   ],
+                            "priority":  60,
+                            "passes":  false
+                        },
+                        {
+                            "id":  "US-705",
+                            "title":  "OSS adopts shared PeopleView with NeDB adapter",
+                            "description":  "Create OSSPeopleAdapter bridging db:getPeople/getPerson/addPerson/addTrackedPeople/archivePerson/unarchivePerson/getSuggestedPeople, ai:generatePersonInsights, ai:generateAgenda. Replace People.tsx body with \u003cPeopleView adapter={ossPeopleAdapter} /\u003e.",
+                            "acceptanceCriteria":  [
+                                                       "Create src/renderer/adapters/ossPeopleAdapter.ts",
+                                                       "Replace People.tsx body with shared component mount",
+                                                       "Typecheck + build clean",
+                                                       "Commit: feat: US-705 — OSS People uses shared view"
+                                                   ],
+                            "priority":  50,
+                            "passes":  false
+                        },
+                        {
+                            "id":  "US-805",
+                            "title":  "OSS adopts shared OnboardingFlow + WelcomeBackModal",
+                            "description":  "Create OSSOnboardingAdapter (calendar:testUrl, jira:connect, voiceprint:save/list/delete) and OSSWelcomeBackAdapter (welcomeBack:compute/dismiss/liveMeeting). Replace Onboarding.tsx, FirstTimeUserFlow.tsx, WelcomeBack.tsx with shared component mounts.",
+                            "acceptanceCriteria":  [
+                                                       "Create src/renderer/adapters/ossOnboardingAdapter.ts + ossWelcomeBackAdapter.ts",
+                                                       "Replace Onboarding.tsx + FirstTimeUserFlow.tsx with shared \u003cOnboardingFlow\u003e",
+                                                       "Replace WelcomeBack.tsx with shared \u003cWelcomeBackModal\u003e",
+                                                       "Typecheck + build clean",
+                                                       "Commit: feat: US-805 — OSS Onboarding + WelcomeBack use shared components"
+                                                   ],
+                            "priority":  40,
+                            "passes":  false
+                        }
+                    ]
 }
