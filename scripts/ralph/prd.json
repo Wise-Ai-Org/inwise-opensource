@@ -96,7 +96,7 @@
                                                        "Commit: feat: US-705 — OSS People uses shared view"
                                                    ],
                             "priority":  50,
-                            "passes":  false
+                            "passes":  true
                         },
                         {
                             "id":  "US-805",

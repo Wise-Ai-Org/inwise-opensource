@@ -104,3 +104,22 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - sor.retryFailed wraps sorRetry in try/catch since the interface returns { ok, error } not void
   - The components/tasks/ directory only contained the 3 modal files — safe to delete entirely after removal
 ---
+
+## 2026-05-28 12:19pm PDT - US-705
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Created src/renderer/adapters/ossPeopleAdapter.ts implementing PeopleAdapter (~10 methods)
+- listPeople: bridges api.getPeople(search) -> Person[], maps OSS fields with defaults for shared-only fields (bio, notes, relationshipInsights, archived, trackedBy, createdAt)
+- getPerson: bridges api.getPerson(id) -> Person | null
+- addPerson: bridges api.addPerson(data) -> Person (same {firstName, lastName, email, notes} shape)
+- addTrackedPeople: OSS backend (db:addTrackedPeople) expects names[], not ids[] — resolves person names from IDs via getPerson() before calling api.addTrackedPeople(names)
+- archivePerson / unarchivePerson: delegate directly; main.ts handlers already return true
+- getSuggestedPeople: bridges api.getSuggestedPeople() -> SuggestedPerson[] with safe defaults
+- generatePersonInsights / generateAgenda: handles string or array return from AI IPC
+- Replaced People.tsx (1022 lines) with 6-line PeopleView mount — net -1118 lines
+- Files changed: src/renderer/People.tsx (-1118+6), src/renderer/adapters/ossPeopleAdapter.ts (new, 93 lines)
+- **Learnings for future iterations:**
+  - addTrackedPeople IPC (db:addTrackedPeople) accepts names[], not _id[] — shared PeopleView passes _id[] — must resolve names via getPerson() calls in the adapter
+  - OSS Person shape lacks bio/notes/relationshipInsights/archived/trackedBy/createdAt — provide safe defaults in toPerson() mapper
+  - generatePersonInsights / generateAgenda may return string or array — normalize to string in adapter
+  - App.tsx renders <People /> with no props — replacement wrapper needs no prop forwarding
+---
