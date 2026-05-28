@@ -149,12 +149,12 @@ function createOverlayWindow(title: string, calendarEventId?: string): void {
   });
 }
 
-function createReminderBadge(title: string): void {
+function createReminderBadge(event: MeetingEvent): void {
   if (overlayWindow && !overlayWindow.isDestroyed()) return; // don't interrupt active recording
 
   const win = new BrowserWindow({
-    width: 340,
-    height: 72,
+    width: 360,
+    height: 64,
     x: 20,
     y: 20,
     alwaysOnTop: true,
@@ -163,15 +163,21 @@ function createReminderBadge(title: string): void {
     resizable: false,
     skipTaskbar: true,
     webPreferences: {
-      preload: path.join(__dirname, 'badge-preload.js'),
+      preload: path.join(__dirname, 'toast-preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
 
-  win.loadFile(path.join(__dirname, '../../dist/renderer/badge.html'));
+  win.loadFile(path.join(__dirname, '../../dist/renderer/toast.html'));
   win.webContents.once('did-finish-load', () => {
-    win.webContents.send('recording:start', title);
+    win.webContents.send('meeting:reminder', {
+      id: event.id,
+      title: event.title,
+      startTime: event.startTime instanceof Date ? event.startTime.getTime() : event.startTime,
+      meetingLink: event.meetingLink,
+      attendees: event.attendees,
+    });
   });
 
   // Auto-dismiss after 30 seconds if user doesn't interact
@@ -1942,10 +1948,15 @@ calendarWatcher.on('meeting-reminder', (event: any) => {
       body: `${event.title} â€” don't forget to record`,
     }).show();
   }
-  // Badge overlay with reminder mode (no auto-record)
-  createReminderBadge(event.title);
+  // Toast overlay via shared MeetingToast component
+  createReminderBadge(event as MeetingEvent);
   // Also notify the main window for a toast
   mainWindow?.webContents.send('meeting:reminder', event.title);
+});
+
+ipcMain.on('toast:dismiss', (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (win && !win.isDestroyed()) win.close();
 });
 
 // â”€â”€ App lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
