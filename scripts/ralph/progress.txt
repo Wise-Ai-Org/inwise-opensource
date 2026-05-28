@@ -36,3 +36,27 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - dist/renderer/*.html files are gitignored (dist/ in .gitignore) — they must exist on disk for runtime but are not committed; create them locally or add a build step
   - The meeting-reminder CalendarWatcher event carries the full CalendarEvent (id, title, startTime, meetingLink, attendees) — serialize startTime to ms before sending over IPC (Date is not serializable)
 ---
+
+## 2026-05-28 12:00pm PDT - US-405
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Updated src/shared/src/components/SettingsShell/SettingsShell.tsx to wire all 5 remaining tabs (AI, Transcription, Integrations, Voice, Data) — previously showed "coming soon" for all non-audio/calendar tabs
+- Rebuilt src/shared dist (npm run build in src/shared/)
+- Created src/renderer/adapters/ossSettingsAdapter.ts implementing SettingsAdapter with all sub-adapters:
+  - AI: getProvider/setProvider/getApiKey/setApiKey via config:get and config:set
+  - Transcription: getWhisperModel/setWhisperModel/getAudioDeviceId/setAudioDeviceId via config:get/set
+  - Integrations: jira.isConnected/connect/disconnect via jiraStatus/jiraConnect/jiraDisconnect
+  - Voice: list() maps VoicePrintInfo._id -> VoiceprintEntry.id; record() sends Uint8Array via saveVoicePrint; delete() via deleteVoicePrint
+  - Data: seedDemo/clearDemo via seedDemoData/clearDemoData; exportDb via new db:export IPC
+- Added db:export IPC handler to src/main/main.ts: calls shell.showItemInFolder(app.getPath('userData'))
+- Added exportDb to src/main/preload.ts exposing the db:export channel
+- Replaced src/renderer/Settings.tsx (1446 LOC) with minimal SettingsShell mount (32 LOC) — net -1428 lines
+- **Learnings for future iterations:**
+  - SettingsShell.tsx in shared had "coming soon" stubs for all non-audio/calendar tabs — had to update renderContent() and rebuild the dist before the OSS side would work
+  - The shared dist must be rebuilt after changing shared src files (run npm run build in src/shared/)
+  - VoicePrintInfo uses _id (NeDB convention) but VoiceprintEntry uses id — always map _id -> id in voice adapter
+  - VoiceEnrollmentTab records 5s of audio/webm and passes raw ArrayBuffer; the existing OSS component recorded 10s WAV at 16kHz — a slight quality regression acceptable for parity
+  - IntegrationsTab has simplified Jira UI: no ClientID/ClientSecret inputs, just connect/disconnect — the OSS credential entry flow is not replicated in the shared component
+  - IntegrationsTab's approval gate state is local (not persisted via adapter) — simplified vs the existing ApprovalGateSettings which saved to sor.jira config
+  - audioTabProps without initialMicId means audio tab won't pre-select saved device; TranscriptionTab correctly pre-selects via getAudioDeviceId()
+  - DataManagementTab exportDb: used shell.showItemInFolder(app.getPath('userData')) to reveal DB folder rather than creating a ZIP
+---

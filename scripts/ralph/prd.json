@@ -54,7 +54,7 @@
                                                        "Commit: feat: US-405 — OSS Settings uses shared SettingsShell"
                                                    ],
                             "priority":  80,
-                            "passes":  false,
+                            "passes":  true,
                             "notes":  "OSS Settings.tsx is 2044 LOC — most of it gets deleted in this story (sections now live in shared)."
                         },
                         {
