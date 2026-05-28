@@ -69,7 +69,7 @@
                                                        "Commit: feat: US-505 — OSS Communications uses shared view"
                                                    ],
                             "priority":  70,
-                            "passes":  false
+                            "passes":  true
                         },
                         {
                             "id":  "US-605",

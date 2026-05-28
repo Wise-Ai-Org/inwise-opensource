@@ -60,3 +60,26 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - audioTabProps without initialMicId means audio tab won't pre-select saved device; TranscriptionTab correctly pre-selects via getAudioDeviceId()
   - DataManagementTab exportDb: used shell.showItemInFolder(app.getPath('userData')) to reveal DB folder rather than creating a ZIP
 ---
+
+## 2026-05-28 12:05pm PDT - US-505
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Created src/renderer/adapters/ossCommunicationsAdapter.ts implementing CommunicationsAdapter
+- listMeetings: maps OSS Meeting[] to MeetingSummary[] (converts date to ISO, adds createdAt)
+- getMeeting: maps OSS meeting detail to MeetingDetail (maps insights fields 1:1)
+- deleteMeeting: delegates to api.deleteMeeting(id), returns true
+- reviewMeeting: calls api.reviewMeeting(id) (marks as reviewed only; edits not persisted — OSS IPC doesn't support edits)
+- createMeetingFromTranscript: delegates to api.createMeetingFromTranscript
+- generateAgenda: calls api.generateAgenda, converts agenda array to joined string
+- linkMeetingToJira: fetches meeting title, calls api.jiraAddComment to reference meeting in Jira issue
+- getConversationMappings/updateConversationMapping: return empty/noop (not in OSS IPC)
+- Replaced Communications.tsx (1557 lines) with 13-line CommunicationsView mount
+- Deleted src/renderer/views/communications/{TranscriptReviewModal,TranscriptUploadModal,JiraMappingModal}.tsx (moved to shared)
+- pendingOpen prop accepted in wrapper signature but not forwarded (shared component doesn't support it)
+- Files changed: src/renderer/Communications.tsx (-1557+13), src/renderer/adapters/ossCommunicationsAdapter.ts (new), 3 views/communications/*.tsx deleted
+- **Learnings for future iterations:**
+  - OSS pendingOpen prop carries { meetingId, focusTab } object (not a string) — always check App.tsx prop types before writing wrapper interface
+  - OSS reviewMeeting IPC only marks status; shared TranscriptReviewModal also edits title/transcript but edits are silently dropped in this adapter
+  - linkMeetingToJira bridges via jiraAddComment (comment on Jira issue) since no db:linkMeetingToJira channel exists in OSS
+  - getConversationMappings / updateConversationMapping have no OSS IPC equivalent — return empty/noop stubs
+  - The views/communications/ directory only contained the 3 modal files; safe to delete the directory entirely after removal
+---
