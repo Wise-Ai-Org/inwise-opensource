@@ -20,3 +20,19 @@ Thread: https://ampcode.com/threads/\
   - CalendarRow.enabled maps to CalendarConnection.status: enabled â†’ 'ok', disabled â†’ 'sync-stalled'
   - Line count after US-105: 1755; after US-205 deletions: 1446 (net -309)
 ---
+
+## 2026-05-28 11:45am PDT - US-305
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Created src/main/toast-preload.ts: exposes toastAPI with on/off/dismiss/openJoinUrl; wraps IPC listeners in a Map so off() correctly removes the right wrapper function
+- Created src/renderer/adapters/ossToastAdapter.ts: implements ToastWindowAdapter; onMeetingStarting subscribes to meeting:reminder via toastAPI.on; dismiss calls toastAPI.dismiss(); openJoinUrl calls toastAPI.openJoinUrl(url)
+- Created src/renderer/toast-entry.tsx: entry point renders <MeetingToast adapter={ossToastAdapter} />
+- Updated webpack.renderer.config.js: added toast-entry.tsx ? toast.bundle.js bundle entry
+- Updated src/main/main.ts: createReminderBadge now accepts MeetingEvent (not just title), resized to 360x64, uses toast-preload.js + toast.html, sends full meeting:reminder event; added ipcMain.on('toast:dismiss') handler to close the toast window; meeting-reminder calendarWatcher handler passes full event object
+- Created dist/renderer/toast.html (untracked, runtime artifact)
+- Window dimensions: chose 360x64 (spec) over existing 340x72
+- **Learnings for future iterations:**
+  - Toast preload wraps each ipcRenderer.on callback in a Map-tracked closure so removeListener can find the right function — copy this pattern for any preload needing proper off() support
+  - createReminderBadge previously misused badge.html/recording:start to show meeting reminders — now correctly separated into its own toast window
+  - dist/renderer/*.html files are gitignored (dist/ in .gitignore) — they must exist on disk for runtime but are not committed; create them locally or add a build step
+  - The meeting-reminder CalendarWatcher event carries the full CalendarEvent (id, title, startTime, meetingLink, attendees) — serialize startTime to ms before sending over IPC (Date is not serializable)
+---

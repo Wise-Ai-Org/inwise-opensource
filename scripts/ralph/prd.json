@@ -37,7 +37,7 @@
                                                        "Commit: feat: US-305 — OSS uses shared MeetingToast"
                                                    ],
                             "priority":  90,
-                            "passes":  false,
+                            "passes":  true,
                             "notes":  "Existing OSS toast is 340x72 top-left; shared spec is 360x64 bottom-right. Pick one and align both; document choice in progress.txt."
                         },
                         {
