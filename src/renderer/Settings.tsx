@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useRef } from 'react';
-import { AudioTab } from '@inwise/desktop-shared';
+import { AudioTab, CalendarTab } from '@inwise/desktop-shared';
+import { ossCalendarAdapter } from './adapters/ossCalendarAdapter';
 
 interface Config {
   apiProvider: 'anthropic' | 'openai';
@@ -15,16 +16,6 @@ interface Config {
   jiraDefaultProject: string;
 }
 
-type CalendarProviderUI = 'google' | 'outlook' | 'ics';
-
-interface CalendarRow {
-  id: string;
-  label: string;
-  provider: CalendarProviderUI;
-  url: string;
-  enabled: boolean;
-}
-
 interface VoicePrintInfo {
   _id: string;
   name: string;
@@ -34,90 +25,6 @@ interface VoicePrintInfo {
   hasAudio: boolean;
 }
 
-type TestStatus = 'idle' | 'testing' | 'ok' | 'error';
-
-interface CalendarHealthInfo {
-  status: 'unknown' | 'ok' | 'error' | 'no-url';
-  lastPollAt: number | null;
-  lastSuccessAt: number | null;
-  lastError: string | null;
-  eventCount: number;
-  googleConfigured: boolean;
-  outlookConfigured: boolean;
-}
-
-function CalendarStatus() {
-  const [health, setHealth] = useState<CalendarHealthInfo | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    const fetch = () => {
-      (window as any).inwiseAPI.getCalendarHealth().then((h: CalendarHealthInfo) => {
-        if (mounted) setHealth(h);
-      });
-    };
-    fetch();
-    const interval = setInterval(fetch, 15_000); // refresh every 15s
-    return () => { mounted = false; clearInterval(interval); };
-  }, []);
-
-  if (!health || health.status === 'unknown') return null;
-
-  if (health.status === 'no-url') {
-    return (
-      <div style={{
-        padding: '12px 16px', borderRadius: 8, marginBottom: 20,
-        background: 'var(--slate-50)', border: '1px solid var(--slate-200)',
-      }}>
-        <div style={{ fontSize: 13, color: 'var(--slate-500)' }}>
-          No calendar connected yet. Add your ICS link below to get started.
-        </div>
-      </div>
-    );
-  }
-
-  if (health.status === 'error') {
-    const ago = health.lastSuccessAt
-      ? formatAgo(health.lastSuccessAt)
-      : null;
-    return (
-      <div style={{
-        padding: '12px 16px', borderRadius: 8, marginBottom: 20,
-        background: '#FEF2F2', border: '1px solid #FECACA',
-      }}>
-        <div style={{ fontWeight: 600, fontSize: 13, color: '#DC2626', marginBottom: 4 }}>
-          Calendar sync failing
-        </div>
-        <div style={{ fontSize: 13, color: '#991B1B', lineHeight: 1.5 }}>
-          {health.lastError}
-        </div>
-        {ago && (
-          <div style={{ fontSize: 12, color: '#B91C1C', marginTop: 6 }}>
-            Last successful sync: {ago}
-          </div>
-        )}
-        <div style={{ fontSize: 12, color: '#991B1B', marginTop: 8, lineHeight: 1.5 }}>
-          Try re-copying the ICS link from your calendar settings below. Google secret ICS URLs
-          can expire if you reset your calendar sharing or change your password.
-        </div>
-      </div>
-    );
-  }
-
-  // status === 'ok'
-  const ago = health.lastSuccessAt ? formatAgo(health.lastSuccessAt) : '';
-  return (
-    <div style={{
-      padding: '12px 16px', borderRadius: 8, marginBottom: 20,
-      background: '#F0FDF9', border: '1px solid #CCFBF1',
-    }}>
-      <div style={{ fontSize: 13, color: '#115E59' }}>
-        <span style={{ fontWeight: 600 }}>Calendar connected</span> â€” {health.eventCount} upcoming event{health.eventCount !== 1 ? 's' : ''} found
-        {ago && <span style={{ color: '#5EEAD4', marginLeft: 8 }}>Â· synced {ago}</span>}
-      </div>
-    </div>
-  );
-}
 
 function formatAgo(epochMs: number): string {
   const diffSec = Math.round((Date.now() - epochMs) / 1000);
@@ -126,213 +33,6 @@ function formatAgo(epochMs: number): string {
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
   return `${Math.floor(diffSec / 86400)}d ago`;
 }
-
-function CalendarRowView({
-  row,
-  autoFocus,
-  onPatch,
-  onRemove,
-}: {
-  row: CalendarRow;
-  autoFocus: boolean;
-  onPatch: (id: string, patch: Partial<Omit<CalendarRow, 'id'>>) => void;
-  onRemove: (id: string) => void;
-}) {
-  const [label, setLabel] = useState(row.label);
-  const [url, setUrl] = useState(row.url);
-  const [testStatus, setTestStatus] = useState<TestStatus>('idle');
-  const [testMsg, setTestMsg] = useState('');
-  const labelDebouncer = useRef<number | null>(null);
-  const urlDebouncer = useRef<number | null>(null);
-  const labelInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (autoFocus && labelInputRef.current) {
-      labelInputRef.current.focus();
-    }
-  }, [autoFocus]);
-
-  useEffect(() => {
-    return () => {
-      if (labelDebouncer.current) window.clearTimeout(labelDebouncer.current);
-      if (urlDebouncer.current) window.clearTimeout(urlDebouncer.current);
-    };
-  }, []);
-
-  const debouncedSave = (key: 'label' | 'url', value: string) => {
-    const ref = key === 'label' ? labelDebouncer : urlDebouncer;
-    if (ref.current) window.clearTimeout(ref.current);
-    ref.current = window.setTimeout(() => onPatch(row.id, { [key]: value } as any), 500);
-  };
-
-  const test = async () => {
-    if (!url.trim()) return;
-    setTestStatus('testing');
-    setTestMsg('');
-    const result = await (window as any).inwiseAPI.testCalendarUrl(url.trim());
-    if (result.ok) {
-      setTestStatus('ok');
-      setTestMsg(`Connected â€” ${result.eventCount} upcoming event${result.eventCount !== 1 ? 's' : ''} found`);
-    } else {
-      setTestStatus('error');
-      setTestMsg(result.error || 'Could not read calendar. Double-check the URL.');
-    }
-  };
-
-  const statusColor = testStatus === 'ok' ? 'var(--teal)' : testStatus === 'error' ? 'var(--red)' : 'var(--slate-500)';
-
-  return (
-    <div style={{
-      padding: 14,
-      marginBottom: 12,
-      border: '1px solid var(--slate-200)',
-      borderRadius: 8,
-      background: row.enabled ? 'white' : 'var(--slate-50)',
-    }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
-        <input
-          ref={labelInputRef}
-          className="form-input"
-          style={{ flex: 1, fontWeight: 600 }}
-          value={label}
-          onChange={e => { setLabel(e.target.value); debouncedSave('label', e.target.value); }}
-          onBlur={() => {
-            if (labelDebouncer.current) window.clearTimeout(labelDebouncer.current);
-            onPatch(row.id, { label });
-          }}
-          placeholder="Calendar name (e.g. Work, Personal)"
-        />
-        <select
-          className="form-select"
-          style={{ width: 120, flexShrink: 0 }}
-          value={row.provider}
-          onChange={e => onPatch(row.id, { provider: e.target.value as CalendarProviderUI })}
-        >
-          <option value="google">Google</option>
-          <option value="outlook">Outlook</option>
-          <option value="ics">Other</option>
-        </select>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>
-          <input
-            type="checkbox"
-            checked={row.enabled}
-            onChange={e => onPatch(row.id, { enabled: e.target.checked })}
-          />
-          <span style={{ fontSize: 13, color: 'var(--slate-700)' }}>Enabled</span>
-        </label>
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <input
-          className="form-input"
-          style={{ flex: 1 }}
-          value={url}
-          onChange={e => { setUrl(e.target.value); setTestStatus('idle'); debouncedSave('url', e.target.value); }}
-          onBlur={() => {
-            if (urlDebouncer.current) window.clearTimeout(urlDebouncer.current);
-            onPatch(row.id, { url });
-          }}
-          placeholder="https://â€¦ (paste your secret ICS link)"
-        />
-        <button
-          className="btn btn-secondary btn-sm"
-          onClick={test}
-          disabled={!url.trim() || testStatus === 'testing'}
-          style={{ flexShrink: 0 }}
-        >
-          {testStatus === 'testing' ? 'Testingâ€¦' : 'Test'}
-        </button>
-        <button
-          className="btn btn-secondary btn-sm"
-          onClick={() => onRemove(row.id)}
-          style={{ flexShrink: 0, color: 'var(--red)' }}
-        >
-          Delete
-        </button>
-      </div>
-
-      {testStatus !== 'idle' && (
-        <div style={{ fontSize: 12, color: statusColor, marginTop: 8 }}>
-          {testStatus === 'ok' && 'âœ“ '}{testStatus === 'error' && 'âœ• '}{testMsg}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CalendarList() {
-  const [rows, setRows] = useState<CalendarRow[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [newlyAddedId, setNewlyAddedId] = useState<string | null>(null);
-
-  useEffect(() => {
-    (window as any).inwiseAPI.listCalendars().then((list: CalendarRow[]) => {
-      setRows(list);
-      setLoaded(true);
-    });
-  }, []);
-
-  const handleAdd = async () => {
-    const created = await (window as any).inwiseAPI.addCalendar({
-      label: '',
-      provider: 'ics' as CalendarProviderUI,
-      url: '',
-      enabled: true,
-    });
-    setRows(prev => [...prev, created]);
-    setNewlyAddedId(created.id);
-  };
-
-  const handleRemove = async (id: string) => {
-    if (!window.confirm('Remove this calendar? Events from this calendar will disappear from your upcoming list.')) return;
-    await (window as any).inwiseAPI.removeCalendar(id);
-    setRows(prev => prev.filter(r => r.id !== id));
-  };
-
-  const handlePatch = async (id: string, patch: Partial<Omit<CalendarRow, 'id'>>) => {
-    setRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r));
-    await (window as any).inwiseAPI.updateCalendar(id, patch);
-  };
-
-  if (!loaded) return null;
-
-  return (
-    <div>
-      {rows.length === 0 ? (
-        <div style={{
-          padding: '20px 16px',
-          border: '1px dashed var(--slate-300)',
-          borderRadius: 8,
-          textAlign: 'center',
-          color: 'var(--slate-500)',
-          fontSize: 13,
-          lineHeight: 1.5,
-          marginBottom: 12,
-        }}>
-          Add your first calendar to get started â€” paste a secret ICS link from your calendar settings.
-        </div>
-      ) : (
-        rows.map(row => (
-          <CalendarRowView
-            key={row.id}
-            row={row}
-            autoFocus={row.id === newlyAddedId}
-            onPatch={handlePatch}
-            onRemove={handleRemove}
-          />
-        ))
-      )}
-      <button className="btn btn-secondary btn-sm" onClick={handleAdd}>
-        + Add calendar
-      </button>
-      <div style={{ fontSize: 12, color: 'var(--slate-400)', marginTop: 10, lineHeight: 1.5 }}>
-        â± Changes to calendars refresh automatically. New events from Google can take 5â€“15 minutes to appear;
-        Outlook ICS feeds can take 15â€“60 minutes. Disabled calendars are skipped on the next poll.
-      </div>
-    </div>
-  );
-}
-
 function JiraSettings({ config, update }: { config: Config; update: (key: keyof Config, value: string) => void }) {
   const [status, setStatus] = useState<{ connected: boolean; info: any } | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -1656,16 +1356,7 @@ export default function Settings() {
 
           {/* Calendar */}
           <div className="settings-section">
-            <div className="settings-section-title">Calendar</div>
-            <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 20, lineHeight: 1.6 }}>
-              Inwise uses your calendar's private ICS link to detect upcoming meetings.
-              No login or app registration required â€” just a URL you copy in about 30 seconds.
-              The link is only used locally on your machine.
-            </p>
-
-            <CalendarStatus />
-
-            <CalendarList />
+            <CalendarTab adapter={ossCalendarAdapter} />
           </div>
 
           {/* Jira */}
