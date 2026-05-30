@@ -22,24 +22,28 @@ const INWISE_TEAL = '#0F738C';
 // Pre-flight check: verify the saved (or default) mic exists and getUserMedia succeeds.
 // Acquires briefly, then releases — startMic() re-acquires for real recording.
 async function checkMic(): Promise<{ ok: boolean; error?: string }> {
+  const cfg = await (window as any).inwiseAPI?.getConfig?.();
+  const savedDeviceId = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
   try {
-    const cfg = await (window as any).inwiseAPI?.getConfig?.();
-    const savedDeviceId = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
-
-    if (savedDeviceId) {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const mics = devices.filter(d => d.kind === 'audioinput');
-      if (!mics.some(d => d.deviceId === savedDeviceId)) {
-        return { ok: false, error: 'Saved mic not found — open Settings to reconnect' };
-      }
-    }
-
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: savedDeviceId ? { deviceId: { exact: savedDeviceId } } : true,
     });
     stream.getTracks().forEach(t => t.stop());
     return { ok: true };
   } catch (e: any) {
+    // The saved deviceId frequently won't match here: Chromium salts deviceId per
+    // browsing context, and the salt rotates across sessions/app restarts. The
+    // Settings window saved one salt; this overlay window sees another. So an exact
+    // mismatch does NOT mean the mic is gone — fall back to the default device.
+    if (savedDeviceId && (e?.name === 'OverconstrainedError' || e?.name === 'NotFoundError')) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(t => t.stop());
+        return { ok: true };
+      } catch (e2: any) {
+        return { ok: false, error: e2?.message || 'Mic permission denied' };
+      }
+    }
     return { ok: false, error: e?.message || 'Mic permission denied' };
   }
 }
@@ -147,6 +151,22 @@ const styles: Record<string, any> = {
     borderRadius: '50%',
     background: '#ef4444',
     border: 'none',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    WebkitAppRegion: 'no-drag',
+  },
+  closeBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: '50%',
+    background: 'rgba(255,255,255,0.08)',
+    border: 'none',
+    color: '#94a3b8',
+    fontSize: 14,
+    lineHeight: 1,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
@@ -278,27 +298,23 @@ export default function Badge() {
       const cfg = await (window as any).inwiseAPI.getConfig();
       const deviceId = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
 
-      // Mic stream — verify saved device still exists before requesting
-      if (deviceId) {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const mics = devices.filter(d => d.kind === 'audioinput');
-        const found = mics.some(d => d.deviceId === deviceId);
-        if (!found) {
-          const micNames = mics.map(d => d.label || d.deviceId).join(', ');
-          console.warn('[Badge] Saved mic not found. Available:', micNames);
-          reportHealth({ micOk: false, systemAudioOk: false, message: 'Microphone not found — go to Settings to reconnect' });
-          setState(s => ({
-            ...s,
-            status: 'error',
-            message: 'Microphone not found — go to Settings to reconnect',
-          }));
-          return;
+      // Mic stream — prefer the saved device, but fall back to the default mic if its
+      // deviceId no longer resolves. Chromium salts deviceId per browsing context and
+      // rotates the salt across sessions, so the id saved by the Settings window often
+      // won't match in this overlay window even though the same mic is present and works.
+      let micStream: MediaStream;
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+        });
+      } catch (micErr: any) {
+        if (deviceId && (micErr?.name === 'OverconstrainedError' || micErr?.name === 'NotFoundError')) {
+          console.warn('[Badge] Saved mic id did not resolve; falling back to default mic.', micErr?.name);
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } else {
+          throw micErr;
         }
       }
-
-      const micStream = await navigator.mediaDevices.getUserMedia({
-        audio: deviceId ? { deviceId: { exact: deviceId } } : true,
-      });
 
       // System audio via desktopCapturer — Windows loopback, graceful fallback elsewhere
       let sysStream: MediaStream | null = null;
@@ -600,6 +616,7 @@ export default function Badge() {
           <button style={styles.stopBtn} onClick={stopRecording} title="Stop recording">
             <div style={{ width: 10, height: 10, background: 'white', borderRadius: 2 }} />
           </button>
+          <button style={styles.closeBtn} onClick={stopRecording} title="Stop & save recording">✕</button>
         </div>
         {sysAudioWarning && (
           <div style={{
