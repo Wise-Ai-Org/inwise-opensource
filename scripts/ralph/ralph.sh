@@ -5,7 +5,7 @@
 set -e
 
 # Parse arguments
-TOOL="claude"  # Default to claude; amp is not installed in this environment
+TOOL="amp"  # Default to amp for backwards compatibility
 MAX_ITERATIONS=10
 
 while [[ $# -gt 0 ]]; do

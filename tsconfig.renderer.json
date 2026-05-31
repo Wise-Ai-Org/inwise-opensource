@@ -7,11 +7,7 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "jsx": "react",
-    "baseUrl": ".",
-    "paths": {
-      "@inwise/desktop-shared": ["src/shared/dist/index"]
-    }
+    "jsx": "react"
   },
   "include": ["src/renderer/**/*"],
   "exclude": ["node_modules"]
