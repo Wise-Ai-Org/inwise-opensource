@@ -11,9 +11,23 @@ interface Props {
   onUpload: (data: { title: string; content: string; date: string }) => Promise<void>;
 }
 
+// Local YYYY-MM-DD for the date picker default (NOT toISOString, which uses UTC
+// and can show tomorrow's date in the evening west of UTC).
+const localDateString = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// Anchor a YYYY-MM-DD picker value to local noon so the stored timestamp always
+// lands on the chosen calendar day in the user's timezone. Parsing the date-only
+// string directly (new Date('2026-05-31')) yields UTC midnight, which renders as
+// the previous day west of UTC — the "uploaded today, shows yesterday" bug.
+const localNoonISO = (ymd: string) => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0).toISOString();
+};
+
 export default function TranscriptUploadModal({ isOpen, onClose, onUpload }: Props) {
   const [title, setTitle] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(localDateString(new Date()));
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(false);
   const toast = useToast();
@@ -25,11 +39,11 @@ export default function TranscriptUploadModal({ isOpen, onClose, onUpload }: Pro
     }
     setLoading(true);
     try {
-      await onUpload({ title: title.trim(), content: content.trim(), date: new Date(date).toISOString() });
+      await onUpload({ title: title.trim(), content: content.trim(), date: localNoonISO(date) });
       toast({ title: 'Transcript uploaded', status: 'success', duration: 3000 });
       setTitle('');
       setContent('');
-      setDate(new Date().toISOString().slice(0, 10));
+      setDate(localDateString(new Date()));
       onClose();
     } catch (err: any) {
       toast({ title: 'Upload failed', description: err.message, status: 'error', duration: 4000 });
