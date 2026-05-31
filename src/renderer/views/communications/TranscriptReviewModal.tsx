@@ -843,46 +843,15 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
 
       const totalSaved = selectedActions.length + blockers.filter(i => i.selected).length + decisions.filter(i => i.selected).length;
 
-      // Auto-push to Jira if connected and enabled
-      let jiraPushed = 0;
-      try {
-        const config = await api.getConfig();
-        if (config.jiraAutoPush && config.jiraDefaultProject) {
-          const jiraStatus = await api.jiraStatus?.();
-          if (jiraStatus?.connected) {
-            for (const item of selectedActions) {
-              try {
-                await api.jiraCreateIssue?.({
-                  title: item.text,
-                  description: `From meeting review\nOwner: ${item.owner || 'Unassigned'}`,
-                  priority: 'medium',
-                  projectKey: config.jiraDefaultProject,
-                });
-                jiraPushed++;
-              } catch { /* skip individual failures */ }
-            }
-          }
-        }
-      } catch { /* Jira push is non-fatal */ }
-
-      if (jiraPushed > 0) {
-        toast({
-          title: 'Meeting reviewed',
-          description: `${totalSaved} item${totalSaved !== 1 ? 's' : ''} approved · ${jiraPushed} pushed to Jira`,
-          status: 'success',
-          duration: 4000
-        });
-      } else {
-        const jiraConnected = await api.jiraStatus?.().then((s: any) => s?.connected).catch(() => false);
-        toast({
-          title: 'Meeting reviewed',
-          description: jiraConnected
-            ? `${totalSaved} item${totalSaved !== 1 ? 's' : ''} approved. Enable auto-sync in Settings to push to Jira.`
-            : `${totalSaved} item${totalSaved !== 1 ? 's' : ''} approved. Connect to Jira in Settings to auto-push to Jira.`,
-          status: 'success',
-          duration: 5000
-        });
-      }
+      // No Jira writes happen here. Jira create/link/update is performed only in
+      // JiraMappingModal, which Communications opens after approval — so every Jira
+      // write stays behind an explicit Apply click instead of a silent push on save.
+      toast({
+        title: 'Meeting reviewed',
+        description: `${totalSaved} item${totalSaved !== 1 ? 's' : ''} approved`,
+        status: 'success',
+        duration: 4000
+      });
 
       onApproved(meetingId);
       onClose();
