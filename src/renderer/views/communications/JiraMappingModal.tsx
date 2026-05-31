@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Modal, ModalOverlay, ModalContent, ModalHeader, ModalBody, ModalFooter,
   ModalCloseButton, Button, VStack, HStack, Box, Text, Badge, Spinner,
-  Select, Flex, Icon, Tooltip, useToast, Divider
+  Select, Flex, Icon, Tooltip, useToast, Divider, Switch, FormControl, FormLabel
 } from '@chakra-ui/react';
 import { CheckIcon, ExternalLinkIcon, WarningIcon } from '@chakra-ui/icons';
 import { MdAutoAwesome, MdLink, MdAdd } from 'react-icons/md';
@@ -46,6 +46,8 @@ export default function JiraMappingModal({ isOpen, onClose, actionItems, meeting
   const [decisions, setDecisions] = useState<ItemDecision[]>([]);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState('');
+  const [autoPush, setAutoPush] = useState(false);
+  const [result, setResult] = useState<{ created: number; linked: number; skipped: number } | null>(null);
   const toast = useToast();
 
   useEffect(() => {
@@ -54,12 +56,27 @@ export default function JiraMappingModal({ isOpen, onClose, actionItems, meeting
     }
   }, [isOpen]);
 
+  // Seed each item's mapping decision. When pre-fill is on we default to the best
+  // match (link) or create; when off, everything starts as skip and the user opts
+  // in per item. Either way nothing is written until the explicit Apply click.
+  const seedDecisions = (matchList: MatchResult[], prefill: boolean): ItemDecision[] =>
+    matchList.map((m) => {
+      if (!prefill) return { action: 'skip' as ItemAction, selectedKey: null };
+      if (m.bestMatch && (m.autoApproved || m.bestMatch.similarity >= 0.5)) {
+        return { action: 'link' as ItemAction, selectedKey: m.bestMatch.jiraKey };
+      }
+      return { action: 'create' as ItemAction, selectedKey: null };
+    });
+
   const loadMatches = async () => {
     setLoading(true);
     setError('');
+    setResult(null);
     try {
       const config = await (window as any).inwiseAPI.getConfig();
       const projectKey = config?.jiraDefaultProject || undefined;
+      const prefill = !!config?.jiraAutoPush;
+      setAutoPush(prefill);
       const result = await (window as any).inwiseAPI.jiraMatchTasks(actionItems, projectKey);
 
       if (!result.ok) {
@@ -71,16 +88,7 @@ export default function JiraMappingModal({ isOpen, onClose, actionItems, meeting
       setMatches(result.matches);
       setStories(result.stories);
 
-      // Initialize decisions based on matches
-      setDecisions(result.matches.map((m: MatchResult) => {
-        if (m.autoApproved && m.bestMatch) {
-          return { action: 'link' as ItemAction, selectedKey: m.bestMatch.jiraKey };
-        }
-        if (m.bestMatch && m.bestMatch.similarity >= 0.5) {
-          return { action: 'link' as ItemAction, selectedKey: m.bestMatch.jiraKey };
-        }
-        return { action: 'create' as ItemAction, selectedKey: null };
-      }));
+      setDecisions(seedDecisions(result.matches, prefill));
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -90,6 +98,15 @@ export default function JiraMappingModal({ isOpen, onClose, actionItems, meeting
 
   const updateDecision = (idx: number, update: Partial<ItemDecision>) => {
     setDecisions(prev => prev.map((d, i) => i === idx ? { ...d, ...update } : d));
+  };
+
+  // Persist the auto-push preference so next time the panel pre-fills the same way.
+  // The toggle only controls how decisions are seeded — it never writes to Jira on
+  // its own; the explicit Apply click below is still the only thing that writes.
+  const toggleAutoPush = async (next: boolean) => {
+    setAutoPush(next);
+    setDecisions(seedDecisions(matches, next));
+    try { await (window as any).inwiseAPI.setConfig({ jiraAutoPush: next }); } catch { /* best-effort */ }
   };
 
   const handleApply = async () => {
@@ -138,14 +155,10 @@ export default function JiraMappingModal({ isOpen, onClose, actionItems, meeting
         }
       }
 
-      toast({
-        title: 'Jira sync complete',
-        description: `${created} created, ${linked} linked, ${skipped} skipped`,
-        status: 'success',
-        duration: 4000,
-      });
+      // Show the result in-panel (instead of closing on a transient toast) so the
+      // user always sees exactly what was written to Jira.
+      setResult({ created, linked, skipped });
       onComplete();
-      onClose();
     } catch (e: any) {
       toast({ title: 'Sync failed', description: e.message, status: 'error', duration: 4000 });
     } finally {
@@ -173,7 +186,17 @@ export default function JiraMappingModal({ isOpen, onClose, actionItems, meeting
         </ModalHeader>
         <ModalCloseButton />
         <ModalBody pb={4}>
-          {loading ? (
+          {result ? (
+            <Box p={4} bg="green.50" borderRadius="md" border="1px solid" borderColor="green.200">
+              <HStack spacing={2} mb={1}>
+                <CheckIcon color="green.500" />
+                <Text fontWeight="semibold">Jira sync complete</Text>
+              </HStack>
+              <Text fontSize="sm" color="gray.700">
+                {result.created} created · {result.linked} updated · {result.skipped} skipped
+              </Text>
+            </Box>
+          ) : loading ? (
             <Flex justify="center" py={10}><Spinner size="lg" /><Text ml={3} color="gray.500">Matching against Jira stories...</Text></Flex>
           ) : error ? (
             <Box p={4} bg="red.50" borderRadius="md"><Text color="red.600">{error}</Text></Box>
@@ -237,16 +260,31 @@ export default function JiraMappingModal({ isOpen, onClose, actionItems, meeting
           )}
         </ModalBody>
         <ModalFooter>
-          <HStack spacing={2} mr="auto">
-            {actionCounts.create > 0 && <Badge colorScheme="green" fontSize="xs">{actionCounts.create} create</Badge>}
-            {actionCounts.link > 0 && <Badge colorScheme="blue" fontSize="xs">{actionCounts.link} link</Badge>}
-            {actionCounts.skip > 0 && <Badge colorScheme="gray" fontSize="xs">{actionCounts.skip} skip</Badge>}
-          </HStack>
-          <Button variant="ghost" onClick={onClose} mr={2}>Cancel</Button>
-          <Button colorScheme="blue" onClick={handleApply} isLoading={applying}
-            disabled={loading || decisions.every(d => d.action === 'skip')}>
-            Apply
-          </Button>
+          {result ? (
+            <Button colorScheme="blue" onClick={onClose}>Done</Button>
+          ) : (
+            <>
+              <HStack spacing={4} mr="auto">
+                <FormControl display="flex" alignItems="center" w="auto" mb={0}>
+                  <FormLabel htmlFor="jira-autopush" fontSize="xs" color="gray.500" mb={0} mr={2}>
+                    Pre-fill from matches
+                  </FormLabel>
+                  <Switch id="jira-autopush" size="sm" isChecked={autoPush}
+                    onChange={(e) => toggleAutoPush(e.target.checked)} />
+                </FormControl>
+                <HStack spacing={2}>
+                  {actionCounts.create > 0 && <Badge colorScheme="green" fontSize="xs">{actionCounts.create} create</Badge>}
+                  {actionCounts.link > 0 && <Badge colorScheme="blue" fontSize="xs">{actionCounts.link} link</Badge>}
+                  {actionCounts.skip > 0 && <Badge colorScheme="gray" fontSize="xs">{actionCounts.skip} skip</Badge>}
+                </HStack>
+              </HStack>
+              <Button variant="ghost" onClick={onClose} mr={2}>Cancel</Button>
+              <Button colorScheme="blue" onClick={handleApply} isLoading={applying}
+                disabled={loading || decisions.every(d => d.action === 'skip')}>
+                Apply
+              </Button>
+            </>
+          )}
         </ModalFooter>
       </ModalContent>
     </Modal>
