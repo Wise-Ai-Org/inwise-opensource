@@ -25,3 +25,18 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - `__setMeetingsDbForTests` now exists alongside `__setTasksDbForTests` for full in-memory test coverage
   - Build typecheck: `node_modules/.bin/tsc -p tsconfig.main.json --noEmit`; test runner: `node_modules/.bin/ts-node --project tsconfig.main.json <file>`
 ---
+
+## 2026-06-01 17:55 PDT - US-002
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Added `credentialsDb` Datastore to `database.ts`, initialized in `initDatabase()` as `credentials.db`
+- Exported `ZoomCredentials` interface with all 5 required fields
+- Implemented `getZoomCredentials()`, `setZoomClientCredentials()`, `setZoomTokens()`, `clearZoomCredentials()` with singleton document pattern (`_id: 'zoom'`)
+- Added `__setCredentialsDbForTests()` test-injection setter following established pattern
+- Created `zoom-credentials.test.ts` covering: null on empty, create via setZoomClientCredentials, upsert/overwrite, token merge (preserving clientId), tokens-only creation, and clearZoomCredentials
+- Files changed: `src/main/database.ts` (+71 lines), `src/main/zoom-credentials.test.ts` (new, 77 lines)
+- **Learnings for future iterations:**
+  - Zoom credentials use singleton document pattern: one doc with `_id: 'zoom'` in `credentials.db`
+  - `setZoomTokens` can create the doc even without clientId/clientSecret (for token-refresh scenarios)
+  - `__setCredentialsDbForTests` follows the same pattern as `__setMeetingsDbForTests` and `__setTasksDbForTests`
+  - All five Zoom fields: `zoomClientId`, `zoomClientSecret`, `zoomAccessToken`, `zoomRefreshToken`, `zoomTokenExpiresAt`
+---
