@@ -10,6 +10,7 @@
 
 import { SlackMessage } from './slack-client';
 import { log } from './logger';
+import { isThreadProcessed, markThreadIngested, removeThreadIngested } from './slack-cursor-store';
 
 // ── Thread state tracking ──────────────────────────────────────────────────
 
@@ -65,6 +66,10 @@ export interface IngestBatchResult {
 
 /**
  * Given raw channel history, decide what is ready for ingestion.
+ *
+ * Combines in-memory quiet-period tracking with persistent dedup from
+ * slack-cursor-store so that re-running on an unchanged channel produces
+ * zero new conversations.
  *
  * @param channelId  - Slack channel ID
  * @param messages   - Messages from getChannelHistory() (newest first from Slack,
@@ -129,9 +134,16 @@ export function computeReadyBatches(
     const hasNewReplies = ts.lastProcessedMs === 0
       || ts.latestActivityTs !== ts.latestActivityAtLastProcess;
 
-    if (!hasNewReplies) {
+    // Also check persistent dedup: if persisted as processed and no new replies, skip
+    const alreadyIngested = isThreadProcessed(channelId, threadTs);
+    if (alreadyIngested && !hasNewReplies) {
       log('info', 'slack:ingestion', `Thread ${threadTs} already processed and unchanged`);
       continue;
+    }
+
+    // If thread got new replies, remove from dedup so it re-routes through the pipeline
+    if (alreadyIngested && hasNewReplies) {
+      removeThreadIngested(channelId, threadTs);
     }
 
     const replies = threadRepliesMap.get(threadTs) ?? [];
@@ -145,7 +157,8 @@ export function computeReadyBatches(
 }
 
 /**
- * Mark a thread as processed. Call after successful ingestion.
+ * Mark a thread as processed. Updates both in-memory state and persistent dedup.
+ * Call after successful ingestion.
  */
 export function markThreadProcessed(channelId: string, threadTs: string): void {
   const state = getChannelState(channelId);
@@ -153,8 +166,10 @@ export function markThreadProcessed(channelId: string, threadTs: string): void {
   if (ts) {
     ts.lastProcessedMs = Date.now();
     ts.latestActivityAtLastProcess = ts.latestActivityTs;
-    log('info', 'slack:ingestion', `Marked thread ${threadTs} processed`);
   }
+  // Persist to cursor store so dedup survives restarts
+  markThreadIngested(channelId, threadTs);
+  log('info', 'slack:ingestion', `Marked thread ${threadTs} processed`);
 }
 
 /**

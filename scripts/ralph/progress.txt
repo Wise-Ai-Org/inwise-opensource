@@ -65,3 +65,18 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - latestReply field on Slack message = ts of most recent reply (from conversations.history)
   - In-memory state is sufficient for debounce; US-005 adds persistence for cursor tracking
 ---
+
+## 2026-06-01 17:50 - US-005
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Created src/main/slack-cursor-store.ts: persistent cursor + dedup using a separate electron-store file ('slack-cursor-state')
+- getChannelCursor/setChannelCursor: per-channel `oldest` param for getChannelHistory() to re-fetch from last seen position
+- isThreadProcessed/markThreadIngested/removeThreadIngested: thread-level dedup that survives restarts
+- advanceCursorToNewest: moves cursor to the newest ts seen in a batch
+- Updated slack-ingestion.ts: integrates persistent dedup — skips already-ingested threads, removes from dedup when new replies appear
+- markThreadProcessed now persists to cursor store in addition to updating in-memory state
+- Files changed: src/main/slack-cursor-store.ts (new), src/main/slack-ingestion.ts (updated), scripts/ralph/prd.json
+- **Learnings for future iterations:**
+  - Use a separate electron-store instance (new Store({ name: 'slack-cursor-state' })) for operational state vs user config
+  - electron-store defaults only apply to top-level keys; spread + reassign when updating nested objects
+  - advanceCursorToNewest finds max ts by comparing parseFloat(ts) values
+---
