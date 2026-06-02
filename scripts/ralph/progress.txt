@@ -55,3 +55,17 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - getZoomCredentials() returns null if no doc exists; callers must guard for null
   - Token storage uses ISO string for zoomTokenExpiresAt (new Date(...).toISOString()); comparison converts back to epoch via new Date(str).getTime()
 ---
+
+## 2026-06-01 23:00 PDT - US-005
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Implemented parseTimestampMs() to convert VTT HH:MM:SS.mmm timestamps to milliseconds
+- Implemented parseZoomVtt() to split VTT into cue blocks, extract speaker-label prefix and text, handle CRLF, empty VTT, and cues without speaker labels (defaulting to 'Unknown')
+- Implemented downloadAndParseVtt() with injectable fetchFn dep, downloads VTT with Bearer token, delegates to parseZoomVtt()
+- Created 	est-transcripts/zoom-sample.vtt fixture with 4 speaker-labeled cues (2 speakers, varied timestamps)
+- Wrote zoom-vtt-parser.test.ts with 8 test cases: timestamp parsing, fixture parse, no-speaker cue, CRLF line endings, empty VTT, colon-in-body, download+parse, HTTP error
+- Files changed: src/main/zoom-vtt-parser.ts (new), src/main/zoom-vtt-parser.test.ts (new), 	est-transcripts/zoom-sample.vtt (new)
+- **Learnings for future iterations:**
+  - VTT blocks split on double newline; find timestamp line by ' --> ', text lines follow after it
+  - Zoom speaker format is 'Speaker Name: text' — only split on first ': ' to preserve colons in body text
+  - fixture path from src/main test: path.join(__dirname, '../../test-transcripts/zoom-sample.vtt') — __dirname is src/main when ts-node runs
+---
