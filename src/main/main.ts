@@ -58,6 +58,10 @@ import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
 import { computeWelcomeBack } from './welcome-back';
 import { findLiveMeetingForBanner } from './live-meeting-banner';
 import { inferCompletedTaskIds } from './task-completion-inference';
+import {
+  saveZoomCredentials, connectZoom, disconnectZoom, getZoomStatus, testZoomConnection,
+  ZOOM_REDIRECT_URI_DISPLAY,
+} from './zoom-oauth';
 
 Menu.setApplicationMenu(null);
 
@@ -1514,6 +1518,29 @@ ipcMain.handle('jira:matchTasks', async (_e, items: any[], projectKey?: string) 
     return { ok: true, matches: localMatches, stories };
   } catch (e: any) { return { ok: false, error: e.message }; }
 });
+
+// Zoom
+ipcMain.handle('zoom:saveCredentials', async (_e, clientId: string, clientSecret: string) => {
+  try { await saveZoomCredentials(clientId, clientSecret); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('zoom:connect', async () => {
+  try { return await connectZoom(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('zoom:disconnect', async () => {
+  try { await disconnectZoom(); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('zoom:status', async () => {
+  try { return await getZoomStatus(); }
+  catch (e: any) { return { connected: false }; }
+});
+ipcMain.handle('zoom:test', async () => {
+  try { return await testZoomConnection(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('zoom:redirectUri', () => ZOOM_REDIRECT_URI_DISPLAY);
 
 // SoR audit log (US-001)
 ipcMain.handle('sor:listRecent', async (_e, limit?: number, sinceMs?: number) => {

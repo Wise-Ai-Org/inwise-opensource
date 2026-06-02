@@ -66,6 +66,14 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   deleteVoicePrint: (id: string) => ipcRenderer.invoke('voiceprint:delete', id),
   getUserVoicePrint: () => ipcRenderer.invoke('voiceprint:get-user'),
 
+  // Zoom
+  zoomSaveCredentials: (clientId: string, clientSecret: string) => ipcRenderer.invoke('zoom:saveCredentials', clientId, clientSecret),
+  zoomConnect: () => ipcRenderer.invoke('zoom:connect'),
+  zoomDisconnect: () => ipcRenderer.invoke('zoom:disconnect'),
+  zoomStatus: () => ipcRenderer.invoke('zoom:status'),
+  zoomTest: () => ipcRenderer.invoke('zoom:test'),
+  zoomRedirectUri: () => ipcRenderer.invoke('zoom:redirectUri'),
+
   // Jira
   jiraConnect: () => ipcRenderer.invoke('jira:connect'),
   jiraDisconnect: () => ipcRenderer.invoke('jira:disconnect'),
