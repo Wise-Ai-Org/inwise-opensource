@@ -69,3 +69,18 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - Zoom speaker format is 'Speaker Name: text' � only split on first ': ' to preserve colons in body text
   - fixture path from src/main test: path.join(__dirname, '../../test-transcripts/zoom-sample.vtt') � __dirname is src/main when ts-node runs
 ---
+
+## 2026-06-01 23:10 PDT - US-006
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Added `zoom:listRecordings` IPC handler in `main.ts`: checks connected state first, calls `listZoomRecordings()`, returns structured error for not-connected and API failures
+- Added `zoom:fetchTranscript` IPC handler: calls `getTranscriptDownloadUrl()` → `downloadAndParseVtt()` → `ingestNormalizedTranscript()`, returns structured errors for no-transcript and fetch failures; token refresh is handled transparently by `getValidZoomToken`
+- Added `zoomListRecordings` and `zoomFetchTranscript` bridge entries to `preload.ts`
+- Extended `ZoomSettings` React component in `Settings.tsx`: when connected, shows "Fetch from Zoom" button; listing/ready/fetching/done/error states surface clear messages; recording picker lists recent meetings with title and date; success shows meeting title; all failure paths name the cause
+- Added `ZoomRecordingItem` interface and `FetchFlowState` type alias to renderer for type safety
+- Files changed: `src/main/main.ts` (+26 lines), `src/main/preload.ts` (+2 lines), `src/renderer/Settings.tsx` (+122 lines)
+- **Learnings for future iterations:**
+  - IPC handler pattern for multi-step flows: check preconditions first (connected?), return `{ ok: false, error }` at each step rather than throwing — keeps renderer error handling uniform
+  - `getValidZoomToken` (called inside `listZoomRecordings` / `getTranscriptDownloadUrl`) handles token refresh transparently; callers do not need to check expiry
+  - Frontend fetch flow state machine: idle → listing → ready → fetching → done/error; always expose a "reset" path so users can retry without refreshing
+  - `zoom:fetchTranscript` passes the full recording object from the listing step (meetingId, uuid, title, startedAt); `uuid` is used for the recordings endpoint, `meetingId` and metadata for ingestion
+---
