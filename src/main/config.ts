@@ -1,4 +1,4 @@
-import Store from 'electron-store';
+﻿import Store from 'electron-store';
 import { randomUUID } from 'crypto';
 
 export type CalendarProvider = 'google' | 'outlook' | 'ics';
@@ -29,9 +29,9 @@ interface Config {
   apiProvider: 'anthropic' | 'openai';
   apiKey: string;
   whisperModel: 'tiny' | 'base' | 'small' | 'medium';
-  /** @deprecated use calendars[] — retained only for one-time migration */
+  /** @deprecated use calendars[] â€” retained only for one-time migration */
   googleIcsUrl: string;
-  /** @deprecated use calendars[] — retained only for one-time migration */
+  /** @deprecated use calendars[] â€” retained only for one-time migration */
   outlookIcsUrl: string;
   calendars: CalendarSubscription[];
   selfEmails: string[];
@@ -44,6 +44,10 @@ interface Config {
   jiraTokens: any | null;
   jiraAutoPush: boolean;
   jiraDefaultProject: string;
+  slackBotToken: string;
+  slackReadChannels: string[];
+  slackWriteChannels: string[];
+  slackInactivityWindowMin: number;
   lastOpenedAt: string | null;
   welcomeBackLastSeenAt: string | null;
   sor: SorPrefs;
@@ -67,6 +71,10 @@ const store = new Store<Config>({
     jiraTokens: null,
     jiraAutoPush: false,
     jiraDefaultProject: '',
+    slackBotToken: '',
+    slackReadChannels: [],
+    slackWriteChannels: [],
+    slackInactivityWindowMin: 60,
     lastOpenedAt: null,
     welcomeBackLastSeenAt: null,
     sor: {
@@ -162,7 +170,7 @@ export function getDaysSinceLastOpen(): number | null {
 
 // Exposes the pre-current-session lastOpenedAt snapshot. Welcome-back compute
 // compares this against welcomeBackLastSeenAt to detect "already dismissed for
-// this gap" — using the live store value would fail because markAppOpened()
+// this gap" â€” using the live store value would fail because markAppOpened()
 // overwrites it on every show event.
 export function getLastOpenedAtSnapshot(): string | null {
   return priorLastOpenedAtSnapshot;
@@ -179,7 +187,7 @@ export function markWelcomeBackSeen(): void {
 /**
  * One-time migration: if calendars[] is empty but the deprecated
  * googleIcsUrl/outlookIcsUrl fields are set, seed calendars[] from them.
- * Idempotent — re-running is a no-op once calendars[] is non-empty.
+ * Idempotent â€” re-running is a no-op once calendars[] is non-empty.
  */
 export function migrateLegacyCalendars(): { migrated: boolean; added: number } {
   const cfg = getConfig();
@@ -211,3 +219,5 @@ export function migrateLegacyCalendars(): { migrated: boolean; added: number } {
   store.set('calendars', seeded);
   return { migrated: true, added: seeded.length };
 }
+
+
