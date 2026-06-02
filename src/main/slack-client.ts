@@ -253,3 +253,25 @@ export function isSlackConnected(): boolean {
   const config = getConfig();
   return !!(config as any).slackBotToken;
 }
+
+// ── Wiser-note write (placeholder) ────────────────────────────────────────
+
+/**
+ * Post a formatted Wiser note to a channel in the write list.
+ *
+ * PLACEHOLDER: this function is wired but intentionally never called
+ * automatically. No code path invokes it in this PRD — it is an explicit
+ * entry point for future Wiser integration.
+ */
+export async function postWiserNote(channelId: string, note: string): Promise<void> {
+  const config = getConfig();
+  const writeChannels: string[] = (config as any).slackWriteChannels ?? [];
+
+  if (!writeChannels.includes(channelId)) {
+    throw new Error(`Channel ${channelId} is not in the Slack write-channels list`);
+  }
+
+  const formatted = `*Wiser Note*\n${note}`;
+  await postMessage(channelId, formatted);
+  log('info', 'slack:wiser-note', `Posted to channel ${channelId}`);
+}

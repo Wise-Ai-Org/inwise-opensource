@@ -80,3 +80,11 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - electron-store defaults only apply to top-level keys; spread + reassign when updating nested objects
   - advanceCursorToNewest finds max ts by comparing parseFloat(ts) values
 ---
+
+## 2026-06-01 17:55 - US-006
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Added postWiserNote(channelId, note) to slack-client.ts
+- Guards against channels not in slackWriteChannels list; formats note as "*Wiser Note*\n{note}"
+- Intentionally has no callers — placeholder entry point per PRD spec
+- Files changed: src/main/slack-client.ts, scripts/ralph/prd.json
+---
