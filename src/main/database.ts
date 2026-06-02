@@ -369,6 +369,10 @@ export function __setTasksDbForTests(db: Datastore): void {
   tasksDb = db;
 }
 
+export function __setMeetingsDbForTests(db: Datastore): void {
+  meetingsDb = db;
+}
+
 // ── People ─────────────────────────────────────────────────────────────────────
 
 async function computePeopleStats(person: any): Promise<any> {
