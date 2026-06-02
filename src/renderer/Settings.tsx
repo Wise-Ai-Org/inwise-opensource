@@ -1082,6 +1082,15 @@ function SorWriteRow({ entry, onRetry, retrying }: {
 
 // ── Zoom Settings ────────────────────────────────────────────────────────────
 
+type FetchFlowState = 'idle' | 'listing' | 'ready' | 'fetching' | 'done' | 'error';
+
+interface ZoomRecordingItem {
+  meetingId: string;
+  uuid: string;
+  title: string;
+  startedAt: string;
+}
+
 function ZoomSettings() {
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
@@ -1089,6 +1098,12 @@ function ZoomSettings() {
   const [connecting, setConnecting] = useState(false);
   const [redirectUri, setRedirectUri] = useState('http://localhost:17292/callback');
   const [error, setError] = useState('');
+
+  // Fetch from Zoom flow
+  const [fetchState, setFetchState] = useState<FetchFlowState>('idle');
+  const [recordings, setRecordings] = useState<ZoomRecordingItem[]>([]);
+  const [fetchError, setFetchError] = useState('');
+  const [fetchSuccess, setFetchSuccess] = useState('');
 
   useEffect(() => {
     (window as any).inwiseAPI.zoomStatus?.().then((s: any) => setConnected(!!s?.connected));
@@ -1122,6 +1137,49 @@ function ZoomSettings() {
   const handleDisconnect = async () => {
     await (window as any).inwiseAPI.zoomDisconnect();
     setConnected(false);
+    setFetchState('idle');
+    setRecordings([]);
+    setFetchError('');
+    setFetchSuccess('');
+  };
+
+  const handleListRecordings = async () => {
+    setFetchState('listing');
+    setFetchError('');
+    setFetchSuccess('');
+    const res = await (window as any).inwiseAPI.zoomListRecordings?.();
+    if (!res?.ok) {
+      setFetchState('error');
+      setFetchError(res?.error || 'Failed to list recordings');
+      return;
+    }
+    if (!res.recordings || res.recordings.length === 0) {
+      setFetchState('error');
+      setFetchError('No recent recordings found in the last 30 days.');
+      return;
+    }
+    setRecordings(res.recordings);
+    setFetchState('ready');
+  };
+
+  const handleFetchTranscript = async (recording: ZoomRecordingItem) => {
+    setFetchState('fetching');
+    setFetchError('');
+    const res = await (window as any).inwiseAPI.zoomFetchTranscript?.(recording);
+    if (!res?.ok) {
+      setFetchState('error');
+      setFetchError(res?.error || 'Failed to fetch transcript');
+      return;
+    }
+    setFetchSuccess(`"${recording.title}" imported successfully.`);
+    setFetchState('done');
+  };
+
+  const resetFetch = () => {
+    setFetchState('idle');
+    setRecordings([]);
+    setFetchError('');
+    setFetchSuccess('');
   };
 
   return (
@@ -1164,14 +1222,73 @@ function ZoomSettings() {
           </button>
         </>
       ) : (
-        <div style={{ padding: '12px 16px', background: 'var(--slate-50)', borderRadius: 8, border: '1px solid var(--slate-200)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--navy)' }}>Zoom Connected</div>
-            <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, color: 'var(--red)' }}
-              onClick={handleDisconnect}>
-              Disconnect
-            </button>
+        <div>
+          <div style={{ padding: '12px 16px', background: 'var(--slate-50)', borderRadius: 8, border: '1px solid var(--slate-200)', marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--navy)' }}>Zoom Connected</div>
+              <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, color: 'var(--red)' }}
+                onClick={handleDisconnect}>
+                Disconnect
+              </button>
+            </div>
           </div>
+
+          {/* Fetch from Zoom */}
+          {fetchState === 'idle' && (
+            <button className="btn btn-primary btn-sm" onClick={handleListRecordings}>
+              Fetch from Zoom
+            </button>
+          )}
+
+          {fetchState === 'listing' && (
+            <div style={{ fontSize: 13, color: 'var(--slate-500)' }}>Loading recent recordings…</div>
+          )}
+
+          {fetchState === 'ready' && (
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--navy)' }}>
+                Pick a recording to import:
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflowY: 'auto' }}>
+                {recordings.map(r => (
+                  <button key={r.uuid}
+                    className="btn btn-secondary btn-sm"
+                    style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 12px' }}
+                    onClick={() => handleFetchTranscript(r)}>
+                    <span style={{ fontWeight: 600, fontSize: 13 }}>{r.title}</span>
+                    <span style={{ fontSize: 11, color: 'var(--slate-400)' }}>
+                      {new Date(r.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <button className="btn btn-secondary btn-sm" style={{ marginTop: 10, fontSize: 11 }} onClick={resetFetch}>
+                Cancel
+              </button>
+            </div>
+          )}
+
+          {fetchState === 'fetching' && (
+            <div style={{ fontSize: 13, color: 'var(--slate-500)' }}>Fetching transcript…</div>
+          )}
+
+          {fetchState === 'done' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 13, color: 'var(--green)', fontWeight: 600 }}>✓ {fetchSuccess}</div>
+              <button className="btn btn-primary btn-sm" style={{ width: 'fit-content' }} onClick={resetFetch}>
+                Fetch Another
+              </button>
+            </div>
+          )}
+
+          {fetchState === 'error' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 12, color: 'var(--red)' }}>✕ {fetchError}</div>
+              <button className="btn btn-secondary btn-sm" style={{ width: 'fit-content' }} onClick={resetFetch}>
+                Try Again
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

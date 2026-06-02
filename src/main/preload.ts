@@ -73,6 +73,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   zoomStatus: () => ipcRenderer.invoke('zoom:status'),
   zoomTest: () => ipcRenderer.invoke('zoom:test'),
   zoomRedirectUri: () => ipcRenderer.invoke('zoom:redirectUri'),
+  zoomListRecordings: () => ipcRenderer.invoke('zoom:listRecordings'),
+  zoomFetchTranscript: (recording: any) => ipcRenderer.invoke('zoom:fetchTranscript', recording),
 
   // Jira
   jiraConnect: () => ipcRenderer.invoke('jira:connect'),

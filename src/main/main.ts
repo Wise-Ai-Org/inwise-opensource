@@ -62,6 +62,9 @@ import {
   saveZoomCredentials, connectZoom, disconnectZoom, getZoomStatus, testZoomConnection,
   ZOOM_REDIRECT_URI_DISPLAY,
 } from './zoom-oauth';
+import { listZoomRecordings, getTranscriptDownloadUrl } from './zoom-recordings';
+import { downloadAndParseVtt } from './zoom-vtt-parser';
+import { ingestNormalizedTranscript } from './zoom-transcript-ingestion';
 
 Menu.setApplicationMenu(null);
 
@@ -1541,6 +1544,33 @@ ipcMain.handle('zoom:test', async () => {
   catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('zoom:redirectUri', () => ZOOM_REDIRECT_URI_DISPLAY);
+ipcMain.handle('zoom:listRecordings', async () => {
+  try {
+    const status = await getZoomStatus();
+    if (!status.connected) {
+      return { ok: false, error: 'Not connected to Zoom. Connect in Settings → Zoom Integration first.' };
+    }
+    const recordings = await listZoomRecordings();
+    return { ok: true, recordings };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('zoom:fetchTranscript', async (_e, recording: { meetingId: string; uuid: string; title: string; startedAt: string }) => {
+  try {
+    const transcriptResult = await getTranscriptDownloadUrl(recording.uuid);
+    if (!transcriptResult.found) {
+      return { ok: false, error: transcriptResult.reason };
+    }
+    const nt = await downloadAndParseVtt(
+      transcriptResult.downloadUrl,
+      transcriptResult.accessToken,
+      recording.meetingId,
+      recording.title,
+      recording.startedAt,
+    );
+    const meetingId = await ingestNormalizedTranscript(nt);
+    return { ok: true, meetingId };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
 
 // SoR audit log (US-001)
 ipcMain.handle('sor:listRecent', async (_e, limit?: number, sinceMs?: number) => {
