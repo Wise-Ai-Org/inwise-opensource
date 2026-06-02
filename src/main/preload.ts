@@ -66,6 +66,12 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   deleteVoicePrint: (id: string) => ipcRenderer.invoke('voiceprint:delete', id),
   getUserVoicePrint: () => ipcRenderer.invoke('voiceprint:get-user'),
 
+  // Slack
+  slackConnect: (token: string) => ipcRenderer.invoke('slack:connect', token),
+  slackDisconnect: () => ipcRenderer.invoke('slack:disconnect'),
+  slackStatus: () => ipcRenderer.invoke('slack:status'),
+  slackListChannels: () => ipcRenderer.invoke('slack:listChannels'),
+
   // Jira
   jiraConnect: () => ipcRenderer.invoke('jira:connect'),
   jiraDisconnect: () => ipcRenderer.invoke('jira:disconnect'),

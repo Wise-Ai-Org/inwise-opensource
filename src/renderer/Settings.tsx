@@ -11,6 +11,10 @@ interface Config {
   jiraClientSecret: string;
   jiraAutoPush: boolean;
   jiraDefaultProject: string;
+  slackBotToken: string;
+  slackReadChannels: string[];
+  slackWriteChannels: string[];
+  slackInactivityWindowMin: number;
 }
 
 type CalendarProviderUI = 'google' | 'outlook' | 'ics';
@@ -604,6 +608,94 @@ function SystemAudioTest() {
       )}
       {status === 'error' && (
         <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 6 }}>✕ {errorMsg}</div>
+      )}
+    </div>
+  );
+}
+
+// ── Slack Settings ─────────────────────────────────────────────────────────
+
+function SlackSettings() {
+  const [token, setToken] = useState('');
+  const [status, setStatus] = useState<{ connected: boolean } | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [teamName, setTeamName] = useState<string | undefined>();
+  const [botName, setBotName] = useState<string | undefined>();
+
+  useEffect(() => {
+    (window as any).inwiseAPI.slackStatus?.().then((s: any) => setStatus(s));
+  }, []);
+
+  const connect = async () => {
+    if (!token.trim()) return;
+    setValidating(true);
+    setError(null);
+    try {
+      const result = await (window as any).inwiseAPI.slackConnect?.(token.trim());
+      if (result?.ok) {
+        setStatus({ connected: true });
+        setTeamName(result.teamName);
+        setBotName(result.botName);
+        setToken('');
+      } else {
+        setError(result?.error ?? 'Invalid token');
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const disconnect = async () => {
+    await (window as any).inwiseAPI.slackDisconnect?.();
+    setStatus({ connected: false });
+    setTeamName(undefined);
+    setBotName(undefined);
+  };
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16, lineHeight: 1.6 }}>
+        Connect Slack by pasting a bot token. The token is stored locally and never sent to any server.
+        Create a bot at <strong>api.slack.com/apps</strong>, add it to your workspace, and copy the Bot User OAuth Token.
+      </p>
+
+      {status?.connected ? (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--green-500, #22c55e)', display: 'inline-block' }} />
+            <span style={{ fontSize: 13, color: 'var(--slate-700)' }}>
+              Connected{teamName ? ` to ${teamName}` : ''}{botName ? ` as ${botName}` : ''}
+            </span>
+          </div>
+          <button className="btn btn-secondary" onClick={disconnect}>Disconnect</button>
+        </div>
+      ) : (
+        <div>
+          <div className="form-group">
+            <label className="form-label">Bot Token</label>
+            <input
+              type="password"
+              className="form-input"
+              value={token}
+              onChange={e => setToken(e.target.value)}
+              placeholder="xoxb-…"
+              style={{ fontFamily: 'monospace' }}
+            />
+          </div>
+          {error && (
+            <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 8 }}>✕ {error}</div>
+          )}
+          <button
+            className="btn btn-primary"
+            disabled={validating || !token.trim()}
+            onClick={connect}
+          >
+            {validating ? 'Validating…' : 'Connect Slack'}
+          </button>
+        </div>
       )}
     </div>
   );
@@ -1961,6 +2053,12 @@ export default function Settings() {
           <div className="settings-section">
             <div className="settings-section-title">Jira Integration</div>
             <JiraSettings config={config} update={update} />
+          </div>
+
+          {/* Slack */}
+          <div className="settings-section">
+            <div className="settings-section-title">Slack Integration</div>
+            <SlackSettings />
           </div>
 
           {/* Integrations (US-003) */}

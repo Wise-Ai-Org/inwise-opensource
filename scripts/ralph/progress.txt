@@ -20,3 +20,18 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - User resolution is cached in-memory (userCache Map) for the process lifetime
   - getToken() reads slackBotToken from electron-store; throws if not configured
 ---
+
+## 2026-06-01 17:35 - US-002
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Added Slack IPC handlers to main.ts: slack:connect (validates token via validateToken(), saves to electron-store), slack:disconnect, slack:status, slack:listChannels
+- Added Slack methods to preload.ts: slackConnect, slackDisconnect, slackStatus, slackListChannels
+- Added SlackSettings React component to Settings.tsx with password input, validate/connect flow, connected state display
+- Added Slack fields to Config interface in Settings.tsx (slackBotToken, slackReadChannels, slackWriteChannels, slackInactivityWindowMin)
+- Wired SlackSettings into Settings page below Jira Integration section
+- Files changed: src/main/main.ts, src/main/preload.ts, src/renderer/Settings.tsx, scripts/ralph/prd.json
+- **Learnings for future iterations:**
+  - IPC pattern: ipcMain.handle in main.ts + ipcRenderer.invoke in preload.ts + (window as any).inwiseAPI.method in renderer
+  - SlackSettings is self-contained (no config prop needed — reads/writes via IPC directly, not via the shared setConfig flow)
+  - setConfig in main.ts uses Partial<Config> — cast as any to set individual Slack fields without importing full Config type
+  - Renderer Config interface in Settings.tsx is a SEPARATE simplified type from the main-process Config in config.ts
+---

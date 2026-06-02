@@ -58,6 +58,7 @@ import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
 import { computeWelcomeBack } from './welcome-back';
 import { findLiveMeetingForBanner } from './live-meeting-banner';
 import { inferCompletedTaskIds } from './task-completion-inference';
+import { validateToken, isSlackConnected, listChannels as slackListChannels } from './slack-client';
 
 Menu.setApplicationMenu(null);
 
@@ -2086,6 +2087,30 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   mainWindow?.show();
+});
+
+// ── Slack IPC handlers ─────────────────────────────────────────────────────
+
+ipcMain.handle('slack:connect', async (_e, token: string) => {
+  const result = await validateToken(token);
+  if (result.ok) {
+    setConfig({ slackBotToken: token } as any);
+  }
+  return result;
+});
+
+ipcMain.handle('slack:disconnect', () => {
+  setConfig({ slackBotToken: '' } as any);
+  return true;
+});
+
+ipcMain.handle('slack:status', () => {
+  return { connected: isSlackConnected() };
+});
+
+ipcMain.handle('slack:listChannels', async () => {
+  try { return { ok: true, channels: await slackListChannels() }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
 });
 
 app.on('before-quit', () => {
