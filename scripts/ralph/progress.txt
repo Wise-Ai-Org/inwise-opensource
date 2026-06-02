@@ -40,3 +40,18 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - `__setCredentialsDbForTests` follows the same pattern as `__setMeetingsDbForTests` and `__setTasksDbForTests`
   - All five Zoom fields: `zoomClientId`, `zoomClientSecret`, `zoomAccessToken`, `zoomRefreshToken`, `zoomTokenExpiresAt`
 ---
+
+## 2026-06-01 18:10 PDT - US-003
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Created `zoom-oauth.ts` with full OAuth Authorization Code flow: loopback HTTP server on port 17292, code exchange with Basic Auth (Zoom's required method), token storage via US-002 database functions, token refresh, and test-connection helper
+- Added 6 IPC handlers in `main.ts`: zoom:saveCredentials, zoom:connect, zoom:disconnect, zoom:status, zoom:test, zoom:redirectUri
+- Added 6 preload bridge entries in `preload.ts` following existing Jira pattern
+- Added `ZoomSettings` React component to `Settings.tsx`: shows redirect URI prominently (for user to configure in Zoom app), Client ID/Secret inputs, Connect/Disconnect button, connected state
+- Files changed: `src/main/zoom-oauth.ts` (new, 154 lines), `src/main/main.ts` (+22 lines), `src/main/preload.ts` (+7 lines), `src/renderer/Settings.tsx` (+80 lines)
+- **Learnings for future iterations:**
+  - Zoom uses Basic Auth (base64 clientId:clientSecret) for token exchange, unlike Jira which uses PKCE + body params
+  - Port 17292 is reserved for Zoom OAuth loopback; Jira uses 17291
+  - ZoomSettings is self-contained (own state) — does NOT use the parent Config/update pattern because Zoom creds go to the DB (credentialsDb), not electron-store config
+  - getZoomCredentials() returns null if no doc exists; callers must guard for null
+  - Token storage uses ISO string for zoomTokenExpiresAt (new Date(...).toISOString()); comparison converts back to epoch via new Date(str).getTime()
+---
