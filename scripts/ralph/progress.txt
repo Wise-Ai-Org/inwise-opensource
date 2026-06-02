@@ -50,3 +50,18 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - Use slackMeta field to attach channel/permalink; store in the meeting doc's source or a custom field
   - tsToDate: multiply ts (float string of epoch seconds) by 1000 for JS Date
 ---
+
+## 2026-06-01 17:45 - US-004
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Created src/main/slack-ingestion.ts: computeReadyBatches() evaluates threads for quiet-period eligibility
+- In-memory Map (channelId -> threadTs -> ThreadState) tracks latestActivityTs and lastProcessed state
+- Threads ready when: quiet >= inactivityWindowMin AND (never processed OR got new replies since last process)
+- Loose top-level messages (no replies) collected into LooseMessageBatch per channel per poll window
+- markThreadProcessed() records latestActivityTs at time of processing to detect future new replies
+- Files changed: src/main/slack-ingestion.ts (new), scripts/ralph/prd.json
+- **Learnings for future iterations:**
+  - log() only accepts 'info' | 'warn' | 'error' — no 'debug' level
+  - threadTs === ts means it's a parent message; threadTs !== ts means it's a reply
+  - latestReply field on Slack message = ts of most recent reply (from conversations.history)
+  - In-memory state is sufficient for debounce; US-005 adds persistence for cursor tracking
+---
