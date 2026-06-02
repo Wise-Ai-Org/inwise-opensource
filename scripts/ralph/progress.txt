@@ -88,3 +88,20 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
 - Intentionally has no callers — placeholder entry point per PRD spec
 - Files changed: src/main/slack-client.ts, scripts/ralph/prd.json
 ---
+
+## 2026-06-01 18:00 - US-007
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Expanded SlackSettings component in Settings.tsx with:
+  - Read-channels multi-select (checkboxes with channel name labels)
+  - Write-channels multi-select (same channel list)
+  - Inactivity window numeric input (default 60, range 1-1440)
+  - "Load channels" button that calls slackListChannels IPC
+  - "Save Slack Settings" button persists via setConfig IPC
+  - Settings load from getConfig() on mount, reload correctly across sessions
+- Added SlackChannel interface in Settings.tsx
+- Files changed: src/renderer/Settings.tsx, scripts/ralph/prd.json
+- **Learnings for future iterations:**
+  - setConfig IPC in main.ts does partial updates (Partial<Config>) — safe to pass just the changed fields
+  - Channels list is loaded on-demand ("Load channels" button) to avoid unnecessary API calls on settings open
+  - Webpack compiles Settings.tsx as part of the main App bundle (not a separate entry) — no separate bundle to check
+---
