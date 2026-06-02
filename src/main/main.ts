@@ -59,6 +59,8 @@ import { computeWelcomeBack } from './welcome-back';
 import { findLiveMeetingForBanner } from './live-meeting-banner';
 import { inferCompletedTaskIds } from './task-completion-inference';
 import { validateToken, isSlackConnected, listChannels as slackListChannels } from './slack-client';
+import { normalizeSlackThread } from './slack-normalizer';
+import { startSlackPoller, stopSlackPoller, registerSlackPipeline } from './slack-poller';
 
 Menu.setApplicationMenu(null);
 
@@ -2035,6 +2037,37 @@ app.whenReady().then(() => {
   createTray(mainWindow!);
   calendarWatcher.start();
 
+  // Register Slack pipeline: normalize thread → create meeting → extract insights → save
+  registerSlackPipeline(async (channelId, channelName, messages) => {
+    const normalized = await normalizeSlackThread(messages, {
+      channelId,
+      channelName,
+      permalink: `slack://channel?id=${channelId}`,
+    });
+    if (!normalized) return;
+
+    const meetingId = await createMeeting({
+      title: normalized.title,
+      date: normalized.date,
+      attendees: normalized.attendees,
+      source: 'slack_thread',
+    });
+    await updateMeetingTranscript(meetingId, normalized.transcript, 0);
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+
+    try {
+      const insights = await extractInsights(normalized.transcript);
+      await saveInsights(meetingId, insights);
+      mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+      log('info', 'slack:pipeline', `Insights saved for thread in #${channelName} (meeting ${meetingId})`);
+    } catch (insightErr: any) {
+      log('error', 'slack:pipeline', `Insight extraction failed for ${meetingId}: ${insightErr.message}`);
+    }
+  });
+
+  // Start Slack poller (delayed 10 s to let the main window settle)
+  setTimeout(() => startSlackPoller(), 10_000);
+
   // One-time scan for SoR writes stuck in 'pending' / 'pending-approval' / 'retrying'
   // for more than 24 hours — these indicate an interrupted/crashed prior session.
   setTimeout(async () => {
@@ -2115,6 +2148,7 @@ ipcMain.handle('slack:listChannels', async () => {
 
 app.on('before-quit', () => {
   calendarWatcher.stop();
+  stopSlackPoller();
   destroyTray();
   globalShortcut.unregisterAll();
   mainWindow?.removeAllListeners('close');
