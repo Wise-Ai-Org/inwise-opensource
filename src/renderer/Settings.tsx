@@ -5,6 +5,8 @@ interface Config {
   apiKey: string;
   whisperModel: 'tiny' | 'base' | 'small' | 'medium';
   micDeviceId: string;
+  speakerDeviceId: string;
+  calendarFreeRecording?: boolean;
   userName: string;
   selfEmails: string[];
   jiraClientId: string;
@@ -1491,6 +1493,14 @@ function VoiceEnrollment() {
     const audio = new Audio(url);
     audioRef.current = audio;
     setPlayingId(id);
+    // Route playback to the user's chosen speaker. Non-blocking so audio.play()
+    // below stays on the user-gesture chain; sink switches as soon as config loads.
+    (window as any).inwiseAPI.getConfig().then((cfg: any) => {
+      const sink = cfg?.speakerDeviceId;
+      if (sink && sink !== 'default' && typeof (audio as any).setSinkId === 'function') {
+        (audio as any).setSinkId(sink).catch(() => { /* device gone — fall back to default */ });
+      }
+    });
     const clearIfMine = () => {
       if (audioRef.current === audio) audioRef.current = null;
       setPlayingId(curr => (curr === id ? null : curr));
@@ -1838,12 +1848,20 @@ export default function Settings() {
   const [config, setConfig] = useState<Config | null>(null);
   const [saved, setSaved] = useState(false);
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
+  const [speakers, setSpeakers] = useState<MediaDeviceInfo[]>([]);
 
   useEffect(() => {
     (window as any).inwiseAPI.getConfig().then(setConfig);
-    navigator.mediaDevices.enumerateDevices().then(devices => {
-      setMics(devices.filter(d => d.kind === 'audioinput'));
-    });
+    const refreshDevices = () => {
+      navigator.mediaDevices.enumerateDevices().then(devices => {
+        setMics(devices.filter(d => d.kind === 'audioinput'));
+        setSpeakers(devices.filter(d => d.kind === 'audiooutput'));
+      });
+    };
+    refreshDevices();
+    // Keep the device lists fresh if the user plugs/unplugs hardware while Settings is open.
+    navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
+    return () => navigator.mediaDevices.removeEventListener('devicechange', refreshDevices);
   }, []);
 
   if (!config) return null;
@@ -1851,6 +1869,14 @@ export default function Settings() {
   const update = (key: keyof Config, value: string) => {
     setConfig(c => c ? { ...c, [key]: value } : c);
     setSaved(false);
+  };
+
+  // Device pickers persist immediately (no Save click needed) so the chosen
+  // mic/speaker is remembered across sessions. setConfig merges in the main process.
+  const updateDevice = (key: 'micDeviceId' | 'speakerDeviceId', value: string) => {
+    setConfig(c => c ? { ...c, [key]: value } : c);
+    setSaved(false);
+    (window as any).inwiseAPI.setConfig({ [key]: value });
   };
 
   const save = async () => {
@@ -1906,7 +1932,7 @@ export default function Settings() {
               <select
                 className="form-select"
                 value={config.micDeviceId}
-                onChange={e => update('micDeviceId', e.target.value)}
+                onChange={e => updateDevice('micDeviceId', e.target.value)}
               >
                 <option value="default">System Default</option>
                 {mics.map(mic => (
@@ -1916,6 +1942,24 @@ export default function Settings() {
                 ))}
               </select>
               <MicTest deviceId={config.micDeviceId} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Speaker</label>
+              <select
+                className="form-select"
+                value={config.speakerDeviceId ?? 'default'}
+                onChange={e => updateDevice('speakerDeviceId', e.target.value)}
+              >
+                <option value="default">System Default</option>
+                {speakers.map(sp => (
+                  <option key={sp.deviceId} value={sp.deviceId}>
+                    {sp.label || `Speaker ${sp.deviceId.slice(0, 8)}`}
+                  </option>
+                ))}
+              </select>
+              <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
+                Used when playing back your recordings inside Inwise.
+              </span>
             </div>
             <div className="form-group">
               <label className="form-label">System Audio</label>
@@ -1939,6 +1983,31 @@ export default function Settings() {
               </select>
               <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4 }}>
                 Downloaded automatically on first use. Runs 100% locally — no audio ever leaves your device.
+              </span>
+            </div>
+          </div>
+
+          {/* Recording */}
+          <div className="settings-section">
+            <div className="settings-section-title">Recording</div>
+            <div className="form-group">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={config.calendarFreeRecording === true}
+                  onChange={e => {
+                    const value = e.target.checked;
+                    setConfig(c => c ? { ...c, calendarFreeRecording: value } : c);
+                    setSaved(false);
+                    (window as any).inwiseAPI.setConfig({ calendarFreeRecording: value });
+                  }}
+                />
+                <span className="form-label" style={{ margin: 0 }}>Calendar-free recording</span>
+              </label>
+              <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block', paddingLeft: 24, lineHeight: 1.5 }}>
+                Listens to your microphone and automatically starts recording when it detects speech —
+                no connected calendar required. Recording stops after 60 seconds of silence.
+                Takes effect after restarting Inwise.
               </span>
             </div>
           </div>
