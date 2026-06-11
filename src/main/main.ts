@@ -1,4 +1,4 @@
-﻿import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer } from 'electron';
+﻿import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -12,6 +12,7 @@ import { extractInsights, searchMeetings, detectContradictions, generateAgenda, 
 import {
   initDatabase,
   createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus,
+  findRecentRecordingMeeting, appendMeetingTranscript,
   getMeetings, getMeeting, deleteMeeting, getAllPastDecisions, getOverdueCommitments,
   createMeetingFromTranscript,
   getTasks, createTask, updateTask, deleteTask,
@@ -24,7 +25,7 @@ import {
   getUserVoicePrint, getVoicePrintByName, getVoicePrintsWithEmbeddings,
   syncCalendarEventsToDb,
 } from './database';
-import { extractChannel, trimWav, wavBufferToSamples } from '@inwise/desktop-shared';
+import { extractChannel, trimWav, wavBufferToSamples, stitchWavBuffers } from '@inwise/desktop-shared';
 import {
   connectJira, disconnectJira, isJiraConnected, getJiraInfo,
   getJiraProjects, getJiraStories, createJiraIssue, updateJiraIssue,
@@ -101,7 +102,15 @@ function createMainWindow(): void {
     show: false,
   });
 
-  mainWindow.loadFile(path.join(__dirname, '../../dist/renderer/index.html'));
+  mainWindow.loadURL('app://bundle/index.html');
+  // TEMP DIAG: pipe renderer console into the main log to trace VAD lifecycle.
+  mainWindow.webContents.on("console-message", (...a) => {
+    let msg;
+    if (a.length >= 3 && typeof a[2] === "string") msg = a[2];
+    else if (a[0] && typeof a[0] === "object" && "message" in a[0]) msg = a[0].message;
+    else msg = a.map(String).join(" ");
+    console.log("[renderer] " + msg);
+  });
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
   }
@@ -353,19 +362,25 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
   sendToOverlay({ status: 'processing', message: 'Transcribingâ€¦' });
   log('info', 'pipeline:start', `title="${meetingTitle}" stereo=${!!stereo} path=${audioPath}`);
 
-  // Create the meeting record FIRST so failed transcriptions are still recoverable
+  // Create the meeting record FIRST so failed transcriptions are still recoverable.
+  // If this title already produced a recording meeting within the last hour,
+  // treat this audio as another segment of that meeting instead of a new one.
   const durationSec = getAudioDuration(audioPath);
   log('info', 'pipeline:transcribe', `duration=${durationSec}s`);
 
-  const meetingId = await createMeeting({
-    title: meetingTitle,
-    date: new Date().toISOString(),
-    duration: durationSec,
-    calendarEventId,
-    source: 'desktop_recording',
-    attendees: attendees || [],
-  });
-  log('info', 'pipeline:meeting-created', meetingId);
+  const existing = await findRecentRecordingMeeting(meetingTitle, calendarEventId, 60 * 60 * 1000);
+  const merging = !!existing;
+  const meetingId = existing
+    ? existing._id
+    : await createMeeting({
+        title: meetingTitle,
+        date: new Date().toISOString(),
+        duration: durationSec,
+        calendarEventId,
+        source: 'desktop_recording',
+        attendees: attendees || [],
+      });
+  log('info', merging ? 'pipeline:meeting-merged' : 'pipeline:meeting-created', meetingId);
   await updateMeetingStatus(meetingId, 'transcribing');
   mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
 
@@ -378,14 +393,20 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       transcript = await replaceSpeakerLabels(transcript, attendees || []);
     }
 
-    await updateMeetingTranscript(meetingId, transcript, durationSec);
+    if (merging) {
+      await appendMeetingTranscript(meetingId, transcript, durationSec);
+    } else {
+      await updateMeetingTranscript(meetingId, transcript, durationSec);
+    }
 
     // Always notify renderer so meeting appears even if insights fail
     mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
 
     sendToOverlay({ status: 'processing', message: 'Extracting insightsâ€¦' });
     try {
-      const insights = await extractInsights(transcript);
+      // When merging segments, re-extract insights from the combined transcript
+      const fullTranscript = merging ? ((await getMeeting(meetingId))?.transcript || transcript) : transcript;
+      const insights = await extractInsights(fullTranscript);
 
       // Detect contradictions against past decisions
       try {
@@ -672,7 +693,15 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
 function getAudioDuration(filePath: string): number {
   try {
     const stat = fs.statSync(filePath);
-    return Math.round(stat.size / 32000);
+    // Read the byte rate from the WAV header — a fixed mono rate (32000)
+    // reported stereo recordings at twice their real length.
+    const fd = fs.openSync(filePath, 'r');
+    const header = Buffer.alloc(44);
+    fs.readSync(fd, header, 0, 44, 0);
+    fs.closeSync(fd);
+    const isWav = header.toString('ascii', 0, 4) === 'RIFF';
+    const byteRate = isWav ? header.readUInt32LE(28) : 0;
+    return Math.round(Math.max(0, stat.size - 44) / (byteRate > 0 ? byteRate : 32000));
   } catch { return 0; }
 }
 
@@ -1772,24 +1801,51 @@ ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; messag
   log('error', 'renderer:unhandled-rejection', `${name}: ${message}${source}`);
 });
 
-ipcMain.on('recording:audio-data', async (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
+// Segments of the same meeting can arrive in quick succession (duplicate badge
+// windows, VAD splits). Hold buffers briefly and stitch them into one WAV so a
+// single meeting is processed once instead of as fragments.
+const AUDIO_COALESCE_MS = 10_000;
+const pendingAudio = new Map<string, { buffers: Buffer[]; title: string; calendarEventId?: string; stereo?: boolean; timer: NodeJS.Timeout }>();
+
+ipcMain.on('recording:audio-data', (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   isRecordingActive = false;
+  const key = `${title}|${stereo ? 1 : 0}`;
+  const entry = pendingAudio.get(key);
+  if (entry) {
+    entry.buffers.push(Buffer.from(buffer));
+    if (calendarEventId && !entry.calendarEventId) entry.calendarEventId = calendarEventId;
+    entry.timer.refresh();
+    log('info', 'audio-data:coalesced', `title="${title}" segments=${entry.buffers.length}`);
+    return;
+  }
+  const timer = setTimeout(() => { void flushPendingAudio(key); }, AUDIO_COALESCE_MS);
+  pendingAudio.set(key, { buffers: [Buffer.from(buffer)], title, calendarEventId, stereo, timer });
+});
+
+async function flushPendingAudio(key: string): Promise<void> {
+  const entry = pendingAudio.get(key);
+  if (!entry) return;
+  pendingAudio.delete(key);
   try {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
+    const wav = stitchWavBuffers(entry.buffers);
+    if (entry.buffers.length > 1) {
+      log('info', 'audio-data:stitched', `title="${entry.title}" segments=${entry.buffers.length} size=${wav.length}`);
+    }
     const tmpPath = path.join(recordingsDir, `inwise-rec-${Date.now()}.wav`);
-    fs.writeFileSync(tmpPath, buffer);
+    fs.writeFileSync(tmpPath, wav);
     updateTrayMenu(mainWindow!, false);
     // Look up attendees from the calendar event if available
-    const attendees = calendarEventId
-      ? calendarWatcher.getUpcomingEvents().find((e: any) => e.id === calendarEventId)?.attendees || []
+    const attendees = entry.calendarEventId
+      ? calendarWatcher.getUpcomingEvents().find((e: any) => e.id === entry.calendarEventId)?.attendees || []
       : [];
-    await runRecordingPipeline(tmpPath, title, calendarEventId, stereo, attendees);
+    await runRecordingPipeline(tmpPath, entry.title, entry.calendarEventId, entry.stereo, attendees);
   } catch (e: any) {
     log('error', 'audio-data:failed', e.message);
   }
-});
+}
 
 // â”€â”€ Calendar watcher â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -1813,6 +1869,14 @@ calendarWatcher.on('events-updated', async (events: any[]) => {
 
 calendarWatcher.on('meeting-starting', (event: MeetingEvent) => {
   const now = Date.now();
+
+  // Same event announced again while its recording is already live (re-poll,
+  // duplicate calendar entry) — one recorder per event, ignore the repeat.
+  if (isRecordingActive && lastMeetingStarting && lastMeetingStarting.event.id === event.id) {
+    log('info', 'calendar-watcher:meeting-starting', `already recording "${event.title}" — ignoring duplicate start`);
+    return;
+  }
+
   const hasRecentStart =
     !!lastMeetingStarting &&
     lastMeetingStarting.event.id !== event.id &&
@@ -2019,7 +2083,50 @@ async function runDailyJiraPull(): Promise<void> {
   }
 }
 
+// Serve the renderer over a privileged app:// scheme. Calendar-free recording's
+// Silero VAD loads its ONNX model via fetch() and onnxruntime-web loads its wasm
+// via dynamic ESM import() of .mjs glue — Chromium blocks both over file://.
+// registerSchemesAsPrivileged must run before app 'ready'.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+]);
+
+const APP_MIME: Record<string, string> = {
+  '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
+  '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm',
+  '.onnx': 'application/octet-stream', '.png': 'image/png', '.svg': 'image/svg+xml',
+  '.map': 'application/json', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf',
+};
+
+// Only one app instance may run — a second instance means a second calendar
+// watcher and a second recorder badge for the same event, which fragments
+// recordings. The duplicate exits immediately and focuses the existing window.
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0);
+}
+app.on('second-instance', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow.isVisible()) mainWindow.show();
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
+
 app.whenReady().then(() => {
+  const RENDERER_DIR = path.join(__dirname, '../../dist/renderer');
+  protocol.handle('app', async (request) => {
+    const { pathname } = new URL(request.url);
+    const rel = decodeURIComponent(pathname).replace(/^\/+/, '') || 'index.html';
+    const filePath = path.join(RENDERER_DIR, rel);
+    if (!filePath.startsWith(RENDERER_DIR)) return new Response('Forbidden', { status: 403 });
+    try {
+      const data = await fs.promises.readFile(filePath);
+      const ext = path.extname(filePath).toLowerCase();
+      return new Response(data, { headers: { 'Content-Type': APP_MIME[ext] || 'application/octet-stream' } });
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
+  });
   initDatabase();
   initSorWriteLog();
   initPendingApprovals();

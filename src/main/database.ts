@@ -52,6 +52,31 @@ export async function updateMeetingStatus(id: string, status: string): Promise<v
   await meetingsDb.updateAsync({ _id: id }, { $set: { status } }, {});
 }
 
+/**
+ * Find a desktop recording for the same meeting created within `windowMs`,
+ * so late-arriving audio segments merge into it instead of becoming fragments.
+ */
+export async function findRecentRecordingMeeting(title: string, calendarEventId: string | undefined, windowMs: number): Promise<any | null> {
+  const cutoff = new Date(Date.now() - windowMs).toISOString();
+  const candidates: any[] = await (meetingsDb as any)
+    .findAsync({ title, source: 'desktop_recording', createdAt: { $gte: cutoff } })
+    .sort({ createdAt: -1 });
+  if (calendarEventId) {
+    return candidates.find(m => !m.calendarEventId || m.calendarEventId === calendarEventId) || null;
+  }
+  return candidates[0] || null;
+}
+
+export async function appendMeetingTranscript(id: string, transcript: string, addedDuration: number): Promise<void> {
+  const m: any = await meetingsDb.findOneAsync({ _id: id });
+  const combined = m?.transcript ? `${m.transcript}\n${transcript}` : transcript;
+  await meetingsDb.updateAsync(
+    { _id: id },
+    { $set: { transcript: combined, duration: (m?.duration || 0) + addedDuration, status: 'transcribed' } },
+    {}
+  );
+}
+
 export async function saveInsights(meetingId: string, insights: {
   summary: string;
   actionItems: { text: string; owner?: string; dueDate?: string; priority?: string; isCommitment?: boolean }[];
@@ -79,7 +104,12 @@ export async function saveInsights(meetingId: string, insights: {
     {}
   );
 
-  // Auto-create tasks from action items
+  // Auto-create tasks from action items. Re-processing a meeting (e.g. merged
+  // segments) replaces its still-pending auto-extracted tasks instead of duplicating.
+  await (tasksDb as any).removeAsync(
+    { 'source.id': meetingId, aiExtracted: true, 'approval.status': 'pending' },
+    { multi: true }
+  );
   for (const item of insights.actionItems) {
     await tasksDb.insertAsync({
       _id: uuidv4(),
