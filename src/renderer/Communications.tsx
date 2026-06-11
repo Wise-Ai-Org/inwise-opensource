@@ -1069,6 +1069,19 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
     const data = await api.getMeeting(meetingId);
     if (data?.insights) setMeetingInsights(prev => ({ ...prev, [meetingId]: data.insights }));
     setExpandedMeetings(prev => new Set([...prev, meetingId]));
+
+    // Auto-open the Jira mapping modal after review (same guard as the "Map to Jira"
+    // button). The review modal closes synchronously on approve, so it's gone before
+    // this opens — no overlap.
+    const actionItems = data?.insights?.actionItems ?? [];
+    if (jiraConnected && actionItems.length > 0) {
+      const meeting = meetings.find(m => m._id === meetingId);
+      setJiraMappingMeeting({
+        id: meetingId,
+        title: meeting?.title ?? data?.title ?? 'Meeting',
+        actionItems: actionItems.map((a: any) => ({ text: a.text, owner: a.owner || a.assignee })),
+      });
+    }
   };
 
   // Deep-link from main-process SoR trace notification → open the review modal
