@@ -6,6 +6,14 @@ const common = {
   devtool: 'source-map',
   module: {
     rules: [
+      // vad-web AudioWorklet bundle — emitted as a standalone file so addModule() gets a local file:// URL
+      { test: /vad\.worklet\.bundle\.min\.js$/, type: 'asset/resource' },
+      // Local pre-roll AudioWorklet processor — emitted verbatim so addModule() gets a file:// URL
+      { test: /pre-roll-worklet\.js$/, type: 'asset/resource' },
+      // Silero ONNX model + onnxruntime-web WASM binaries — must stay local files in Electron
+      { test: /\.(onnx|wasm)$/, type: 'asset/resource' },
+      // onnxruntime-web ESM wasm-loader glue — emitted so ORT can dynamic-import() it under app://
+      { test: /ort-wasm.*\.mjs$/, type: 'asset/resource' },
       {
         test: /\.tsx?$/,
         use: { loader: 'ts-loader', options: { configFile: 'tsconfig.renderer.json' } },
