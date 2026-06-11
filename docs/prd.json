@@ -1,0 +1,104 @@
+{
+  "project": "Inwise OSS",
+  "branchName": "ralph/zoom-transcript-pull",
+  "description": "Native Zoom transcript pull (option C) - fetch Zoom cloud-recording transcripts via BYO-credentials OAuth, normalize them, and feed the existing mapping/upkeep pipeline. No recorder, no bot, no Recall. MIT-clean.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add NormalizedTranscript model and ingestion adapter",
+      "description": "As a developer, I need a source-agnostic transcript model and an entry point into the existing mapping/upkeep pipeline, since today only the local recorder's output can be ingested.",
+      "acceptanceCriteria": [
+        "Define a NormalizedTranscript type: { meetingId, title, startedAt, segments: [{ speaker, startMs, endMs, text }] }",
+        "Add an ingestion function that accepts a NormalizedTranscript and drives the existing mapping -> de-dupe -> upkeep flow by reusing the recorder's downstream entry point (do not duplicate pipeline logic)",
+        "A hand-built NormalizedTranscript fixture passed to the ingestion function reaches the same mapping/upkeep code path as a recorder transcript",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Add Zoom credential and token storage to local DB",
+      "description": "As a developer, I need to persist the user's own Zoom OAuth app credentials and issued tokens locally so the app can authenticate to Zoom.",
+      "acceptanceCriteria": [
+        "Add local DB storage for: zoomClientId, zoomClientSecret, zoomAccessToken, zoomRefreshToken, zoomTokenExpiresAt",
+        "Credentials and tokens are stored only in the local DB layer, never in committed config or repo files",
+        "Provide get/set accessors for these fields",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Zoom BYO-credentials OAuth connect flow and settings UI",
+      "description": "As an OSS user, I want to register my own Zoom OAuth app and connect it so the desktop app can read my cloud recordings.",
+      "acceptanceCriteria": [
+        "Settings UI has inputs for Zoom Client ID and Client Secret that save to local DB (US-002)",
+        "Implements OAuth Authorization-Code flow for a desktop app via loopback redirect (http://localhost:<port>/callback)",
+        "Requests scope cloud_recording:read",
+        "On success, exchanges the code and stores access/refresh tokens and expiry in local DB",
+        "Implements token refresh when the access token is expired",
+        "UI surfaces the exact redirect URI the user must add to their Zoom OAuth app",
+        "After connecting, a test call to a Zoom list-recordings endpoint returns HTTP 200",
+        "Verify in the running app that the connect flow completes and shows a connected state",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "List Zoom cloud recordings and locate the transcript file",
+      "description": "As a developer, I need to list the user's recent Zoom cloud recordings and resolve the downloadable VTT transcript artifact for a chosen meeting.",
+      "acceptanceCriteria": [
+        "Call the Zoom API to list the authenticated user's recent cloud recordings (title, date, meeting id)",
+        "For a selected recording, locate the recording file of type TRANSCRIPT and obtain its authenticated download URL",
+        "If the selected meeting has no transcript, return a clear 'no transcript available' result rather than throwing",
+        "Uses tokens from US-002 and refreshes via US-003 when expired",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Parse Zoom VTT into NormalizedTranscript",
+      "description": "As a developer, I need to convert Zoom's speaker-labeled VTT transcript into the NormalizedTranscript model.",
+      "acceptanceCriteria": [
+        "Download the VTT from the URL resolved in US-004",
+        "Parse cue timestamps and speaker-name prefixes into ordered segments { speaker, startMs, endMs, text }",
+        "Produce a NormalizedTranscript (US-001) with correct named speakers and millisecond timestamps",
+        "Unit test parses a sample Zoom VTT fixture stored under test-transcripts/ to the expected segments",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Manual 'Fetch from Zoom' trigger with state handling",
+      "description": "As an OSS user, after a recorded Zoom meeting I want to click Fetch from Zoom, pick the meeting, and have its transcript pulled in and run through mapping/upkeep.",
+      "acceptanceCriteria": [
+        "A 'Fetch from Zoom' action lists recent recordings (US-004), lets the user pick one, then fetches (US-004) -> parses (US-005) -> ingests (US-001)",
+        "Handles and clearly messages each state: not connected, no recordings, no transcript on the meeting, expired/refreshing token, fetch error",
+        "On success the fetched meeting appears mapped/upkept in the app, identical to a recorder-sourced transcript",
+        "No state fails silently",
+        "Verify in the running app that an end-to-end fetch of a transcript-enabled recording appears in mapping/upkeep",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
