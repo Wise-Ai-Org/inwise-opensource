@@ -22,24 +22,26 @@ const INWISE_TEAL = '#0F738C';
 // Pre-flight check: verify the saved (or default) mic exists and getUserMedia succeeds.
 // Acquires briefly, then releases — startMic() re-acquires for real recording.
 async function checkMic(): Promise<{ ok: boolean; error?: string }> {
+  const cfg = await (window as any).inwiseAPI?.getConfig?.();
+  const savedDeviceId = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
   try {
-    const cfg = await (window as any).inwiseAPI?.getConfig?.();
-    const savedDeviceId = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
-
-    if (savedDeviceId) {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const mics = devices.filter(d => d.kind === 'audioinput');
-      if (!mics.some(d => d.deviceId === savedDeviceId)) {
-        return { ok: false, error: 'Saved mic not found — open Settings to reconnect' };
-      }
-    }
-
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: savedDeviceId ? { deviceId: { exact: savedDeviceId } } : true,
     });
     stream.getTracks().forEach(t => t.stop());
     return { ok: true };
   } catch (e: any) {
+    // The saved deviceId frequently will not match: Chromium salts deviceId per
+    // browsing context and the salt rotates across sessions. Fall back to default.
+    if (savedDeviceId && (e?.name === 'OverconstrainedError' || e?.name === 'NotFoundError')) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(t => t.stop());
+        return { ok: true };
+      } catch (e2: any) {
+        return { ok: false, error: e2?.message || 'Mic permission denied' };
+      }
+    }
     return { ok: false, error: e?.message || 'Mic permission denied' };
   }
 }
@@ -154,6 +156,22 @@ const styles: Record<string, any> = {
     flexShrink: 0,
     WebkitAppRegion: 'no-drag',
   },
+  closeBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: '50%',
+    background: 'rgba(255,255,255,0.08)',
+    border: 'none',
+    color: '#94a3b8',
+    fontSize: 14,
+    lineHeight: 1,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    WebkitAppRegion: 'no-drag',
+  },
 };
 
 function Waveform({ active }: { active: boolean }) {
@@ -197,11 +215,30 @@ export default function Badge() {
   const stopRecordingRef = useRef<() => void>(() => {});
   const titleRef = useRef<string>('Meeting');
   const calendarEventIdRef = useRef<string | undefined>(undefined);
+  const beginFlowRef = useRef<(title: string) => void>(() => {});
+  // Mirror status into a ref so the (mount-only) devicechange listener reads it without stale closures.
+  const statusRef = useRef(state.status);
+  statusRef.current = state.status;
 
   useEffect(() => {
-    (window as any).inwiseAPI.on('recording:start', async (title: string, calendarEventId?: string) => {
-      titleRef.current = title;
+    (window as any).inwiseAPI.on('recording:start', (title: string, calendarEventId?: string) => {
       calendarEventIdRef.current = calendarEventId;
+      beginFlowRef.current(title);
+    });
+
+    // Re-run the mic check when audio hardware changes while we're parked on the
+    // error screen, so reconnecting/fixing the mic auto-recovers the flow instead
+    // of staying stuck (the check previously ran only once per recording:start).
+    const onDeviceChange = async () => {
+      if (statusRef.current !== 'error') return;
+      const res = await checkMic();
+      if (res.ok) beginFlowRef.current(titleRef.current);
+    };
+    navigator.mediaDevices.addEventListener('devicechange', onDeviceChange);
+
+    beginFlowRef.current = async (title: string) => {
+      titleRef.current = title;
+      setSysAudioWarning(false);
 
       // Pre-flight: run REAL checks (not setTimeouts). Each dot lights up only when its
       // corresponding check actually passes. Hard failures (mic, ready) abort the countdown.
@@ -253,7 +290,7 @@ export default function Badge() {
       // Glow fades in 1 second after the chime
       await new Promise(r => setTimeout(r, 1000));
       setState(s => ({ ...s, glowActive: true }));
-    });
+    };
 
     (window as any).inwiseAPI.on('recording:status', ({ status, message }: { status: Status; message?: string }) => {
       setState((s) => ({ ...s, status, message }));
@@ -262,6 +299,8 @@ export default function Badge() {
     (window as any).inwiseAPI.on('recording:stop-request', () => {
       stopRecordingRef.current();
     });
+
+    return () => navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange);
   }, []);
 
   useEffect(() => {
@@ -278,27 +317,21 @@ export default function Badge() {
       const cfg = await (window as any).inwiseAPI.getConfig();
       const deviceId = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
 
-      // Mic stream — verify saved device still exists before requesting
-      if (deviceId) {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const mics = devices.filter(d => d.kind === 'audioinput');
-        const found = mics.some(d => d.deviceId === deviceId);
-        if (!found) {
-          const micNames = mics.map(d => d.label || d.deviceId).join(', ');
-          console.warn('[Badge] Saved mic not found. Available:', micNames);
-          reportHealth({ micOk: false, systemAudioOk: false, message: 'Microphone not found — go to Settings to reconnect' });
-          setState(s => ({
-            ...s,
-            status: 'error',
-            message: 'Microphone not found — go to Settings to reconnect',
-          }));
-          return;
+      // Mic stream — prefer the saved device, fall back to default if its deviceId
+      // no longer resolves (Chromium salts/rotates deviceId across contexts/sessions).
+      let micStream: MediaStream;
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+        });
+      } catch (micErr: any) {
+        if (deviceId && (micErr?.name === 'OverconstrainedError' || micErr?.name === 'NotFoundError')) {
+          console.warn('[Badge] Saved mic id did not resolve; falling back to default mic.', micErr?.name);
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } else {
+          throw micErr;
         }
       }
-
-      const micStream = await navigator.mediaDevices.getUserMedia({
-        audio: deviceId ? { deviceId: { exact: deviceId } } : true,
-      });
 
       // System audio via desktopCapturer — Windows loopback, graceful fallback elsewhere
       let sysStream: MediaStream | null = null;
@@ -535,6 +568,22 @@ export default function Badge() {
         <div style={{ ...styles.badge, gap: 10 }}>
           <span style={{ fontSize: 16 }}>⚠</span>
           <span style={{ ...styles.label, color: '#fca5a5', maxWidth: 200 }}>{state.message || 'Error'}</span>
+          <button
+            onClick={() => beginFlowRef.current(titleRef.current)}
+            style={{
+              background: INWISE_TEAL,
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
@@ -600,6 +649,7 @@ export default function Badge() {
           <button style={styles.stopBtn} onClick={stopRecording} title="Stop recording">
             <div style={{ width: 10, height: 10, background: 'white', borderRadius: 2 }} />
           </button>
+          <button style={styles.closeBtn} onClick={stopRecording} title="Stop & save recording">✕</button>
         </div>
         {sysAudioWarning && (
           <div style={{
