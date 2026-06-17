@@ -126,6 +126,9 @@ function createOverlayWindow(title: string, calendarEventId?: string): void {
     return;
   }
 
+  const badgePath = path.join(__dirname, '../../dist/renderer/badge.html');
+  console.log('[Badge] Creating overlay window with badge file:', badgePath);
+
   overlayWindow = new BrowserWindow({
     width: 480,
     height: 170,
@@ -143,10 +146,14 @@ function createOverlayWindow(title: string, calendarEventId?: string): void {
     },
   });
 
-  overlayWindow.loadFile(path.join(__dirname, '../../dist/renderer/badge.html'));
+  overlayWindow.loadFile(badgePath);
   overlayWindow.webContents.once('did-finish-load', () => {
+    console.log('[Badge] Window loaded, showing and sending recording:start');
+    overlayWindow?.show();
     overlayWindow?.webContents.send('recording:start', title, calendarEventId);
   });
+
+  overlayWindow.webContents.on('console-message', (_level, message) => console.log('[Badge Console]', message));
 }
 
 function createReminderBadge(title: string): void {
@@ -171,6 +178,7 @@ function createReminderBadge(title: string): void {
 
   win.loadFile(path.join(__dirname, '../../dist/renderer/badge.html'));
   win.webContents.once('did-finish-load', () => {
+    win.show();
     win.webContents.send('recording:start', title);
   });
 

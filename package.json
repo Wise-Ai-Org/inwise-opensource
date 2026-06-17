@@ -2,6 +2,8 @@
   "name": "inwise-opensource",
   "version": "1.0.4",
   "description": "Open-source AI meeting recorder — local transcription, local storage, your own API key",
+  "license": "MIT",
+  "author": "Inwise.ai",
   "main": "dist/main/main.js",
   "scripts": {
     "start": "npm run build && electron .",
