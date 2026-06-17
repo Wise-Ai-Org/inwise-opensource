@@ -121,6 +121,15 @@ To reset the app completely: quit Inwise, delete `%APPDATA%/inwise-opensource/`,
 
 ---
 
+## AI Models & Licenses
+
+The app ships with no pre-bundled AI models. On first use, Whisper model binaries are downloaded to `%APPDATA%/inwise-opensource/whisper-models/`:
+
+- **Whisper (OpenAI)** — MIT license. Runtime-downloaded; select `base` (~150 MB) or `medium` (~750 MB) on first launch. Runs entirely on your machine via [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
+- **LLM API keys** — bring your own Claude (Anthropic) or OpenAI key. These services' terms apply to API usage; your audio is never sent to Anthropic/OpenAI unless you explicitly ask for insights extraction
+
+---
+
 ## Privacy posture
 
 - **Audio** never leaves your machine. whisper.cpp runs as a local subprocess
