@@ -436,22 +436,7 @@ export default function Badge() {
       const wav = encodeWav(decoded);
       audioCtx.close();
 
-      // Set up confirmation listeners BEFORE sending audio
-      const fileSavedPromise = new Promise<void>(resolve => {
-        const handler = () => {
-          (window as any).inwiseAPI?.off?.('recording:file-saved', handler);
-          (window as any).inwiseAPI?.off?.('recording:file-save-failed', errorHandler);
-          resolve();
-        };
-        const errorHandler = (msg: string) => {
-          (window as any).inwiseAPI?.off?.('recording:file-saved', handler);
-          (window as any).inwiseAPI?.off?.('recording:file-save-failed', errorHandler);
-          setState(s => ({ ...s, status: 'error', message: `Failed to save: ${msg}` }));
-        };
-        (window as any).inwiseAPI?.on?.('recording:file-saved', handler);
-        (window as any).inwiseAPI?.on?.('recording:file-save-failed', errorHandler);
-      });
-
+      // Send audio to main process
       (window as any).electronAPI?.sendAudio({
         buffer: new Uint8Array(wav),
         title: titleRef.current,
@@ -459,14 +444,11 @@ export default function Badge() {
         stereo: hasStereoRef.current,
       });
 
-      // Wait for confirmation that file was actually saved to disk
-      await fileSavedPromise;
-
-      // Now show "Recording saved" after confirmed receipt
+      // Show "Recording saved" immediately - file should be written synchronously in main process
       setState(s => ({ ...s, status: 'received' }));
 
-      // Keep "✓ Recording saved" visible for 5 seconds so user can see it succeeded before closing.
-      setTimeout(() => window.close(), 5000);
+      // Keep "✓ Recording saved" visible for 7 seconds so user can clearly see it succeeded before closing
+      setTimeout(() => window.close(), 7000);
     } catch (err: any) {
       console.error('[Badge] stopRecording error:', err.message);
       setState(s => ({ ...s, status: 'error', message: `Error: ${err.message}` }));
@@ -595,9 +577,12 @@ export default function Badge() {
   if (state.status === 'received') {
     return (
       <div style={styles.wrap}>
-        <div style={{ ...styles.badge, gap: 10 }}>
-          <span style={{ fontSize: 16 }}>✓</span>
-          <span style={{ ...styles.label, color: '#14b8a6', maxWidth: 260 }}>Processing audio — this window will close automatically</span>
+        <div style={{ ...styles.badge, gap: 10, background: 'rgba(15, 115, 140, 0.97)', borderLeft: '4px solid #14b8a6' }}>
+          <span style={{ fontSize: 20 }}>✓</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ ...styles.label, color: '#14b8a6', fontWeight: 700, maxWidth: 260 }}>Recording saved successfully</span>
+            <span style={{ ...styles.label, color: '#cbd5e1', fontSize: 11, maxWidth: 260 }}>File saved to disk • closing in 7 seconds</span>
+          </div>
         </div>
       </div>
     );
