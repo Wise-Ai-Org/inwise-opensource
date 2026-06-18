@@ -413,7 +413,8 @@ export default function Badge() {
     audioCtxRef.current?.close();
     audioCtxRef.current = null;
 
-    setState(s => ({ ...s, status: 'received' }));
+    // Don't show 'received' yet — wait for confirmation from main process
+    setState(s => ({ ...s, status: 'processing', message: 'Saving recording…' }));
 
     await new Promise<void>(resolve => { mr.onstop = () => resolve(); });
 
@@ -426,6 +427,22 @@ export default function Badge() {
     const wav = encodeWav(decoded);
     audioCtx.close();
 
+    // Set up confirmation listeners BEFORE sending audio
+    const fileSavedPromise = new Promise<void>(resolve => {
+      const handler = () => {
+        (window as any).inwiseAPI?.off?.('recording:file-saved', handler);
+        (window as any).inwiseAPI?.off?.('recording:file-save-failed', errorHandler);
+        resolve();
+      };
+      const errorHandler = (msg: string) => {
+        (window as any).inwiseAPI?.off?.('recording:file-saved', handler);
+        (window as any).inwiseAPI?.off?.('recording:file-save-failed', errorHandler);
+        setState(s => ({ ...s, status: 'error', message: `Failed to save: ${msg}` }));
+      };
+      (window as any).inwiseAPI?.on?.('recording:file-saved', handler);
+      (window as any).inwiseAPI?.on?.('recording:file-save-failed', errorHandler);
+    });
+
     (window as any).electronAPI?.sendAudio({
       buffer: new Uint8Array(wav),
       title: titleRef.current,
@@ -433,8 +450,14 @@ export default function Badge() {
       stereo: hasStereoRef.current,
     });
 
-    // Close badge only after audio has been sent to main process
-    setTimeout(() => window.close(), 3000);
+    // Wait for confirmation that file was actually saved to disk
+    await fileSavedPromise;
+
+    // Now show "Recording saved" after confirmed receipt
+    setState(s => ({ ...s, status: 'received' }));
+
+    // Keep "✓ Recording saved" visible for 5 seconds so user can see it succeeded before closing.
+    setTimeout(() => window.close(), 5000);
   };
 
   stopRecordingRef.current = stopRecording;

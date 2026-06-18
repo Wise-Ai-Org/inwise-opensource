@@ -1788,6 +1788,12 @@ ipcMain.on('recording:audio-data', async (_e, { buffer, title, calendarEventId, 
     if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
     const tmpPath = path.join(recordingsDir, `inwise-rec-${Date.now()}.wav`);
     fs.writeFileSync(tmpPath, buffer);
+
+    // Confirm to badge window that file was saved to disk
+    overlayWindow?.webContents.send('recording:file-saved');
+    // Also notify main window (sidebar) that recording was received and saved
+    mainWindow?.webContents.send('recording:file-saved');
+
     updateTrayMenu(mainWindow!, false);
     // Look up attendees from the calendar event if available
     const attendees = calendarEventId
@@ -1796,6 +1802,9 @@ ipcMain.on('recording:audio-data', async (_e, { buffer, title, calendarEventId, 
     await runRecordingPipeline(tmpPath, title, calendarEventId, stereo, attendees);
   } catch (e: any) {
     log('error', 'audio-data:failed', e.message);
+    // Notify badge of failure
+    overlayWindow?.webContents.send('recording:file-save-failed', e.message);
+    mainWindow?.webContents.send('recording:file-save-failed', e.message);
   }
 });
 
