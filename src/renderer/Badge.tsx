@@ -416,48 +416,61 @@ export default function Badge() {
     // Don't show 'received' yet — wait for confirmation from main process
     setState(s => ({ ...s, status: 'processing', message: 'Saving recording…' }));
 
-    await new Promise<void>(resolve => { mr.onstop = () => resolve(); });
+    try {
+      await new Promise<void>(resolve => { mr.onstop = () => resolve(); });
 
-    const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-    const arrayBuffer = await blob.arrayBuffer();
+      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      const arrayBuffer = await blob.arrayBuffer();
 
-    // Decode webm/opus → PCM → WAV so Whisper can process it
-    const audioCtx = new AudioContext({ sampleRate: 16000 });
-    const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-    const wav = encodeWav(decoded);
-    audioCtx.close();
+      // Decode webm/opus → PCM → WAV so Whisper can process it
+      const audioCtx = new AudioContext({ sampleRate: 16000 });
+      let decoded;
+      try {
+        decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+      } catch (decodeErr: any) {
+        console.error('[Badge] Audio decode failed:', decodeErr.message);
+        setState(s => ({ ...s, status: 'error', message: `Encoding error: ${decodeErr.message}` }));
+        audioCtx.close();
+        return;
+      }
+      const wav = encodeWav(decoded);
+      audioCtx.close();
 
-    // Set up confirmation listeners BEFORE sending audio
-    const fileSavedPromise = new Promise<void>(resolve => {
-      const handler = () => {
-        (window as any).inwiseAPI?.off?.('recording:file-saved', handler);
-        (window as any).inwiseAPI?.off?.('recording:file-save-failed', errorHandler);
-        resolve();
-      };
-      const errorHandler = (msg: string) => {
-        (window as any).inwiseAPI?.off?.('recording:file-saved', handler);
-        (window as any).inwiseAPI?.off?.('recording:file-save-failed', errorHandler);
-        setState(s => ({ ...s, status: 'error', message: `Failed to save: ${msg}` }));
-      };
-      (window as any).inwiseAPI?.on?.('recording:file-saved', handler);
-      (window as any).inwiseAPI?.on?.('recording:file-save-failed', errorHandler);
-    });
+      // Set up confirmation listeners BEFORE sending audio
+      const fileSavedPromise = new Promise<void>(resolve => {
+        const handler = () => {
+          (window as any).inwiseAPI?.off?.('recording:file-saved', handler);
+          (window as any).inwiseAPI?.off?.('recording:file-save-failed', errorHandler);
+          resolve();
+        };
+        const errorHandler = (msg: string) => {
+          (window as any).inwiseAPI?.off?.('recording:file-saved', handler);
+          (window as any).inwiseAPI?.off?.('recording:file-save-failed', errorHandler);
+          setState(s => ({ ...s, status: 'error', message: `Failed to save: ${msg}` }));
+        };
+        (window as any).inwiseAPI?.on?.('recording:file-saved', handler);
+        (window as any).inwiseAPI?.on?.('recording:file-save-failed', errorHandler);
+      });
 
-    (window as any).electronAPI?.sendAudio({
-      buffer: new Uint8Array(wav),
-      title: titleRef.current,
-      calendarEventId: calendarEventIdRef.current,
-      stereo: hasStereoRef.current,
-    });
+      (window as any).electronAPI?.sendAudio({
+        buffer: new Uint8Array(wav),
+        title: titleRef.current,
+        calendarEventId: calendarEventIdRef.current,
+        stereo: hasStereoRef.current,
+      });
 
-    // Wait for confirmation that file was actually saved to disk
-    await fileSavedPromise;
+      // Wait for confirmation that file was actually saved to disk
+      await fileSavedPromise;
 
-    // Now show "Recording saved" after confirmed receipt
-    setState(s => ({ ...s, status: 'received' }));
+      // Now show "Recording saved" after confirmed receipt
+      setState(s => ({ ...s, status: 'received' }));
 
-    // Keep "✓ Recording saved" visible for 5 seconds so user can see it succeeded before closing.
-    setTimeout(() => window.close(), 5000);
+      // Keep "✓ Recording saved" visible for 5 seconds so user can see it succeeded before closing.
+      setTimeout(() => window.close(), 5000);
+    } catch (err: any) {
+      console.error('[Badge] stopRecording error:', err.message);
+      setState(s => ({ ...s, status: 'error', message: `Error: ${err.message}` }));
+    }
   };
 
   stopRecordingRef.current = stopRecording;
