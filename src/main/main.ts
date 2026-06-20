@@ -1780,14 +1780,19 @@ ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; messag
   log('error', 'renderer:unhandled-rejection', `${name}: ${message}${source}`);
 });
 
-ipcMain.on('recording:audio-data', async (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
+ipcMain.handle('recording:audio-data', async (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   isRecordingActive = false;
   try {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
     const tmpPath = path.join(recordingsDir, `inwise-rec-${Date.now()}.wav`);
-    fs.writeFileSync(tmpPath, buffer);
+    await new Promise<void>((resolve, reject) => {
+      fs.writeFile(tmpPath, buffer, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
 
     // Confirm to badge window that file was saved to disk
     overlayWindow?.webContents.send('recording:file-saved');
@@ -1800,11 +1805,13 @@ ipcMain.on('recording:audio-data', async (_e, { buffer, title, calendarEventId, 
       ? calendarWatcher.getUpcomingEvents().find((e: any) => e.id === calendarEventId)?.attendees || []
       : [];
     await runRecordingPipeline(tmpPath, title, calendarEventId, stereo, attendees);
+    return { success: true };
   } catch (e: any) {
     log('error', 'audio-data:failed', e.message);
     // Notify badge of failure
     overlayWindow?.webContents.send('recording:file-save-failed', e.message);
     mainWindow?.webContents.send('recording:file-save-failed', e.message);
+    throw e;
   }
 });
 

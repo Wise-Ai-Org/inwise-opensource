@@ -290,6 +290,12 @@ export default function Badge() {
     return () => clearInterval(id);
   }, [state.status]);
 
+  useEffect(() => {
+    if (state.status === 'done') {
+      setTimeout(() => window.close(), 2000);
+    }
+  }, [state.status]);
+
   const startMic = async (title: string) => {
     const reportHealth = (h: { micOk: boolean; systemAudioOk: boolean; message?: string }) => {
       try { (window as any).electronAPI?.sendAudioHealth(h); } catch { /* ignore */ }
@@ -436,13 +442,17 @@ export default function Badge() {
       const wav = encodeWav(decoded);
       audioCtx.close();
 
-      // Send audio to main process
-      (window as any).electronAPI?.sendAudio({
-        buffer: new Uint8Array(wav),
-        title: titleRef.current,
-        calendarEventId: calendarEventIdRef.current,
-        stereo: hasStereoRef.current,
-      });
+      // Send audio to main process and wait for confirmation
+      try {
+        await (window as any).electronAPI?.sendAudio({
+          buffer: new Uint8Array(wav),
+          title: titleRef.current,
+          calendarEventId: calendarEventIdRef.current,
+          stereo: hasStereoRef.current,
+        });
+      } catch (sendErr: any) {
+        throw new Error(`Failed to send recording to main process: ${sendErr?.message || 'Unknown error'}`);
+      }
 
       // Show "Recording saved" immediately - file should be written synchronously in main process
       setState(s => ({ ...s, status: 'received' }));
