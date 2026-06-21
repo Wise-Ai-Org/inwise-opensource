@@ -302,6 +302,12 @@ export default function Badge() {
     };
     try {
       const cfg = await (window as any).inwiseAPI.getConfig();
+
+      // Skip probing if calendar-free recording is disabled
+      if (cfg.calendarFreeRecordingEnabled === false) {
+        return;
+      }
+
       const deviceId = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
 
       // Mic stream — prefer the saved device, but fall back to the default mic if its
