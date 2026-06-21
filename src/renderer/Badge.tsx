@@ -426,13 +426,22 @@ export default function Badge() {
       await new Promise<void>(resolve => { mr.onstop = () => resolve(); });
 
       const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      if (blob.size === 0) {
+        setState(s => ({ ...s, status: 'error', message: 'No audio recorded' }));
+        return;
+      }
       const arrayBuffer = await blob.arrayBuffer();
 
       // Decode webm/opus → PCM → WAV so Whisper can process it
       const audioCtx = new AudioContext({ sampleRate: 16000 });
-      let decoded;
+      let decoded: AudioBuffer;
       try {
-        decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+        // Add timeout to prevent hanging
+        const decodePromise = audioCtx.decodeAudioData(arrayBuffer.slice(0));
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Audio decode timeout')), 10000)
+        );
+        decoded = await Promise.race([decodePromise, timeoutPromise]);
       } catch (decodeErr: any) {
         console.error('[Badge] Audio decode failed:', decodeErr.message);
         setState(s => ({ ...s, status: 'error', message: `Encoding error: ${decodeErr.message}` }));
