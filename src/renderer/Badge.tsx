@@ -302,9 +302,11 @@ export default function Badge() {
     };
     try {
       const cfg = await (window as any).inwiseAPI.getConfig();
+      console.log('[Badge] startMic called, calendarFreeRecordingEnabled:', cfg.calendarFreeRecordingEnabled);
 
       // Skip probing if calendar-free recording is disabled
       if (cfg.calendarFreeRecordingEnabled === false) {
+        console.log('[Badge] Skipping audio probing - calendar-free recording disabled');
         return;
       }
 
