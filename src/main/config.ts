@@ -46,6 +46,7 @@ interface Config {
   jiraDefaultProject: string;
   lastOpenedAt: string | null;
   welcomeBackLastSeenAt: string | null;
+  calendarFreeRecordingEnabled: boolean;
   sor: SorPrefs;
 }
 
@@ -69,6 +70,7 @@ const store = new Store<Config>({
     jiraDefaultProject: '',
     lastOpenedAt: null,
     welcomeBackLastSeenAt: null,
+    calendarFreeRecordingEnabled: true,
     sor: {
       dismissedReceiptIds: [],
       jira: { approvalGateEnabled: false, approvalThreshold: 0.6 },
