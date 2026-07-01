@@ -85,7 +85,9 @@
     "node-ical": "^0.25.6",
     "openai": "^4.67.0",
     "react-icons": "^5.0.0",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "@ricky0123/vad-web": "^0.0.30",
+    "onnxruntime-web": "^1.20.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

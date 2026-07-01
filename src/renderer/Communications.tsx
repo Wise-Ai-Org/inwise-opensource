@@ -1071,7 +1071,7 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
     setExpandedMeetings(prev => new Set([...prev, meetingId]));
 
     // Auto-open the Jira mapping modal after review (same guard as the "Map to Jira"
-    // button). The review modal closes synchronously on approve, so it is gone before
+    // button). The review modal closes synchronously on approve, so it's gone before
     // this opens — no overlap.
     const actionItems = data?.insights?.actionItems ?? [];
     if (jiraConnected && actionItems.length > 0) {

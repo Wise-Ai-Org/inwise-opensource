@@ -9,6 +9,7 @@ import FirstTimeUserFlow from './FirstTimeUserFlow';
 import WelcomeBack from './WelcomeBack';
 import LiveMeetingBanner, { LiveMeetingInfo } from './LiveMeetingBanner';
 import MeetingConflictModal, { ConflictMeeting } from './components/modal/MeetingConflictModal';
+import { startAudioCapture, stopAudioCapture, on as onAudioCapture, SILENCE_STOP_MS } from './audio-capture';
 
 type View = 'communications' | 'tasks' | 'people' | 'settings';
 
@@ -88,6 +89,65 @@ export default function App() {
       }
       setReady(true);
     });
+  }, []);
+
+  // Calendar-free recording: when enabled, an always-on Silero VAD listens to the
+  // mic and drives the existing Badge recording pipeline — start on detected speech,
+  // stop after SILENCE_STOP_MS of silence — with no calendar event required.
+  useEffect(() => {
+    const api = (window as any).inwiseAPI;
+    let cancelled = false;
+    let recordingActive = false;
+    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+    const cleanups: Array<() => void> = [];
+
+    api.getConfig().then((cfg: any) => {
+      if (cancelled || !cfg?.calendarFreeRecording) return;
+
+      // Re-arm when a recording fully completes or errors. Without this,
+      // recordingActive stays true after the first recording (pipeline done or
+      // user-stopped) and every later speech detection is swallowed by the guard
+      // below — making the always-on VAD look dead until app restart.
+      const onStatus = (payload: { status?: string }) => {
+        if (payload?.status === 'done' || payload?.status === 'error') {
+          recordingActive = false;
+          if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+          console.log('[CFR] recording ' + payload.status + ' -> re-armed');
+        }
+      };
+      api.on?.('recording:status', onStatus);
+      cleanups.push(() => api.off?.('recording:status', onStatus));
+
+      cleanups.push(onAudioCapture('speech-start', () => {
+        if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+        console.log('[CFR] speech-start; recordingActive=', recordingActive);
+        if (!recordingActive) {
+          recordingActive = true;
+          api.startRecording?.('Recorded conversation');
+        }
+      }));
+
+      cleanups.push(onAudioCapture('speech-end', () => {
+        if (silenceTimer) clearTimeout(silenceTimer);
+        // Stop after SILENCE_STOP_MS of continuous silence. recordingActive is
+        // reset by the recording:status handler above (not here), so we never
+        // re-arm before the pipeline has actually finished processing.
+        silenceTimer = setTimeout(() => {
+          console.log('[CFR] silence timeout -> stopRecording');
+          api.stopRecording?.();
+        }, SILENCE_STOP_MS);
+      }));
+
+      startAudioCapture().catch((e: unknown) =>
+        console.error('[CalendarFreeRecording] failed to start VAD', e));
+    });
+
+    return () => {
+      cancelled = true;
+      if (silenceTimer) clearTimeout(silenceTimer);
+      cleanups.forEach(fn => fn());
+      stopAudioCapture().catch(() => { /* ignore */ });
+    };
   }, []);
 
   useEffect(() => {

@@ -31,10 +31,8 @@ async function checkMic(): Promise<{ ok: boolean; error?: string }> {
     stream.getTracks().forEach(t => t.stop());
     return { ok: true };
   } catch (e: any) {
-    // The saved deviceId frequently won't match here: Chromium salts deviceId per
-    // browsing context, and the salt rotates across sessions/app restarts. The
-    // Settings window saved one salt; this overlay window sees another. So an exact
-    // mismatch does NOT mean the mic is gone — fall back to the default device.
+    // The saved deviceId frequently will not match: Chromium salts deviceId per
+    // browsing context and the salt rotates across sessions. Fall back to default.
     if (savedDeviceId && (e?.name === 'OverconstrainedError' || e?.name === 'NotFoundError')) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -72,6 +70,30 @@ async function checkReady(): Promise<{ ok: boolean; error?: string }> {
   } catch (e: any) {
     return { ok: false, error: e?.message || 'IPC not ready' };
   }
+}
+
+// Synthesizes a soft 2-tone ascending chime — no audio asset required.
+function playStartChime(): void {
+  try {
+    const ctx = new (window as any).AudioContext();
+    const playTone = (freq: number, startOffset: number, duration: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      const start = ctx.currentTime + startOffset;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.18, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+      osc.start(start);
+      osc.stop(start + duration);
+    };
+    playTone(523.25, 0, 0.20);    // C5
+    playTone(783.99, 0.10, 0.25); // G5 — ascending fifth = "starting" feel
+    setTimeout(() => { try { ctx.close(); } catch { /* ignore */ } }, 600);
+  } catch { /* audio failed; non-critical */ }
 }
 
 const BAR_COUNT = 12;
@@ -193,11 +215,30 @@ export default function Badge() {
   const stopRecordingRef = useRef<() => void>(() => {});
   const titleRef = useRef<string>('Meeting');
   const calendarEventIdRef = useRef<string | undefined>(undefined);
+  const beginFlowRef = useRef<(title: string) => void>(() => {});
+  // Mirror status into a ref so the (mount-only) devicechange listener reads it without stale closures.
+  const statusRef = useRef(state.status);
+  statusRef.current = state.status;
 
   useEffect(() => {
-    (window as any).inwiseAPI.on('recording:start', async (title: string, calendarEventId?: string) => {
-      titleRef.current = title;
+    (window as any).inwiseAPI.on('recording:start', (title: string, calendarEventId?: string) => {
       calendarEventIdRef.current = calendarEventId;
+      beginFlowRef.current(title);
+    });
+
+    // Re-run the mic check when audio hardware changes while we're parked on the
+    // error screen, so reconnecting/fixing the mic auto-recovers the flow instead
+    // of staying stuck (the check previously ran only once per recording:start).
+    const onDeviceChange = async () => {
+      if (statusRef.current !== 'error') return;
+      const res = await checkMic();
+      if (res.ok) beginFlowRef.current(titleRef.current);
+    };
+    navigator.mediaDevices.addEventListener('devicechange', onDeviceChange);
+
+    beginFlowRef.current = async (title: string) => {
+      titleRef.current = title;
+      setSysAudioWarning(false);
 
       // Pre-flight: run REAL checks (not setTimeouts). Each dot lights up only when its
       // corresponding check actually passes. Hard failures (mic, ready) abort the countdown.
@@ -240,15 +281,16 @@ export default function Badge() {
       setState(s => ({ ...s, countdown: 1 }));
       await new Promise(r => setTimeout(r, 600));
 
-      // Start recording (silent - no chime)
+      // Start
+      playStartChime();
       startRef.current = Date.now();
       setState({ status: 'recording', title });
       startMic(title);
 
-      // Glow fades in after recording starts
+      // Glow fades in 1 second after the chime
       await new Promise(r => setTimeout(r, 1000));
       setState(s => ({ ...s, glowActive: true }));
-    });
+    };
 
     (window as any).inwiseAPI.on('recording:status', ({ status, message }: { status: Status; message?: string }) => {
       setState((s) => ({ ...s, status, message }));
@@ -257,6 +299,8 @@ export default function Badge() {
     (window as any).inwiseAPI.on('recording:stop-request', () => {
       stopRecordingRef.current();
     });
+
+    return () => navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange);
   }, []);
 
   useEffect(() => {
@@ -265,32 +309,16 @@ export default function Badge() {
     return () => clearInterval(id);
   }, [state.status]);
 
-  useEffect(() => {
-    if (state.status === 'done') {
-      setTimeout(() => window.close(), 2000);
-    }
-  }, [state.status]);
-
   const startMic = async (title: string) => {
     const reportHealth = (h: { micOk: boolean; systemAudioOk: boolean; message?: string }) => {
       try { (window as any).electronAPI?.sendAudioHealth(h); } catch { /* ignore */ }
     };
     try {
       const cfg = await (window as any).inwiseAPI.getConfig();
-      console.log('[Badge] startMic called, calendarFreeRecordingEnabled:', cfg.calendarFreeRecordingEnabled);
-
-      // Skip probing if calendar-free recording is disabled
-      if (cfg.calendarFreeRecordingEnabled === false) {
-        console.log('[Badge] Skipping audio probing - calendar-free recording disabled');
-        return;
-      }
-
       const deviceId = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
 
-      // Mic stream — prefer the saved device, but fall back to the default mic if its
-      // deviceId no longer resolves. Chromium salts deviceId per browsing context and
-      // rotates the salt across sessions, so the id saved by the Settings window often
-      // won't match in this overlay window even though the same mic is present and works.
+      // Mic stream — prefer the saved device, fall back to default if its deviceId
+      // no longer resolves (Chromium salts/rotates deviceId across contexts/sessions).
       let micStream: MediaStream;
       try {
         micStream = await navigator.mediaDevices.getUserMedia({
@@ -402,59 +430,28 @@ export default function Badge() {
     audioCtxRef.current?.close();
     audioCtxRef.current = null;
 
-    // Don't show 'received' yet — wait for confirmation from main process
-    setState(s => ({ ...s, status: 'processing', message: 'Saving recording…' }));
+    setState(s => ({ ...s, status: 'received' }));
 
-    try {
-      await new Promise<void>(resolve => { mr.onstop = () => resolve(); });
+    await new Promise<void>(resolve => { mr.onstop = () => resolve(); });
 
-      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-      if (blob.size === 0) {
-        setState(s => ({ ...s, status: 'error', message: 'No audio recorded' }));
-        return;
-      }
-      const arrayBuffer = await blob.arrayBuffer();
+    const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+    const arrayBuffer = await blob.arrayBuffer();
 
-      // Decode webm/opus → PCM → WAV so Whisper can process it
-      const audioCtx = new AudioContext({ sampleRate: 16000 });
-      let decoded: AudioBuffer;
-      try {
-        // Add timeout to prevent hanging
-        const decodePromise = audioCtx.decodeAudioData(arrayBuffer.slice(0));
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Audio decode timeout')), 10000)
-        );
-        decoded = await Promise.race([decodePromise, timeoutPromise]);
-      } catch (decodeErr: any) {
-        console.error('[Badge] Audio decode failed:', decodeErr.message);
-        setState(s => ({ ...s, status: 'error', message: `Encoding error: ${decodeErr.message}` }));
-        audioCtx.close();
-        return;
-      }
-      const wav = encodeWav(decoded);
-      audioCtx.close();
+    // Decode webm/opus → PCM → WAV so Whisper can process it
+    const audioCtx = new AudioContext({ sampleRate: 16000 });
+    const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+    const wav = encodeWav(decoded);
+    audioCtx.close();
 
-      // Send audio to main process and wait for confirmation
-      try {
-        await (window as any).electronAPI?.sendAudio({
-          buffer: new Uint8Array(wav),
-          title: titleRef.current,
-          calendarEventId: calendarEventIdRef.current,
-          stereo: hasStereoRef.current,
-        });
-      } catch (sendErr: any) {
-        throw new Error(`Failed to send recording to main process: ${sendErr?.message || 'Unknown error'}`);
-      }
+    (window as any).electronAPI?.sendAudio({
+      buffer: new Uint8Array(wav),
+      title: titleRef.current,
+      calendarEventId: calendarEventIdRef.current,
+      stereo: hasStereoRef.current,
+    });
 
-      // Show "Recording saved" immediately - file should be written synchronously in main process
-      setState(s => ({ ...s, status: 'received' }));
-
-      // Keep "✓ Recording saved" visible for 7 seconds so user can clearly see it succeeded before closing
-      setTimeout(() => window.close(), 7000);
-    } catch (err: any) {
-      console.error('[Badge] stopRecording error:', err.message);
-      setState(s => ({ ...s, status: 'error', message: `Error: ${err.message}` }));
-    }
+    // Close badge only after audio has been sent to main process
+    setTimeout(() => window.close(), 3000);
   };
 
   stopRecordingRef.current = stopRecording;
@@ -571,6 +568,22 @@ export default function Badge() {
         <div style={{ ...styles.badge, gap: 10 }}>
           <span style={{ fontSize: 16 }}>⚠</span>
           <span style={{ ...styles.label, color: '#fca5a5', maxWidth: 200 }}>{state.message || 'Error'}</span>
+          <button
+            onClick={() => beginFlowRef.current(titleRef.current)}
+            style={{
+              background: INWISE_TEAL,
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
@@ -579,12 +592,9 @@ export default function Badge() {
   if (state.status === 'received') {
     return (
       <div style={styles.wrap}>
-        <div style={{ ...styles.badge, gap: 10, background: 'rgba(15, 115, 140, 0.97)', borderLeft: '4px solid #14b8a6' }}>
-          <span style={{ fontSize: 20 }}>✓</span>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ ...styles.label, color: '#14b8a6', fontWeight: 700, maxWidth: 260 }}>Recording saved successfully</span>
-            <span style={{ ...styles.label, color: '#cbd5e1', fontSize: 11, maxWidth: 260 }}>File saved to disk • closing in 7 seconds</span>
-          </div>
+        <div style={{ ...styles.badge, gap: 10 }}>
+          <span style={{ fontSize: 16 }}>✓</span>
+          <span style={{ ...styles.label, color: '#14b8a6', maxWidth: 260 }}>Processing audio — this window will close automatically</span>
         </div>
       </div>
     );

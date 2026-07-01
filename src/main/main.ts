@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer } from 'electron';
+﻿import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -12,6 +12,7 @@ import { extractInsights, searchMeetings, detectContradictions, generateAgenda, 
 import {
   initDatabase,
   createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus,
+  findRecentRecordingMeeting, appendMeetingTranscript,
   getMeetings, getMeeting, deleteMeeting, getAllPastDecisions, getOverdueCommitments,
   createMeetingFromTranscript,
   getTasks, createTask, updateTask, deleteTask,
@@ -24,7 +25,7 @@ import {
   getUserVoicePrint, getVoicePrintByName, getVoicePrintsWithEmbeddings,
   syncCalendarEventsToDb,
 } from './database';
-import { extractChannel, trimWav, wavBufferToSamples } from './audio-utils';
+import { extractChannel, trimWav, wavBufferToSamples, stitchWavBuffers } from '@inwise/desktop-shared';
 import {
   connectJira, disconnectJira, isJiraConnected, getJiraInfo,
   getJiraProjects, getJiraStories, createJiraIssue, updateJiraIssue,
@@ -52,7 +53,7 @@ import {
 } from './sor-pending-approvals';
 import { matchAllItems, semanticMatch } from './jira-matcher';
 import { scoreTasks } from './task-scorer';
-import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from './mfcc';
+import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from '@inwise/desktop-shared';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
 import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
 import { computeWelcomeBack } from './welcome-back';
@@ -82,7 +83,7 @@ let pendingConflict:
   | { active: MeetingEvent; incoming: MeetingEvent; timer: NodeJS.Timeout }
   | null = null;
 
-// ── Windows ───────────────────────────────────────────────────────────────────
+// â”€â”€ Windows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -101,7 +102,15 @@ function createMainWindow(): void {
     show: false,
   });
 
-  mainWindow.loadFile(path.join(__dirname, '../../dist/renderer/index.html'));
+  mainWindow.loadURL('app://bundle/index.html');
+  // TEMP DIAG: pipe renderer console into the main log to trace VAD lifecycle.
+  mainWindow.webContents.on("console-message", (...a) => {
+    let msg;
+    if (a.length >= 3 && typeof a[2] === "string") msg = a[2];
+    else if (a[0] && typeof a[0] === "object" && "message" in a[0]) msg = a[0].message;
+    else msg = a.map(String).join(" ");
+    console.log("[renderer] " + msg);
+  });
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
   }
@@ -126,9 +135,6 @@ function createOverlayWindow(title: string, calendarEventId?: string): void {
     return;
   }
 
-  const badgePath = path.join(__dirname, '../../dist/renderer/badge.html');
-  console.log('[Badge] Creating overlay window with badge file:', badgePath);
-
   overlayWindow = new BrowserWindow({
     width: 480,
     height: 170,
@@ -146,14 +152,10 @@ function createOverlayWindow(title: string, calendarEventId?: string): void {
     },
   });
 
-  overlayWindow.loadFile(badgePath);
+  overlayWindow.loadFile(path.join(__dirname, '../../dist/renderer/badge.html'));
   overlayWindow.webContents.once('did-finish-load', () => {
-    console.log('[Badge] Window loaded, showing and sending recording:start');
-    overlayWindow?.show();
     overlayWindow?.webContents.send('recording:start', title, calendarEventId);
   });
-
-  overlayWindow.webContents.on('console-message', (_level, message) => console.log('[Badge Console]', message));
 }
 
 function createReminderBadge(title: string): void {
@@ -178,7 +180,6 @@ function createReminderBadge(title: string): void {
 
   win.loadFile(path.join(__dirname, '../../dist/renderer/badge.html'));
   win.webContents.once('did-finish-load', () => {
-    win.show();
     win.webContents.send('recording:start', title);
   });
 
@@ -192,7 +193,7 @@ function sendToOverlay(msg: any) {
   }
 }
 
-// ── Voice auto-enrollment ────────────────────────────────────────────────────
+// â”€â”€ Voice auto-enrollment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function replaceSpeakerLabels(transcript: string, attendees: string[]): Promise<string> {
   const config = getConfig();
@@ -212,10 +213,10 @@ async function replaceSpeakerLabels(transcript: string, attendees: string[]): Pr
   const otherAttendees = attendees.filter(a => !isSelf(a));
 
   if (otherAttendees.length === 1) {
-    // 1:1 — we know exactly who speaker 1 is
+    // 1:1 â€” we know exactly who speaker 1 is
     speakerMap['1'] = otherAttendees[0];
   } else if (otherAttendees.length > 1) {
-    // Group — try to identify via voice prints, otherwise use "Others"
+    // Group â€” try to identify via voice prints, otherwise use "Others"
     // For now, label as the group. MFCC per-segment matching is a future enhancement.
     speakerMap['1'] = 'Others';
   }
@@ -238,7 +239,7 @@ async function replaceSpeakerLabels(transcript: string, attendees: string[]): Pr
 
   const replacementCount = (transcript.match(/SPEAKER[_\s]?\d+/gi) || []).length;
   if (replacementCount > 0) {
-    log('info', 'pipeline:label-replace', `replaced ${replacementCount} speaker labels (${Object.entries(speakerMap).map(([k, v]) => `${k}→${v}`).join(', ')})`);
+    log('info', 'pipeline:label-replace', `replaced ${replacementCount} speaker labels (${Object.entries(speakerMap).map(([k, v]) => `${k}â†’${v}`).join(', ')})`);
   }
 
   return replaced;
@@ -294,7 +295,7 @@ async function autoEnrollVoices(audioPath: string, attendees: string[]): Promise
 
   log('info', 'voice-enroll:status', `attendees=${otherAttendees.length} enrolled=${enrolled.length} unenrolled=${unenrolled.length}`);
 
-  // Tier 1: 1:1 meeting — only one other person, auto-enroll them
+  // Tier 1: 1:1 meeting â€” only one other person, auto-enroll them
   if (otherAttendees.length === 1 && unenrolled.length === 1) {
     const name = unenrolled[0];
     await saveVoicePrint({ name, audioClip: rightChannelClip, isUser: false, embedding: clipEmbedding || undefined });
@@ -302,7 +303,7 @@ async function autoEnrollVoices(audioPath: string, attendees: string[]): Promise
     return;
   }
 
-  // Tier 2: Group call, all but one attendee already enrolled — enroll by elimination
+  // Tier 2: Group call, all but one attendee already enrolled â€” enroll by elimination
   if (unenrolled.length === 1) {
     const name = unenrolled[0];
     await saveVoicePrint({ name, audioClip: rightChannelClip, isUser: false, embedding: clipEmbedding || undefined });
@@ -310,7 +311,7 @@ async function autoEnrollVoices(audioPath: string, attendees: string[]): Promise
     return;
   }
 
-  // Tier 3: Multiple unknowns — try MFCC matching against stored voice prints
+  // Tier 3: Multiple unknowns â€” try MFCC matching against stored voice prints
   if (unenrolled.length > 1 && clipEmbedding) {
     const storedPrints = await getVoicePrintsWithEmbeddings();
     // Only match against non-user prints that have embeddings
@@ -322,7 +323,7 @@ async function autoEnrollVoices(audioPath: string, attendees: string[]): Promise
       const bestMatch = matches[0];
 
       if (bestMatch && bestMatch.similarity >= SPEAKER_MATCH_THRESHOLD) {
-        // We recognized one of the speakers — mark them as identified
+        // We recognized one of the speakers â€” mark them as identified
         log('info', 'voice-enroll:mfcc-match', `matched "${bestMatch.name}" with similarity ${bestMatch.similarity.toFixed(3)}`);
 
         // Remove the matched person from unenrolled list
@@ -343,37 +344,43 @@ async function autoEnrollVoices(audioPath: string, attendees: string[]): Promise
       }
     }
 
-    // Still can't resolve — store as unidentified with embedding for future matching
+    // Still can't resolve â€” store as unidentified with embedding for future matching
     const label = `Unidentified (${unenrolled.join(', ')})`;
     await saveVoicePrint({ name: label, audioClip: rightChannelClip, isUser: false, embedding: clipEmbedding });
     log('info', 'voice-enroll:unidentified', `stored clip with embedding for ${unenrolled.length} unknown voices`);
   } else if (unenrolled.length > 1) {
-    // No embedding computed — store raw clip only
+    // No embedding computed â€” store raw clip only
     const label = `Unidentified (${unenrolled.join(', ')})`;
     await saveVoicePrint({ name: label, audioClip: rightChannelClip, isUser: false });
     log('info', 'voice-enroll:unidentified', `stored clip (no embedding) for ${unenrolled.length} unknown voices`);
   }
 }
 
-// ── Recording pipeline ────────────────────────────────────────────────────────
+// â”€â”€ Recording pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function runRecordingPipeline(audioPath: string, meetingTitle: string, calendarEventId?: string, stereo?: boolean, attendees?: string[]): Promise<void> {
-  sendToOverlay({ status: 'processing', message: 'Transcribing…' });
+  sendToOverlay({ status: 'processing', message: 'Transcribingâ€¦' });
   log('info', 'pipeline:start', `title="${meetingTitle}" stereo=${!!stereo} path=${audioPath}`);
 
-  // Create the meeting record FIRST so failed transcriptions are still recoverable
+  // Create the meeting record FIRST so failed transcriptions are still recoverable.
+  // If this title already produced a recording meeting within the last hour,
+  // treat this audio as another segment of that meeting instead of a new one.
   const durationSec = getAudioDuration(audioPath);
   log('info', 'pipeline:transcribe', `duration=${durationSec}s`);
 
-  const meetingId = await createMeeting({
-    title: meetingTitle,
-    date: new Date().toISOString(),
-    duration: durationSec,
-    calendarEventId,
-    source: 'desktop_recording',
-    attendees: attendees || [],
-  });
-  log('info', 'pipeline:meeting-created', meetingId);
+  const existing = await findRecentRecordingMeeting(meetingTitle, calendarEventId, 60 * 60 * 1000);
+  const merging = !!existing;
+  const meetingId = existing
+    ? existing._id
+    : await createMeeting({
+        title: meetingTitle,
+        date: new Date().toISOString(),
+        duration: durationSec,
+        calendarEventId,
+        source: 'desktop_recording',
+        attendees: attendees || [],
+      });
+  log('info', merging ? 'pipeline:meeting-merged' : 'pipeline:meeting-created', meetingId);
   await updateMeetingStatus(meetingId, 'transcribing');
   mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
 
@@ -386,19 +393,25 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       transcript = await replaceSpeakerLabels(transcript, attendees || []);
     }
 
-    await updateMeetingTranscript(meetingId, transcript, durationSec);
+    if (merging) {
+      await appendMeetingTranscript(meetingId, transcript, durationSec);
+    } else {
+      await updateMeetingTranscript(meetingId, transcript, durationSec);
+    }
 
     // Always notify renderer so meeting appears even if insights fail
     mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
 
-    sendToOverlay({ status: 'processing', message: 'Extracting insights…' });
+    sendToOverlay({ status: 'processing', message: 'Extracting insightsâ€¦' });
     try {
-      const insights = await extractInsights(transcript);
+      // When merging segments, re-extract insights from the combined transcript
+      const fullTranscript = merging ? ((await getMeeting(meetingId))?.transcript || transcript) : transcript;
+      const insights = await extractInsights(fullTranscript);
 
       // Detect contradictions against past decisions
       try {
         if (insights.decisions && insights.decisions.length > 0) {
-          sendToOverlay({ status: 'processing', message: 'Checking for contradictions…' });
+          sendToOverlay({ status: 'processing', message: 'Checking for contradictionsâ€¦' });
           const pastDecisions = await getAllPastDecisions();
           const contradictions = await detectContradictions(insights.decisions, pastDecisions);
           insights.contradictions = contradictions;
@@ -414,7 +427,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
       log('info', 'pipeline:insights-saved', meetingId);
 
-      // Auto-push to Jira if enabled — match to existing stories first
+      // Auto-push to Jira if enabled â€” match to existing stories first
       const jiraConfig = getConfig();
       if ((jiraConfig as any).jiraAutoPush && (jiraConfig as any).jiraTokens && (jiraConfig as any).jiraDefaultProject) {
         try {
@@ -433,7 +446,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
 
             // Create the local task first so we can pass its id as `linkedTaskId`
             // provenance to the Jira push. If the Jira call then fails, the local
-            // task survives as an unsynced record — strictly better than losing it.
+            // task survives as an unsynced record â€” strictly better than losing it.
             const task = await createTask({
               title: item.text,
               description: `From meeting: ${meetingTitle}`,
@@ -466,7 +479,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
             if (gate) {
               // Gated: record the would-be write as pending-approval and stash
               // the push params for the user to approve / reject later from the
-              // Inbox. Do NOT push and do NOT link the task's source yet — both
+              // Inbox. Do NOT push and do NOT link the task's source yet â€” both
               // happen on approve.
               const isLink = match.autoApproved && match.bestMatch;
               let pushParams: SorPushParams;
@@ -531,7 +544,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
             }
 
             if (match.autoApproved && match.bestMatch) {
-              // High-confidence match — link to existing story via comment
+              // High-confidence match â€” link to existing story via comment
               await addJiraComment(
                 match.bestMatch.jiraKey,
                 `Action item: ${item.text}\nOwner: ${item.owner || 'Unassigned'}`,
@@ -543,7 +556,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
               });
               linked++;
             } else {
-              // No confident match — create new Jira issue
+              // No confident match â€” create new Jira issue
               const result = await createJiraIssue({
                 title: item.text,
                 description: `From meeting: ${meetingTitle}\nOwner: ${item.owner || 'Unassigned'}`,
@@ -634,7 +647,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       log('error', 'pipeline:reprioritize-failed', scoreErr.message);
     }
 
-    // Task completion inference — flag tasks the transcript strongly implies are done.
+    // Task completion inference â€” flag tasks the transcript strongly implies are done.
     // Never auto-completes; user confirms via the 'Done?' pill in the Tasks view.
     try {
       const openTasks = await getTasks();
@@ -671,20 +684,28 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
     } catch { /* ignore */ }
     sendToOverlay({ status: 'error', message: err.message });
     mainWindow?.webContents.send('recording:status', { status: 'error', message: err.message });
-    // Keep audio file on failure so user can retry — delete only on success
+    // Keep audio file on failure so user can retry â€” delete only on success
     return;
   }
-  // Recording preserved on success and failure — user explicitly requested retention.
+  // Recording preserved on success and failure â€” user explicitly requested retention.
 }
 
 function getAudioDuration(filePath: string): number {
   try {
     const stat = fs.statSync(filePath);
-    return Math.round(stat.size / 32000);
+    // Read the byte rate from the WAV header — a fixed mono rate (32000)
+    // reported stereo recordings at twice their real length.
+    const fd = fs.openSync(filePath, 'r');
+    const header = Buffer.alloc(44);
+    fs.readSync(fd, header, 0, 44, 0);
+    fs.closeSync(fd);
+    const isWav = header.toString('ascii', 0, 4) === 'RIFF';
+    const byteRate = isWav ? header.readUInt32LE(28) : 0;
+    return Math.round(Math.max(0, stat.size - 44) / (byteRate > 0 ? byteRate : 32000));
   } catch { return 0; }
 }
 
-// ── IPC handlers ──────────────────────────────────────────────────────────────
+// â”€â”€ IPC handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 ipcMain.handle('whisper:setup', async (event, model: string) => {
   try {
@@ -754,7 +775,7 @@ ipcMain.handle('seed:demo', async () => {
     }
 
     // Meeting 1: Sprint Planning
-    const m1Id = await createMeeting({ title: 'Sprint Planning — Q2 Priorities', date: daysAgo(2), duration: 2700, attendees: ['Alex Chen', 'Sarah Kim', 'Jordan Patel', 'Maya Rodriguez'], source: 'demo_seed' });
+    const m1Id = await createMeeting({ title: 'Sprint Planning â€” Q2 Priorities', date: daysAgo(2), duration: 2700, attendees: ['Alex Chen', 'Sarah Kim', 'Jordan Patel', 'Maya Rodriguez'], source: 'demo_seed' });
     await saveInsights(m1Id, {
       summary: 'Sprint planning for Q2. Dashboard redesign is priority one (ship by end of April). Mobile onboarding parallel track for key client (April 15). API v2 starts mid-May. Staging CI pipeline identified as blocker.',
       actionItems: [
@@ -768,15 +789,15 @@ ipcMain.handle('seed:demo', async () => {
         { text: 'API v2 starts after dashboard ships', rationale: 'Avoid overloading the team' },
       ],
       blockers: [
-        { text: 'Staging environment CI pipeline failures — losing velocity', severity: 'high' },
+        { text: 'Staging environment CI pipeline failures â€” losing velocity', severity: 'high' },
       ],
     });
     await updateMeetingStatus(m1Id, 'reviewed');
 
     // Meeting 2: 1:1 with Alex
-    const m2Id = await createMeeting({ title: '1:1 with Alex — Engineering Updates', date: daysAgo(1), duration: 1800, attendees: ['Alex Chen'], source: 'demo_seed' });
+    const m2Id = await createMeeting({ title: '1:1 with Alex â€” Engineering Updates', date: daysAgo(1), duration: 1800, attendees: ['Alex Chen'], source: 'demo_seed' });
     await saveInsights(m2Id, {
-      summary: 'DevOps found CI memory leak, fix tonight. API v2 may deprecate 3 endpoints — need 60-day deprecation policy. Dashboard needs WebSocket for real-time refresh. Jordan to be tech lead on API v2.',
+      summary: 'DevOps found CI memory leak, fix tonight. API v2 may deprecate 3 endpoints â€” need 60-day deprecation policy. Dashboard needs WebSocket for real-time refresh. Jordan to be tech lead on API v2.',
       actionItems: [
         { text: 'Draft API deprecation policy document', owner: 'Alex Chen', dueDate: daysFromNow(4), priority: 'medium', isCommitment: true },
         { text: 'Create WebSocket upgrade ticket for dashboard', owner: 'Alex Chen', dueDate: daysFromNow(0), priority: 'medium' },
@@ -791,9 +812,9 @@ ipcMain.handle('seed:demo', async () => {
     await updateMeetingStatus(m2Id, 'reviewed');
 
     // Meeting 3: Design Review
-    const m3Id = await createMeeting({ title: 'Design Review — Dashboard Wireframes', date: daysAgo(0), duration: 2100, attendees: ['Maya Rodriguez', 'Alex Chen', 'Sarah Kim'], source: 'demo_seed' });
+    const m3Id = await createMeeting({ title: 'Design Review â€” Dashboard Wireframes', date: daysAgo(0), duration: 2100, attendees: ['Maya Rodriguez', 'Alex Chen', 'Sarah Kim'], source: 'demo_seed' });
     await saveInsights(m3Id, {
-      summary: 'Dashboard wireframes approved — card-based layout with drag-to-reorder. Focus time metric to be added. Mobile responsive at 768px and 1024px breakpoints. Dev starts Monday.',
+      summary: 'Dashboard wireframes approved â€” card-based layout with drag-to-reorder. Focus time metric to be added. Mobile responsive at 768px and 1024px breakpoints. Dev starts Monday.',
       actionItems: [
         { text: 'Add focus time card to dashboard design', owner: 'Maya Rodriguez', dueDate: daysFromNow(2), priority: 'medium' },
         { text: 'Finalize design specs and hand off to engineering', owner: 'Maya Rodriguez', dueDate: daysFromNow(3), priority: 'high', isCommitment: true },
@@ -807,7 +828,7 @@ ipcMain.handle('seed:demo', async () => {
     });
     await updateMeetingStatus(m3Id, 'reviewed');
 
-    // ── More people (extends the cast beyond the core 4) ─────────────────────
+    // â”€â”€ More people (extends the cast beyond the core 4) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const extraPeople = [
       { firstName: 'Priya', lastName: 'Sharma', email: 'priya.sharma@example.com' },
       { firstName: 'David', lastName: 'Sobie', email: 'david@customer-co.com' },
@@ -816,7 +837,7 @@ ipcMain.handle('seed:demo', async () => {
       { firstName: 'Olivia', lastName: 'Brooks', email: 'olivia.b@example.com' },
       { firstName: 'Ravi', lastName: 'Menon', email: 'ravi.menon@example.com' },
       { firstName: 'Leah', lastName: 'Goldberg', email: 'leah.g@example.com' },
-      { firstName: 'Tomás', lastName: 'García', email: 'tomas.g@example.com' },
+      { firstName: 'TomÃ¡s', lastName: 'GarcÃ­a', email: 'tomas.g@example.com' },
       { firstName: 'Harper', lastName: 'Okonkwo', email: 'harper@customer-co.com' },
       { firstName: 'Kai', lastName: 'Nakamura', email: 'kai.n@example.com' },
     ];
@@ -824,8 +845,8 @@ ipcMain.handle('seed:demo', async () => {
       try { await addPerson(p); } catch { /* skip if exists */ }
     }
 
-    // ── More meetings with insights ──────────────────────────────────────────
-    const m4Id = await createMeeting({ title: 'Customer sync — Harper Okonkwo (CustomerCo)', date: daysAgo(7), duration: 1800, attendees: ['Harper Okonkwo', 'Olivia Brooks'], source: 'demo_seed' });
+    // â”€â”€ More meetings with insights â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const m4Id = await createMeeting({ title: 'Customer sync â€” Harper Okonkwo (CustomerCo)', date: daysAgo(7), duration: 1800, attendees: ['Harper Okonkwo', 'Olivia Brooks'], source: 'demo_seed' });
     await saveInsights(m4Id, {
       summary: 'Harper outlined CustomerCo requirements for Q3 rollout: SSO, audit log export, role-based permissions. Budget signed off; procurement kicks off next week.',
       actionItems: [
@@ -837,20 +858,20 @@ ipcMain.handle('seed:demo', async () => {
     });
     await updateMeetingStatus(m4Id, 'reviewed');
 
-    const m5Id = await createMeeting({ title: 'Weekly Engineering Standup', date: daysAgo(1), duration: 900, attendees: ['Alex Chen', 'Jordan Patel', 'Ravi Menon', 'Leah Goldberg', 'Tomás García'], source: 'demo_seed' });
+    const m5Id = await createMeeting({ title: 'Weekly Engineering Standup', date: daysAgo(1), duration: 900, attendees: ['Alex Chen', 'Jordan Patel', 'Ravi Menon', 'Leah Goldberg', 'TomÃ¡s GarcÃ­a'], source: 'demo_seed' });
     await saveInsights(m5Id, {
-      summary: 'Sprint progressing; 7 of 12 stories in-flight. Ravi unblocked on auth refactor. Tomás raising concerns about test flakiness in CI — 20% failure rate on retries.',
+      summary: 'Sprint progressing; 7 of 12 stories in-flight. Ravi unblocked on auth refactor. TomÃ¡s raising concerns about test flakiness in CI â€” 20% failure rate on retries.',
       actionItems: [
-        { text: 'Investigate CI test flakiness root cause', owner: 'Tomás García', dueDate: daysFromNow(1), priority: 'medium' },
+        { text: 'Investigate CI test flakiness root cause', owner: 'TomÃ¡s GarcÃ­a', dueDate: daysFromNow(1), priority: 'medium' },
         { text: 'Pair with Leah on WebSocket implementation', owner: 'Ravi Menon', dueDate: daysFromNow(2), priority: 'medium' },
       ],
       decisions: [],
       blockers: [{ text: 'CI flakiness hurting merge velocity', severity: 'medium' }],
     });
 
-    const m6Id = await createMeeting({ title: 'All-hands — Q2 kickoff', date: daysAgo(10), duration: 3600, attendees: ['Alex Chen', 'Sarah Kim', 'Maya Rodriguez', 'Priya Sharma', 'Kai Nakamura'], source: 'demo_seed' });
+    const m6Id = await createMeeting({ title: 'All-hands â€” Q2 kickoff', date: daysAgo(10), duration: 3600, attendees: ['Alex Chen', 'Sarah Kim', 'Maya Rodriguez', 'Priya Sharma', 'Kai Nakamura'], source: 'demo_seed' });
     await saveInsights(m6Id, {
-      summary: 'Q1 recap: 3 enterprise deals closed, 18% churn reduction. Q2 focus: ship dashboard, API v2, mobile onboarding. Hiring freeze lifted — 2 eng roles, 1 design.',
+      summary: 'Q1 recap: 3 enterprise deals closed, 18% churn reduction. Q2 focus: ship dashboard, API v2, mobile onboarding. Hiring freeze lifted â€” 2 eng roles, 1 design.',
       actionItems: [
         { text: 'Open 2 senior engineer reqs', owner: 'Alex Chen', dueDate: daysFromNow(3), priority: 'high', isCommitment: true },
         { text: 'Open senior product designer req', owner: 'Maya Rodriguez', dueDate: daysFromNow(3), priority: 'medium' },
@@ -860,7 +881,7 @@ ipcMain.handle('seed:demo', async () => {
     });
     await updateMeetingStatus(m6Id, 'reviewed');
 
-    const m7Id = await createMeeting({ title: '1:1 with Jordan — API v2 architecture', date: daysAgo(5), duration: 1800, attendees: ['Jordan Patel'], source: 'demo_seed' });
+    const m7Id = await createMeeting({ title: '1:1 with Jordan â€” API v2 architecture', date: daysAgo(5), duration: 1800, attendees: ['Jordan Patel'], source: 'demo_seed' });
     await saveInsights(m7Id, {
       summary: 'Jordan proposing event-sourced read models for API v2 read path. Clear perf benefit; adds complexity. Decision needed by end of week. Jordan to document trade-offs and alternatives.',
       actionItems: [
@@ -870,7 +891,7 @@ ipcMain.handle('seed:demo', async () => {
       blockers: [],
     });
 
-    const m8Id = await createMeeting({ title: 'Design critique — Mobile onboarding v2', date: daysAgo(3), duration: 1800, attendees: ['Maya Rodriguez', 'Anu Codaty', 'Sarah Kim'], source: 'demo_seed' });
+    const m8Id = await createMeeting({ title: 'Design critique â€” Mobile onboarding v2', date: daysAgo(3), duration: 1800, attendees: ['Maya Rodriguez', 'Anu Codaty', 'Sarah Kim'], source: 'demo_seed' });
     await saveInsights(m8Id, {
       summary: 'Reviewed three onboarding flows. Anu\u0027s Variant B wins on time-to-value; needs accessibility pass. Ship candidate decided; will run small quantitative test next week.',
       actionItems: [
@@ -881,9 +902,9 @@ ipcMain.handle('seed:demo', async () => {
     });
     await updateMeetingStatus(m8Id, 'reviewed');
 
-    // Two calendar-only meetings (no insights — simulate meetings that weren't recorded or reviewed yet)
+    // Two calendar-only meetings (no insights â€” simulate meetings that weren't recorded or reviewed yet)
     await createMeeting({ title: 'Standup', date: daysAgo(6), duration: 900, attendees: ['Alex Chen', 'Jordan Patel', 'Ravi Menon'], source: 'demo_seed' });
-    await createMeeting({ title: 'Board prep — Q2 metrics', date: daysAgo(8), duration: 1800, attendees: ['Kai Nakamura', 'Priya Sharma'], source: 'demo_seed' });
+    await createMeeting({ title: 'Board prep â€” Q2 metrics', date: daysAgo(8), duration: 1800, attendees: ['Kai Nakamura', 'Priya Sharma'], source: 'demo_seed' });
 
     // Approve some tasks to make the board interesting
     const allTasks = await getTasks();
@@ -896,7 +917,7 @@ ipcMain.handle('seed:demo', async () => {
       }
     }
 
-    // ── Standalone tasks (ad-hoc, not from meetings) ─────────────────────────
+    // â”€â”€ Standalone tasks (ad-hoc, not from meetings) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const standaloneTasks: any[] = [
       { title: 'Book hotel for DevCon Austin', priority: 'medium', status: 'todo', dueDate: daysFromNow(6) },
       { title: 'Reply to Priya about onsite interview loop', priority: 'high', status: 'todo', dueDate: daysFromNow(1) },
@@ -911,7 +932,7 @@ ipcMain.handle('seed:demo', async () => {
       await createTask({ ...t, source: { type: 'manual' }, approval: { status: 'approved' } });
     }
 
-    // ── Snoozed demo tasks (populate the Snoozed filter with varied reasons) ──
+    // â”€â”€ Snoozed demo tasks (populate the Snoozed filter with varied reasons) â”€â”€
     const snoozeDemos: Array<{ title: string; reason: string; lastMentionedDaysAgo?: number }> = [
       { title: 'Ensure the house is clean and organized (speak and span)', reason: 'stale-30d', lastMentionedDaysAgo: 45 },
       { title: 'Revisit the Slack bot idea from last offsite', reason: 'stale-30d', lastMentionedDaysAgo: 60 },
@@ -1071,13 +1092,13 @@ ipcMain.handle('db:updateTask', async (_e, id, updates) => {
 
       const provenance = { linkedTaskId: id, approvalPath: 'auto' as const };
 
-      // Status changed — transition in Jira
+      // Status changed â€” transition in Jira
       if (updates.status) {
         await transitionJiraIssue(jiraKey, updates.status, provenance);
         synced = true;
       }
 
-      // Title or description changed — update Jira issue fields
+      // Title or description changed â€” update Jira issue fields
       if (updates.title || updates.description || updates.priority || updates.dueDate) {
         await updateJiraIssue(jiraKey, {
           title: updates.title,
@@ -1279,7 +1300,7 @@ ipcMain.handle('ai:suggestTaskFields', async (_e, data: { title: string; modalTy
       hasData = true;
       lines.push('\n## Known people');
       for (const p of people.slice(0, 10)) {
-        lines.push(`- ${p.name}${p.role ? ` (${p.role})` : ''}${p.meetingCount ? ` — ${p.meetingCount} meetings` : ''}`);
+        lines.push(`- ${p.name}${p.role ? ` (${p.role})` : ''}${p.meetingCount ? ` â€” ${p.meetingCount} meetings` : ''}`);
       }
     }
 
@@ -1294,7 +1315,7 @@ ipcMain.handle('ai:suggestTaskFields', async (_e, data: { title: string; modalTy
       if (t.dueDate) lines.push(`Current due date: ${t.dueDate}`);
     }
 
-    const contextText = lines.length > 0 ? lines.join('\n') : 'No context available — suggest reasonable defaults.';
+    const contextText = lines.length > 0 ? lines.join('\n') : 'No context available â€” suggest reasonable defaults.';
 
     return await suggestTaskFields(data.title, contextText, hasData);
   } catch (e: any) {
@@ -1564,7 +1585,7 @@ ipcMain.handle('sor:retryFailed', async (_e, system: 'jira', sinceMs: number) =>
   return { ok: true, attempted: failed.length, succeeded, failed: stillFailed };
 });
 
-// ── Pending approvals (US-006) ──────────────────────────────────────────────
+// â”€â”€ Pending approvals (US-006) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 ipcMain.handle('sor:listPendingApprovals', async () => {
   const pending = await listPending();
@@ -1572,7 +1593,7 @@ ipcMain.handle('sor:listPendingApprovals', async () => {
   for (const p of pending) {
     const writeEntry = await sorGetWriteEntry(p._id);
     // Only surface entries where both collections agree. A missing writeEntry
-    // would mean the pending queue is stale — skip instead of crashing.
+    // would mean the pending queue is stale â€” skip instead of crashing.
     if (writeEntry && writeEntry.result === 'pending-approval') {
       rows.push({ writeEntry, pending: p });
     }
@@ -1581,7 +1602,7 @@ ipcMain.handle('sor:listPendingApprovals', async () => {
 });
 
 interface ApprovalOverrides {
-  // create-op override fields — only applied when pending.pushParams.operation === 'create'
+  // create-op override fields â€” only applied when pending.pushParams.operation === 'create'
   title?: string;
   description?: string;
   priority?: string;
@@ -1645,10 +1666,10 @@ ipcMain.handle('sor:approve', async (
   });
 
   // Dispatch the push. approveJiraWrite owns markCompleted, so we don't need
-  // to re-stamp the entry on success/failure — the audit log stays accurate.
+  // to re-stamp the entry on success/failure â€” the audit log stays accurate.
   const res = await approveJiraWrite(id, pushParams);
 
-  // Remove the pending-approvals row regardless of outcome — the sor-writes
+  // Remove the pending-approvals row regardless of outcome â€” the sor-writes
   // entry is now either 'success' (receipt feed) or 'failed' (retry button
   // via sor:retry uses the same stored pushParams). Keeping a stale pending
   // row would hide it from the pending-approvals surface anyway (filtered by
@@ -1663,7 +1684,7 @@ ipcMain.handle('sor:approve', async (
           source: { type: 'jira', id: res.key, url: res.url ?? undefined },
         });
       } catch (err: any) {
-        // Task may have been deleted between gating and approval — log but
+        // Task may have been deleted between gating and approval â€” log but
         // don't fail the approval, the Jira write itself succeeded.
         log('warn', 'sor:approve-task-patch-failed', err.message);
       }
@@ -1712,14 +1733,14 @@ ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
     lastMicFailureNotifiedAt = now;
     new Notification({
       title: 'Microphone lost',
-      body: next.message || 'Microphone unavailable — the rest of this meeting will not be transcribed.',
+      body: next.message || 'Microphone unavailable â€” the rest of this meeting will not be transcribed.',
     }).show();
   }
   if (prev?.systemAudioOk === true && next.systemAudioOk === false && now - lastSysAudioFailureNotifiedAt > AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS) {
     lastSysAudioFailureNotifiedAt = now;
     new Notification({
       title: 'System audio lost',
-      body: next.message || 'System audio lost — only your mic will be transcribed for the rest of this meeting.',
+      body: next.message || 'System audio lost â€” only your mic will be transcribed for the rest of this meeting.',
     }).show();
   }
 });
@@ -1780,42 +1801,53 @@ ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; messag
   log('error', 'renderer:unhandled-rejection', `${name}: ${message}${source}`);
 });
 
-ipcMain.handle('recording:audio-data', async (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
+// Segments of the same meeting can arrive in quick succession (duplicate badge
+// windows, VAD splits). Hold buffers briefly and stitch them into one WAV so a
+// single meeting is processed once instead of as fragments.
+const AUDIO_COALESCE_MS = 10_000;
+const pendingAudio = new Map<string, { buffers: Buffer[]; title: string; calendarEventId?: string; stereo?: boolean; timer: NodeJS.Timeout }>();
+
+ipcMain.on('recording:audio-data', (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   isRecordingActive = false;
+  const key = `${title}|${stereo ? 1 : 0}`;
+  const entry = pendingAudio.get(key);
+  if (entry) {
+    entry.buffers.push(Buffer.from(buffer));
+    if (calendarEventId && !entry.calendarEventId) entry.calendarEventId = calendarEventId;
+    entry.timer.refresh();
+    log('info', 'audio-data:coalesced', `title="${title}" segments=${entry.buffers.length}`);
+    return;
+  }
+  const timer = setTimeout(() => { void flushPendingAudio(key); }, AUDIO_COALESCE_MS);
+  pendingAudio.set(key, { buffers: [Buffer.from(buffer)], title, calendarEventId, stereo, timer });
+});
+
+async function flushPendingAudio(key: string): Promise<void> {
+  const entry = pendingAudio.get(key);
+  if (!entry) return;
+  pendingAudio.delete(key);
   try {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
+    const wav = stitchWavBuffers(entry.buffers);
+    if (entry.buffers.length > 1) {
+      log('info', 'audio-data:stitched', `title="${entry.title}" segments=${entry.buffers.length} size=${wav.length}`);
+    }
     const tmpPath = path.join(recordingsDir, `inwise-rec-${Date.now()}.wav`);
-    await new Promise<void>((resolve, reject) => {
-      fs.writeFile(tmpPath, buffer, (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-
-    // Confirm to badge window that file was saved to disk
-    overlayWindow?.webContents.send('recording:file-saved');
-    // Also notify main window (sidebar) that recording was received and saved
-    mainWindow?.webContents.send('recording:file-saved');
-
+    fs.writeFileSync(tmpPath, wav);
     updateTrayMenu(mainWindow!, false);
     // Look up attendees from the calendar event if available
-    const attendees = calendarEventId
-      ? calendarWatcher.getUpcomingEvents().find((e: any) => e.id === calendarEventId)?.attendees || []
+    const attendees = entry.calendarEventId
+      ? calendarWatcher.getUpcomingEvents().find((e: any) => e.id === entry.calendarEventId)?.attendees || []
       : [];
-    await runRecordingPipeline(tmpPath, title, calendarEventId, stereo, attendees);
-    return { success: true };
+    await runRecordingPipeline(tmpPath, entry.title, entry.calendarEventId, entry.stereo, attendees);
   } catch (e: any) {
     log('error', 'audio-data:failed', e.message);
-    // Notify badge of failure
-    overlayWindow?.webContents.send('recording:file-save-failed', e.message);
-    mainWindow?.webContents.send('recording:file-save-failed', e.message);
-    throw e;
   }
-});
+}
 
-// ── Calendar watcher ──────────────────────────────────────────────────────────
+// â”€â”€ Calendar watcher â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 calendarWatcher.on('events-updated', async (events: any[]) => {
   mainWindow?.webContents.send('calendar:events', events.map(e => ({
@@ -1828,7 +1860,7 @@ calendarWatcher.on('events-updated', async (events: any[]) => {
   try {
     const { created, updated } = await syncCalendarEventsToDb(events);
     if (created > 0 || updated > 0) {
-      log('info', 'calendar-sync', `Synced calendar → meetingsDb: ${created} created, ${updated} updated`);
+      log('info', 'calendar-sync', `Synced calendar â†’ meetingsDb: ${created} created, ${updated} updated`);
     }
   } catch (e: any) {
     log('error', 'calendar-sync', `Failed to sync calendar events to DB: ${e.message}`);
@@ -1837,6 +1869,14 @@ calendarWatcher.on('events-updated', async (events: any[]) => {
 
 calendarWatcher.on('meeting-starting', (event: MeetingEvent) => {
   const now = Date.now();
+
+  // Same event announced again while its recording is already live (re-poll,
+  // duplicate calendar entry) — one recorder per event, ignore the repeat.
+  if (isRecordingActive && lastMeetingStarting && lastMeetingStarting.event.id === event.id) {
+    log('info', 'calendar-watcher:meeting-starting', `already recording "${event.title}" — ignoring duplicate start`);
+    return;
+  }
+
   const hasRecentStart =
     !!lastMeetingStarting &&
     lastMeetingStarting.event.id !== event.id &&
@@ -1845,7 +1885,7 @@ calendarWatcher.on('meeting-starting', (event: MeetingEvent) => {
 
   if (isConflict && pendingConflict) {
     // A third meeting-starting arrived while we're still awaiting a decision.
-    // We only support binary modal resolution — log and drop, but do still
+    // We only support binary modal resolution â€” log and drop, but do still
     // leave the event in the upcoming list for the user to record manually.
     log('warn', 'calendar-watcher:conflict', `extra meeting ignored while conflict pending: "${event.title}"`);
     return;
@@ -1909,13 +1949,13 @@ function handleMeetingConflict(active: MeetingEvent, incoming: MeetingEvent): vo
   if (canShowModal) {
     mainWindow!.webContents.send('meeting:conflict', payload);
   } else {
-    // Still queue the modal for when the user opens the window…
+    // Still queue the modal for when the user opens the windowâ€¦
     mainWindow?.webContents.send('meeting:conflict', payload);
-    // …and surface a native notification so they know to decide.
+    // â€¦and surface a native notification so they know to decide.
     if (Notification.isSupported()) {
       const n = new Notification({
         title: 'Meeting conflict',
-        body: `"${active.title}" vs "${incoming.title}" — picking one automatically in ${MEETING_CONFLICT_AUTO_SELECT_MS / 1000}s.`,
+        body: `"${active.title}" vs "${incoming.title}" â€” picking one automatically in ${MEETING_CONFLICT_AUTO_SELECT_MS / 1000}s.`,
         actions: [
           { type: 'button', text: `Record "${active.title}"` },
           { type: 'button', text: `Record "${incoming.title}"` },
@@ -1963,7 +2003,7 @@ calendarWatcher.on('meeting-reminder', (event: any) => {
   if (Notification.isSupported()) {
     new Notification({
       title: 'Meeting starting soon',
-      body: `${event.title} — don't forget to record`,
+      body: `${event.title} â€” don't forget to record`,
     }).show();
   }
   // Badge overlay with reminder mode (no auto-record)
@@ -1972,9 +2012,9 @@ calendarWatcher.on('meeting-reminder', (event: any) => {
   mainWindow?.webContents.send('meeting:reminder', event.title);
 });
 
-// ── App lifecycle ─────────────────────────────────────────────────────────────
+// â”€â”€ App lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// ── Daily Jira pull ─────────────────────────────────────────────────────────
+// â”€â”€ Daily Jira pull â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function runDailyJiraPull(): Promise<void> {
   const cfg = getConfig();
@@ -2043,7 +2083,50 @@ async function runDailyJiraPull(): Promise<void> {
   }
 }
 
+// Serve the renderer over a privileged app:// scheme. Calendar-free recording's
+// Silero VAD loads its ONNX model via fetch() and onnxruntime-web loads its wasm
+// via dynamic ESM import() of .mjs glue — Chromium blocks both over file://.
+// registerSchemesAsPrivileged must run before app 'ready'.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+]);
+
+const APP_MIME: Record<string, string> = {
+  '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
+  '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm',
+  '.onnx': 'application/octet-stream', '.png': 'image/png', '.svg': 'image/svg+xml',
+  '.map': 'application/json', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf',
+};
+
+// Only one app instance may run — a second instance means a second calendar
+// watcher and a second recorder badge for the same event, which fragments
+// recordings. The duplicate exits immediately and focuses the existing window.
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0);
+}
+app.on('second-instance', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow.isVisible()) mainWindow.show();
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
+
 app.whenReady().then(() => {
+  const RENDERER_DIR = path.join(__dirname, '../../dist/renderer');
+  protocol.handle('app', async (request) => {
+    const { pathname } = new URL(request.url);
+    const rel = decodeURIComponent(pathname).replace(/^\/+/, '') || 'index.html';
+    const filePath = path.join(RENDERER_DIR, rel);
+    if (!filePath.startsWith(RENDERER_DIR)) return new Response('Forbidden', { status: 403 });
+    try {
+      const data = await fs.promises.readFile(filePath);
+      const ext = path.extname(filePath).toLowerCase();
+      return new Response(data, { headers: { 'Content-Type': APP_MIME[ext] || 'application/octet-stream' } });
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
+  });
   initDatabase();
   initSorWriteLog();
   initPendingApprovals();
@@ -2052,14 +2135,14 @@ app.whenReady().then(() => {
   });
   const migration = migrateLegacyCalendars();
   if (migration.migrated) {
-    log('info', 'config:migrate-calendars', `Seeded calendars[] from legacy fields — added=${migration.added}`);
+    log('info', 'config:migrate-calendars', `Seeded calendars[] from legacy fields â€” added=${migration.added}`);
   }
   createMainWindow();
   createTray(mainWindow!);
   calendarWatcher.start();
 
   // One-time scan for SoR writes stuck in 'pending' / 'pending-approval' / 'retrying'
-  // for more than 24 hours — these indicate an interrupted/crashed prior session.
+  // for more than 24 hours â€” these indicate an interrupted/crashed prior session.
   setTimeout(async () => {
     try {
       const stuck = await sorListStuckEntries(24 * 60 * 60 * 1000);
@@ -2068,7 +2151,7 @@ app.whenReady().then(() => {
         if (Notification.isSupported()) {
           new Notification({
             title: 'Jira sync interrupted',
-            body: `${stuck.length} Jira ${stuck.length === 1 ? 'write was' : 'writes were'} interrupted. Open Settings → Integrations to retry.`,
+            body: `${stuck.length} Jira ${stuck.length === 1 ? 'write was' : 'writes were'} interrupted. Open Settings â†’ Integrations to retry.`,
           }).show();
         }
       }
@@ -2077,14 +2160,14 @@ app.whenReady().then(() => {
     }
   }, 15_000);
 
-  // Staleness sweep — fire-and-forget after calendar sync starts so the welcome-back
+  // Staleness sweep â€” fire-and-forget after calendar sync starts so the welcome-back
   // compute IPC (US-004) can read lastSweepResult. Delayed to let first calendar sync
   // settle but NOT awaited so whenReady() stays non-blocking.
   setTimeout(() => {
     sweepStaleTasks().catch((err) => log('error', 'staleness-sweep', String(err)));
   }, 5_000);
 
-  // Daily Jira pull — run on startup (after a short delay) and every 6 hours
+  // Daily Jira pull â€” run on startup (after a short delay) and every 6 hours
   setTimeout(() => runDailyJiraPull(), 10_000);
   setInterval(() => runDailyJiraPull(), 6 * 60 * 60 * 1000);
 

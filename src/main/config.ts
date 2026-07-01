@@ -36,6 +36,7 @@ interface Config {
   calendars: CalendarSubscription[];
   selfEmails: string[];
   micDeviceId: string;
+  speakerDeviceId: string;
   userName: string;
   onboardingComplete: boolean;
   firstTimeFlowCount: number;
@@ -60,6 +61,7 @@ const store = new Store<Config>({
     calendars: [],
     selfEmails: [],
     micDeviceId: 'default',
+    speakerDeviceId: 'default',
     userName: '',
     onboardingComplete: false,
     firstTimeFlowCount: 0,

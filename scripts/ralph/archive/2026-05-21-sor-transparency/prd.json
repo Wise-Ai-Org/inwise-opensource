@@ -1,0 +1,28 @@
+{
+  "project": "inwise-opensource",
+  "branchName": "ralph/phase-0-foundation",
+  "description": "ACTIVE PRD GUARD: This is the inwise-opensource slice of Phase 0 of the SDK Parity Audit. Master PRD: C:\\Users\\Shrav\\Inwise\\desktop-recording-sdk\\PRD\\sdk-parity-audit.md. THIS prd.json scope: US-005 ONLY. Stories US-001..US-004 were completed in another repo (inwise-desktop-shared) on 2026-05-19/20 and are NOT in scope here. US-006 belongs to desktop-recording-sdk and is NOT in scope here. If progress.txt contains any US-IDs other than US-005, HALT and request progress.txt reset. MODEL: claude-sonnet-4-6. PRIOR STATE: scripts/ralph/archive/2026-05-XX-sor-transparency/ holds the previous batch's artifacts. CONTEXT: shared repo at https://github.com/Wise-Ai-Org/inwise-desktop-shared is live with adapters + utils. Pin to main (currently HEAD = cd04abe).",
+  "userStories": [
+    {
+      "id": "US-005",
+      "title": "Wire inwise-desktop-shared submodule into inwise-opensource",
+      "description": "Add the inwise-desktop-shared repo as a git submodule at src/shared/, update tsconfig paths so imports from the shared module resolve, change all callers of audio-utils and mfcc in OSS main process to import from the shared submodule, delete the now-redundant local copies, verify the OSS build is green. The shared repo's main branch already has these utils mirrored verbatim — runtime behavior must be identical.",
+      "acceptanceCriteria": [
+        "Run `git submodule add https://github.com/Wise-Ai-Org/inwise-desktop-shared.git src/shared` from repo root. Verify `.gitmodules` file is created with the [submodule \"src/shared\"] block pointing at the shared repo URL with path = src/shared",
+        "After submodule add, verify src/shared/ contains the populated shared repo working tree (e.g., src/shared/src/utils/audio-utils.ts and src/shared/src/utils/mfcc.ts exist; src/shared/package.json exists)",
+        "Run `cd src/shared && npm install && npm run build && cd ../..` so the submodule has its dist/ built (needed for the import paths to resolve at runtime)",
+        "Update OSS root tsconfig files: tsconfig.main.json should declare a `paths` mapping like `\"@inwise/desktop-shared\": [\"src/shared/dist/index\"]` (or equivalent relative path that resolves to the shared module's built output). Verify by running typecheck below.",
+        "Find all files in inwise-opensource/src/ that import from './audio-utils' or './mfcc' or '../audio-utils' or '../mfcc' (use grep). Update each import to `import { ... } from '@inwise/desktop-shared'` (or whatever path alias was chosen above)",
+        "Delete src/main/audio-utils.ts and src/main/mfcc.ts from inwise-opensource",
+        "Run typecheck — `npx tsc -p tsconfig.main.json --noEmit` passes (existing OSS typecheck command from package.json; verify which command is used by reading package.json scripts)",
+        "Run `npm run build` (or the equivalent OSS build script per package.json) and verify it succeeds end-to-end",
+        "Verify by grep that NO file under inwise-opensource/src/ still imports from a path ending in './audio-utils' or './mfcc' (other than the shared submodule itself)",
+        "Commit ALL changes (.gitmodules, modified tsconfig, modified callers, deleted originals) with message `feat: US-005 — wire inwise-desktop-shared submodule, retire local audio-utils + mfcc`",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "OSS has two tsconfig files (tsconfig.main.json + tsconfig.renderer.json) per the codebase pattern captured in inwise-desktop-shared/scripts/ralph/progress.txt. Only main-process code uses audio-utils + mfcc — confirm by grep — so only tsconfig.main.json paths need updating (renderer doesn't touch these). If renderer also imports them, update tsconfig.renderer.json too. Branch off master per dev-then-main-workflow preference: ralph/phase-0-foundation should branch from `master` (NOT `main` — OSS uses master). After commit, do NOT push or merge — operator handles dev → master promotion."
+    }
+  ]
+}
