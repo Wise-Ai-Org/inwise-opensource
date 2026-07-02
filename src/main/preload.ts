@@ -76,6 +76,12 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   zoomListRecordings: () => ipcRenderer.invoke('zoom:listRecordings'),
   zoomFetchTranscript: (recording: any) => ipcRenderer.invoke('zoom:fetchTranscript', recording),
 
+  // Slack
+  slackConnect: (token: string) => ipcRenderer.invoke('slack:connect', token),
+  slackDisconnect: () => ipcRenderer.invoke('slack:disconnect'),
+  slackStatus: () => ipcRenderer.invoke('slack:status'),
+  slackListChannels: () => ipcRenderer.invoke('slack:listChannels'),
+
   // Jira
   jiraConnect: () => ipcRenderer.invoke('jira:connect'),
   jiraDisconnect: () => ipcRenderer.invoke('jira:disconnect'),

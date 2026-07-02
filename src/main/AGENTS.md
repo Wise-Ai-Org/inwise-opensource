@@ -71,3 +71,20 @@ the pre-existing `sor` key (added in US-005). electron-store only applies
 top-level defaults on first install, so existing users need the
 `getSorJiraPrefs()` safe accessor in `config.ts` — don't read `sor.jira.*`
 directly off `getConfig()` or you'll hit `undefined` on migrated stores.
+
+## Slack integration modules
+
+Four new modules implement the Slack integration pipeline:
+
+- **`slack-client.ts`**: Local Slack API client. Exposes `listChannels()`, `getChannelHistory()`, `getThreadReplies()`, `postMessage()`, `resolveUser()`, `validateToken()`, `isSlackConnected()`, `postWiserNote()`. All API calls go through `slackGet()`/`slackPost()` helpers with 429/Retry-After backoff.
+- **`slack-normalizer.ts`**: `normalizeSlackThread(messages, meta)` converts a thread into a `NormalizedConversation` compatible with `createMeeting()` + `extractInsights()`.
+- **`slack-ingestion.ts`**: `computeReadyBatches()` tracks per-thread activity in memory and returns threads quiet for ≥ the configured inactivity window. Integrates with cursor store for persistent dedup.
+- **`slack-cursor-store.ts`**: Separate electron-store (`slack-cursor-state`) for per-channel cursors and thread-level dedup that survives restarts.
+- **`slack-poller.ts`**: Timer-based poll loop. Wired into `main.ts` via `registerSlackPipeline()`. Starts after app ready (10 s delay), stops on `before-quit`.
+
+**Pipeline flow**: `getChannelHistory(cursor)` → `getThreadReplies()` → `computeReadyBatches()` → `normalizeSlackThread()` → `createMeeting()` → `extractInsights()` → `saveInsights()` → `markThreadProcessed()`.
+
+**Key invariants:**
+- Threads only process after `slackInactivityWindowMin` minutes of silence
+- Reprocessing triggers when `latestActivityTs` changes after last process
+- Cursor advances to the newest ts seen; threads are deduped persistently

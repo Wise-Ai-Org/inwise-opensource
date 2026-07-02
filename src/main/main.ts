@@ -66,6 +66,9 @@ import {
 import { listZoomRecordings, getTranscriptDownloadUrl } from './zoom-recordings';
 import { downloadAndParseVtt } from './zoom-vtt-parser';
 import { ingestNormalizedTranscript } from './zoom-transcript-ingestion';
+import { validateToken, isSlackConnected, listChannels as slackListChannels } from './slack-client';
+import { normalizeSlackThread } from './slack-normalizer';
+import { startSlackPoller, stopSlackPoller, registerSlackPipeline } from './slack-poller';
 
 Menu.setApplicationMenu(null);
 
@@ -2203,6 +2206,37 @@ app.whenReady().then(() => {
   createTray(mainWindow!);
   calendarWatcher.start();
 
+  // Register Slack pipeline: normalize thread → create meeting → extract insights → save
+  registerSlackPipeline(async (channelId, channelName, messages) => {
+    const normalized = await normalizeSlackThread(messages, {
+      channelId,
+      channelName,
+      permalink: `slack://channel?id=${channelId}`,
+    });
+    if (!normalized) return;
+
+    const meetingId = await createMeeting({
+      title: normalized.title,
+      date: normalized.date,
+      attendees: normalized.attendees,
+      source: 'slack_thread',
+    });
+    await updateMeetingTranscript(meetingId, normalized.transcript, 0);
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+
+    try {
+      const insights = await extractInsights(normalized.transcript);
+      await saveInsights(meetingId, insights);
+      mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+      log('info', 'slack:pipeline', `Insights saved for thread in #${channelName} (meeting ${meetingId})`);
+    } catch (insightErr: any) {
+      log('error', 'slack:pipeline', `Insight extraction failed for ${meetingId}: ${insightErr.message}`);
+    }
+  });
+
+  // Start Slack poller (delayed 10 s to let the main window settle)
+  setTimeout(() => startSlackPoller(), 10_000);
+
   // One-time scan for SoR writes stuck in 'pending' / 'pending-approval' / 'retrying'
   // for more than 24 hours â€” these indicate an interrupted/crashed prior session.
   setTimeout(async () => {
@@ -2257,8 +2291,33 @@ app.on('activate', () => {
   mainWindow?.show();
 });
 
+// ── Slack IPC handlers ─────────────────────────────────────────────────────
+
+ipcMain.handle('slack:connect', async (_e, token: string) => {
+  const result = await validateToken(token);
+  if (result.ok) {
+    setConfig({ slackBotToken: token } as any);
+  }
+  return result;
+});
+
+ipcMain.handle('slack:disconnect', () => {
+  setConfig({ slackBotToken: '' } as any);
+  return true;
+});
+
+ipcMain.handle('slack:status', () => {
+  return { connected: isSlackConnected() };
+});
+
+ipcMain.handle('slack:listChannels', async () => {
+  try { return { ok: true, channels: await slackListChannels() }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+
 app.on('before-quit', () => {
   calendarWatcher.stop();
+  stopSlackPoller();
   destroyTray();
   globalShortcut.unregisterAll();
   mainWindow?.removeAllListeners('close');

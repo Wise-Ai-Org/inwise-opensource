@@ -13,6 +13,10 @@ interface Config {
   jiraClientSecret: string;
   jiraAutoPush: boolean;
   jiraDefaultProject: string;
+  slackBotToken: string;
+  slackReadChannels: string[];
+  slackWriteChannels: string[];
+  slackInactivityWindowMin: number;
 }
 
 type CalendarProviderUI = 'google' | 'outlook' | 'ics';
@@ -606,6 +610,217 @@ function SystemAudioTest() {
       )}
       {status === 'error' && (
         <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 6 }}>✕ {errorMsg}</div>
+      )}
+    </div>
+  );
+}
+
+// ── Slack Settings ─────────────────────────────────────────────────────────
+
+interface SlackChannel {
+  id: string;
+  name: string;
+}
+
+function SlackSettings() {
+  const [token, setToken] = useState('');
+  const [status, setStatus] = useState<{ connected: boolean } | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [teamName, setTeamName] = useState<string | undefined>();
+  const [botName, setBotName] = useState<string | undefined>();
+
+  // Channel + inactivity settings (shown when connected)
+  const [channels, setChannels] = useState<SlackChannel[]>([]);
+  const [loadingChannels, setLoadingChannels] = useState(false);
+  const [readChannels, setReadChannels] = useState<string[]>([]);
+  const [writeChannels, setWriteChannels] = useState<string[]>([]);
+  const [inactivityWindowMin, setInactivityWindowMin] = useState(60);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+
+  useEffect(() => {
+    (window as any).inwiseAPI.slackStatus?.().then((s: any) => setStatus(s));
+    // Load existing channel selections
+    (window as any).inwiseAPI.getConfig?.().then((cfg: any) => {
+      if (cfg) {
+        setReadChannels(cfg.slackReadChannels ?? []);
+        setWriteChannels(cfg.slackWriteChannels ?? []);
+        setInactivityWindowMin(cfg.slackInactivityWindowMin ?? 60);
+      }
+    });
+  }, []);
+
+  const loadChannels = async () => {
+    setLoadingChannels(true);
+    try {
+      const result = await (window as any).inwiseAPI.slackListChannels?.();
+      if (result?.ok) {
+        setChannels(result.channels ?? []);
+      }
+    } finally {
+      setLoadingChannels(false);
+    }
+  };
+
+  const connect = async () => {
+    if (!token.trim()) return;
+    setValidating(true);
+    setError(null);
+    try {
+      const result = await (window as any).inwiseAPI.slackConnect?.(token.trim());
+      if (result?.ok) {
+        setStatus({ connected: true });
+        setTeamName(result.teamName);
+        setBotName(result.botName);
+        setToken('');
+        loadChannels();
+      } else {
+        setError(result?.error ?? 'Invalid token');
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const disconnect = async () => {
+    await (window as any).inwiseAPI.slackDisconnect?.();
+    setStatus({ connected: false });
+    setTeamName(undefined);
+    setBotName(undefined);
+    setChannels([]);
+  };
+
+  const toggleChannel = (id: string, list: string[], setter: (v: string[]) => void) => {
+    setter(list.includes(id) ? list.filter(c => c !== id) : [...list, id]);
+    setSettingsSaved(false);
+  };
+
+  const saveSettings = async () => {
+    await (window as any).inwiseAPI.setConfig?.({
+      slackReadChannels: readChannels,
+      slackWriteChannels: writeChannels,
+      slackInactivityWindowMin: inactivityWindowMin,
+    });
+    setSettingsSaved(true);
+    setTimeout(() => setSettingsSaved(false), 2000);
+  };
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16, lineHeight: 1.6 }}>
+        Connect Slack by pasting a bot token. The token is stored locally and never sent to any server.
+        Create a bot at <strong>api.slack.com/apps</strong>, add it to your workspace, and copy the Bot User OAuth Token.
+      </p>
+
+      {status?.connected ? (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--green-500, #22c55e)', display: 'inline-block' }} />
+            <span style={{ fontSize: 13, color: 'var(--slate-700)' }}>
+              Connected{teamName ? ` to ${teamName}` : ''}{botName ? ` as ${botName}` : ''}
+            </span>
+            <button className="btn btn-secondary" style={{ marginLeft: 'auto' }} onClick={disconnect}>Disconnect</button>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">
+              Read channels
+              {channels.length === 0 && (
+                <button
+                  className="btn btn-secondary"
+                  style={{ marginLeft: 8, padding: '2px 8px', fontSize: 12 }}
+                  onClick={loadChannels}
+                  disabled={loadingChannels}
+                >
+                  {loadingChannels ? 'Loading…' : 'Load channels'}
+                </button>
+              )}
+            </label>
+            {channels.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                {channels.map(ch => (
+                  <label key={ch.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={readChannels.includes(ch.id)}
+                      onChange={() => toggleChannel(ch.id, readChannels, setReadChannels)}
+                    />
+                    #{ch.name}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Write channels</label>
+            {channels.length > 0 ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                {channels.map(ch => (
+                  <label key={ch.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={writeChannels.includes(ch.id)}
+                      onChange={() => toggleChannel(ch.id, writeChannels, setWriteChannels)}
+                    />
+                    #{ch.name}
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <span style={{ fontSize: 12, color: 'var(--slate-400)' }}>Load channels above first</span>
+            )}
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Inactivity window (minutes)</label>
+            <input
+              type="number"
+              className="form-input"
+              min={1}
+              max={1440}
+              style={{ width: 100 }}
+              value={inactivityWindowMin}
+              onChange={e => {
+                setInactivityWindowMin(parseInt(e.target.value, 10) || 60);
+                setSettingsSaved(false);
+              }}
+            />
+            <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
+              A thread is only processed after this many minutes of silence. Default: 60.
+            </span>
+          </div>
+
+          <button className="btn btn-primary" onClick={saveSettings}>
+            {settingsSaved ? 'Saved!' : 'Save Slack Settings'}
+          </button>
+        </div>
+      ) : (
+        <div>
+          <div className="form-group">
+            <label className="form-label">Bot Token</label>
+            <input
+              type="password"
+              className="form-input"
+              value={token}
+              onChange={e => setToken(e.target.value)}
+              placeholder="xoxb-…"
+              style={{ fontFamily: 'monospace' }}
+            />
+          </div>
+          {error && (
+            <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 8 }}>&#x2715; {error}</div>
+          )}
+          <button
+            className="btn btn-primary"
+            disabled={validating || !token.trim()}
+            onClick={connect}
+          >
+            {validating ? 'Validating…' : 'Connect Slack'}
+          </button>
+        </div>
       )}
     </div>
   );
@@ -2251,6 +2466,12 @@ export default function Settings() {
           <div className="settings-section">
             <div className="settings-section-title">Zoom Integration</div>
             <ZoomSettings />
+          </div>
+
+          {/* Slack */}
+          <div className="settings-section">
+            <div className="settings-section-title">Slack Integration</div>
+            <SlackSettings />
           </div>
 
           {/* Integrations (US-003) */}
