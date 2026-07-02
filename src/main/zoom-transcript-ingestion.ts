@@ -13,6 +13,8 @@ export interface NormalizedTranscript {
   title: string;
   startedAt: string; // ISO 8601
   segments: NormalizedSegment[];
+  externalId?: string;
+  sourceMetadata?: Record<string, any>;
 }
 
 export function segmentsToText(segments: NormalizedSegment[]): string {
@@ -35,6 +37,12 @@ export async function ingestNormalizedTranscript(
     title: nt.title,
     content,
     date: nt.startedAt,
+    source: 'zoom_cloud_recording',
+    externalId: nt.externalId || nt.meetingId,
+    sourceMetadata: {
+      zoomMeetingId: nt.meetingId,
+      ...nt.sourceMetadata,
+    },
   });
   const meetingId = (meeting as any)._id as string;
 

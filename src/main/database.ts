@@ -175,7 +175,33 @@ export async function createMeetingFromTranscript(data: {
   title: string;
   content: string;
   date: string;
+  source?: string;
+  externalId?: string;
+  sourceMetadata?: Record<string, any>;
 }): Promise<any> {
+  const source = data.source || 'manual_upload';
+
+  if (data.externalId) {
+    const existing = await meetingsDb.findOneAsync({ source, externalId: data.externalId });
+    if (existing) {
+      await meetingsDb.updateAsync(
+        { _id: (existing as any)._id },
+        {
+          $set: {
+            title: data.title,
+            date: data.date,
+            transcript: data.content,
+            status: 'pending',
+            sourceMetadata: data.sourceMetadata || null,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+        {},
+      );
+      return meetingsDb.findOneAsync({ _id: (existing as any)._id });
+    }
+  }
+
   const doc = await meetingsDb.insertAsync({
     _id: uuidv4(),
     title: data.title,
@@ -184,7 +210,9 @@ export async function createMeetingFromTranscript(data: {
     attendees: [],
     transcript: data.content,
     status: 'pending',
-    source: 'manual_upload',
+    source,
+    externalId: data.externalId || null,
+    sourceMetadata: data.sourceMetadata || null,
     calendarEventId: null,
     insights: null,
     createdAt: new Date().toISOString(),

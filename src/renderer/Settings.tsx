@@ -1171,7 +1171,7 @@ function ZoomSettings() {
       setFetchError(res?.error || 'Failed to fetch transcript');
       return;
     }
-    setFetchSuccess(`"${recording.title}" imported successfully.`);
+    setFetchSuccess(`"${recording.title}" imported successfully${res.meetingId ? ` as meeting ${res.meetingId}` : ''}.`);
     setFetchState('done');
   };
 

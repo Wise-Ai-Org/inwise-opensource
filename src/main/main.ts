@@ -1567,6 +1567,11 @@ ipcMain.handle('zoom:fetchTranscript', async (_e, recording: { meetingId: string
       recording.title,
       recording.startedAt,
     );
+    nt.externalId = recording.uuid;
+    nt.sourceMetadata = {
+      zoomMeetingId: recording.meetingId,
+      zoomUuid: recording.uuid,
+    };
     const meetingId = await ingestNormalizedTranscript(nt);
     return { ok: true, meetingId };
   } catch (e: any) { return { ok: false, error: e.message }; }
