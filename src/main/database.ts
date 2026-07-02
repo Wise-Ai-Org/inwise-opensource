@@ -9,6 +9,7 @@ let meetingsDb: Datastore;
 let tasksDb: Datastore;
 let peopleDb: Datastore;
 let voicePrintsDb: Datastore;
+let credentialsDb: Datastore;
 
 export function initDatabase(): void {
   const userDataPath = app.getPath('userData');
@@ -16,6 +17,7 @@ export function initDatabase(): void {
   tasksDb = new Datastore({ filename: path.join(userDataPath, 'tasks.db'), autoload: true });
   peopleDb = new Datastore({ filename: path.join(userDataPath, 'people.db'), autoload: true });
   voicePrintsDb = new Datastore({ filename: path.join(userDataPath, 'voiceprints.db'), autoload: true });
+  credentialsDb = new Datastore({ filename: path.join(userDataPath, 'credentials.db'), autoload: true });
 }
 
 // ── Meetings ──────────────────────────────────────────────────────────────────
@@ -203,7 +205,33 @@ export async function createMeetingFromTranscript(data: {
   title: string;
   content: string;
   date: string;
+  source?: string;
+  externalId?: string;
+  sourceMetadata?: Record<string, any>;
 }): Promise<any> {
+  const source = data.source || 'manual_upload';
+
+  if (data.externalId) {
+    const existing = await meetingsDb.findOneAsync({ source, externalId: data.externalId });
+    if (existing) {
+      await meetingsDb.updateAsync(
+        { _id: (existing as any)._id },
+        {
+          $set: {
+            title: data.title,
+            date: data.date,
+            transcript: data.content,
+            status: 'pending',
+            sourceMetadata: data.sourceMetadata || null,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+        {},
+      );
+      return meetingsDb.findOneAsync({ _id: (existing as any)._id });
+    }
+  }
+
   const doc = await meetingsDb.insertAsync({
     _id: uuidv4(),
     title: data.title,
@@ -212,7 +240,9 @@ export async function createMeetingFromTranscript(data: {
     attendees: [],
     transcript: data.content,
     status: 'pending',
-    source: 'manual_upload',
+    source,
+    externalId: data.externalId || null,
+    sourceMetadata: data.sourceMetadata || null,
     calendarEventId: null,
     insights: null,
     createdAt: new Date().toISOString(),
@@ -397,6 +427,10 @@ export async function touchLastMentioned(taskId: string, when: string): Promise<
 // booting Electron. Do NOT call from production code.
 export function __setTasksDbForTests(db: Datastore): void {
   tasksDb = db;
+}
+
+export function __setMeetingsDbForTests(db: Datastore): void {
+  meetingsDb = db;
 }
 
 // ── People ─────────────────────────────────────────────────────────────────────
@@ -1069,4 +1103,71 @@ export async function getVoicePrintByName(name: string): Promise<any> {
 
 export async function deleteVoicePrint(id: string): Promise<void> {
   await voicePrintsDb.removeAsync({ _id: id }, {});
+}
+
+// ── Zoom Credentials ──────────────────────────────────────────────────────────
+
+export interface ZoomCredentials {
+  zoomClientId: string | null;
+  zoomClientSecret: string | null;
+  zoomAccessToken: string | null;
+  zoomRefreshToken: string | null;
+  zoomTokenExpiresAt: string | null;
+}
+
+const ZOOM_DOC_ID = 'zoom';
+
+export async function getZoomCredentials(): Promise<ZoomCredentials | null> {
+  const doc = await credentialsDb.findOneAsync({ _id: ZOOM_DOC_ID });
+  if (!doc) return null;
+  const d = doc as any;
+  return {
+    zoomClientId: d.zoomClientId ?? null,
+    zoomClientSecret: d.zoomClientSecret ?? null,
+    zoomAccessToken: d.zoomAccessToken ?? null,
+    zoomRefreshToken: d.zoomRefreshToken ?? null,
+    zoomTokenExpiresAt: d.zoomTokenExpiresAt ?? null,
+  };
+}
+
+export async function setZoomClientCredentials(clientId: string, clientSecret: string): Promise<void> {
+  const existing = await credentialsDb.findOneAsync({ _id: ZOOM_DOC_ID });
+  if (existing) {
+    await credentialsDb.updateAsync({ _id: ZOOM_DOC_ID }, { $set: { zoomClientId: clientId, zoomClientSecret: clientSecret } }, {});
+  } else {
+    await credentialsDb.insertAsync({
+      _id: ZOOM_DOC_ID,
+      zoomClientId: clientId,
+      zoomClientSecret: clientSecret,
+      zoomAccessToken: null,
+      zoomRefreshToken: null,
+      zoomTokenExpiresAt: null,
+    });
+  }
+}
+
+export async function setZoomTokens(tokens: {
+  zoomAccessToken: string;
+  zoomRefreshToken: string;
+  zoomTokenExpiresAt: string;
+}): Promise<void> {
+  const existing = await credentialsDb.findOneAsync({ _id: ZOOM_DOC_ID });
+  if (existing) {
+    await credentialsDb.updateAsync({ _id: ZOOM_DOC_ID }, { $set: tokens }, {});
+  } else {
+    await credentialsDb.insertAsync({
+      _id: ZOOM_DOC_ID,
+      zoomClientId: null,
+      zoomClientSecret: null,
+      ...tokens,
+    });
+  }
+}
+
+export async function clearZoomCredentials(): Promise<void> {
+  await credentialsDb.removeAsync({ _id: ZOOM_DOC_ID }, {});
+}
+
+export function __setCredentialsDbForTests(db: Datastore): void {
+  credentialsDb = db;
 }

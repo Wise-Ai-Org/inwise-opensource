@@ -59,6 +59,13 @@ import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
 import { computeWelcomeBack } from './welcome-back';
 import { findLiveMeetingForBanner } from './live-meeting-banner';
 import { inferCompletedTaskIds } from './task-completion-inference';
+import {
+  saveZoomCredentials, connectZoom, disconnectZoom, getZoomStatus, testZoomConnection,
+  ZOOM_REDIRECT_URI_DISPLAY,
+} from './zoom-oauth';
+import { listZoomRecordings, getTranscriptDownloadUrl } from './zoom-recordings';
+import { downloadAndParseVtt } from './zoom-vtt-parser';
+import { ingestNormalizedTranscript } from './zoom-transcript-ingestion';
 
 Menu.setApplicationMenu(null);
 
@@ -1541,6 +1548,61 @@ ipcMain.handle('jira:matchTasks', async (_e, items: any[], projectKey?: string) 
     }
 
     return { ok: true, matches: localMatches, stories };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+
+// Zoom
+ipcMain.handle('zoom:saveCredentials', async (_e, clientId: string, clientSecret: string) => {
+  try { await saveZoomCredentials(clientId, clientSecret); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('zoom:connect', async () => {
+  try { return await connectZoom(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('zoom:disconnect', async () => {
+  try { await disconnectZoom(); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('zoom:status', async () => {
+  try { return await getZoomStatus(); }
+  catch (e: any) { return { connected: false }; }
+});
+ipcMain.handle('zoom:test', async () => {
+  try { return await testZoomConnection(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('zoom:redirectUri', () => ZOOM_REDIRECT_URI_DISPLAY);
+ipcMain.handle('zoom:listRecordings', async () => {
+  try {
+    const status = await getZoomStatus();
+    if (!status.connected) {
+      return { ok: false, error: 'Not connected to Zoom. Connect in Settings → Zoom Integration first.' };
+    }
+    const recordings = await listZoomRecordings();
+    return { ok: true, recordings };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('zoom:fetchTranscript', async (_e, recording: { meetingId: string; uuid: string; title: string; startedAt: string }) => {
+  try {
+    const transcriptResult = await getTranscriptDownloadUrl(recording.uuid);
+    if (!transcriptResult.found) {
+      return { ok: false, error: transcriptResult.reason };
+    }
+    const nt = await downloadAndParseVtt(
+      transcriptResult.downloadUrl,
+      transcriptResult.accessToken,
+      recording.meetingId,
+      recording.title,
+      recording.startedAt,
+    );
+    nt.externalId = recording.uuid;
+    nt.sourceMetadata = {
+      zoomMeetingId: recording.meetingId,
+      zoomUuid: recording.uuid,
+    };
+    const meetingId = await ingestNormalizedTranscript(nt);
+    return { ok: true, meetingId };
   } catch (e: any) { return { ok: false, error: e.message }; }
 });
 
