@@ -1313,7 +1313,7 @@ function ZoomSettings() {
   const [clientSecret, setClientSecret] = useState('');
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const [redirectUri, setRedirectUri] = useState('http://localhost:17292/callback');
+  const [redirectUri, setRedirectUri] = useState('http://127.0.0.1:17292/callback');
   const [error, setError] = useState('');
 
   // Fetch from Zoom flow
@@ -1328,17 +1328,21 @@ function ZoomSettings() {
   }, []);
 
   const handleConnect = async () => {
-    if (!clientId || !clientSecret) {
-      setError('Enter your Client ID and Secret first');
+    // Both fields filled = bring-your-own Zoom app; both empty = one-click
+    // connect via the built-in public client (PKCE, no credentials needed).
+    if (!!clientId !== !!clientSecret) {
+      setError('To use your own Zoom app, enter both Client ID and Secret — or leave both blank to connect directly');
       return;
     }
     setConnecting(true);
     setError('');
-    const saveRes = await (window as any).inwiseAPI.zoomSaveCredentials(clientId, clientSecret);
-    if (!saveRes?.ok) {
-      setError(saveRes?.error || 'Failed to save credentials');
-      setConnecting(false);
-      return;
+    if (clientId && clientSecret) {
+      const saveRes = await (window as any).inwiseAPI.zoomSaveCredentials(clientId, clientSecret);
+      if (!saveRes?.ok) {
+        setError(saveRes?.error || 'Failed to save credentials');
+        setConnecting(false);
+        return;
+      }
     }
     const result = await (window as any).inwiseAPI.zoomConnect();
     if (result?.ok) {
@@ -1404,39 +1408,49 @@ function ZoomSettings() {
       {!connected ? (
         <>
           <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16, lineHeight: 1.6 }}>
-            Create a Server-to-Server OAuth app at{' '}
-            <span style={{ color: 'var(--teal)', cursor: 'pointer' }}
-              onClick={() => (window as any).inwiseAPI.openExternal('https://marketplace.zoom.us/develop/create')}>
-              marketplace.zoom.us
-            </span>
-            , add the redirect URI below, enable the <code style={{ fontSize: 12, background: 'var(--slate-100)', padding: '2px 6px', borderRadius: 4 }}>cloud_recording:read:admin</code> scope, then paste your credentials.
+            Connect your Zoom account to import cloud recording transcripts. You will sign in
+            on zoom.us in your browser — Inwise never sees your password.
           </p>
-
-          <div className="form-group" style={{ marginBottom: 12 }}>
-            <label className="form-label">Redirect URI (add this to your Zoom app)</label>
-            <code style={{ fontSize: 12, display: 'block', background: 'var(--slate-100)', padding: '8px 10px', borderRadius: 6, userSelect: 'all' }}>
-              {redirectUri}
-            </code>
-          </div>
-
-          <div className="form-group" style={{ marginBottom: 12 }}>
-            <label className="form-label">Client ID</label>
-            <input type="text" className="form-input" value={clientId}
-              onChange={e => setClientId(e.target.value)} placeholder="e.g. aB1cD2eF3g..." />
-          </div>
-
-          <div className="form-group" style={{ marginBottom: 16 }}>
-            <label className="form-label">Client Secret</label>
-            <input type="password" className="form-input" value={clientSecret}
-              onChange={e => setClientSecret(e.target.value)} placeholder="Secret from your Zoom app" />
-          </div>
 
           {error && <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 12 }}>✕ {error}</div>}
 
-          <button className="btn btn-primary btn-sm" onClick={handleConnect}
-            disabled={connecting || !clientId || !clientSecret}>
+          <button className="btn btn-primary btn-sm" onClick={handleConnect} disabled={connecting}>
             {connecting ? 'Connecting…' : 'Connect Zoom'}
           </button>
+
+          <details style={{ marginTop: 16 }}>
+            <summary style={{ fontSize: 12, color: 'var(--slate-500)', cursor: 'pointer' }}>
+              Advanced: use your own Zoom OAuth app
+            </summary>
+            <p style={{ fontSize: 13, color: 'var(--slate-500)', margin: '12px 0', lineHeight: 1.6 }}>
+              Create an OAuth app at{' '}
+              <span style={{ color: 'var(--teal)', cursor: 'pointer' }}
+                onClick={() => (window as any).inwiseAPI.openExternal('https://marketplace.zoom.us/develop/create')}>
+                marketplace.zoom.us
+              </span>
+              , add the redirect URI below, enable the cloud recording read scopes, then paste
+              your credentials before clicking Connect Zoom.
+            </p>
+
+            <div className="form-group" style={{ marginBottom: 12 }}>
+              <label className="form-label">Redirect URI (add this to your Zoom app)</label>
+              <code style={{ fontSize: 12, display: 'block', background: 'var(--slate-100)', padding: '8px 10px', borderRadius: 6, userSelect: 'all' }}>
+                {redirectUri}
+              </code>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 12 }}>
+              <label className="form-label">Client ID</label>
+              <input type="text" className="form-input" value={clientId}
+                onChange={e => setClientId(e.target.value)} placeholder="e.g. aB1cD2eF3g..." />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 16 }}>
+              <label className="form-label">Client Secret</label>
+              <input type="password" className="form-input" value={clientSecret}
+                onChange={e => setClientSecret(e.target.value)} placeholder="Secret from your Zoom app" />
+            </div>
+          </details>
         </>
       ) : (
         <div>

@@ -10,9 +10,23 @@ import {
 } from './database';
 
 const ZOOM_OAUTH_PORT = 17292;
-const ZOOM_REDIRECT_URI = `http://localhost:${ZOOM_OAUTH_PORT}/callback`;
+// Zoom's redirect allowlist rejects the literal hostname "localhost" — it
+// requires 127.0.0.1 (or [::1]). Must stay byte-identical to the value
+// registered in the Zoom app, or the token exchange fails with invalid_grant.
+const ZOOM_REDIRECT_URI = `http://127.0.0.1:${ZOOM_OAUTH_PORT}/callback`;
 const ZOOM_AUTH_URL = 'https://zoom.us/oauth/authorize';
 const ZOOM_TOKEN_URL = 'https://zoom.us/oauth/token';
+
+// Public client ids of the Inwise Zoom Marketplace app. Safe to ship in MIT
+// source: they are public by design — PKCE replaces the client secret, so
+// there is no secret in this flow at all. The dev id authorizes while the
+// Marketplace app is unpublished; switch the default to the production id
+// once Zoom publishes the app. Forks can point at their own Zoom app via
+// INWISE_ZOOM_PUBLIC_CLIENT_ID or the BYO-credentials path in Settings.
+const ZOOM_PUBLIC_CLIENT_ID_DEV = 'pq0Gg4OSFa89B3miW92fA';
+export const ZOOM_PUBLIC_CLIENT_ID_PROD = 'M9fK63XqSCa6nZGUXPAqPg';
+const ZOOM_PUBLIC_CLIENT_ID =
+  process.env.INWISE_ZOOM_PUBLIC_CLIENT_ID || ZOOM_PUBLIC_CLIENT_ID_DEV;
 
 export const ZOOM_REDIRECT_URI_DISPLAY = ZOOM_REDIRECT_URI;
 
@@ -22,12 +36,15 @@ export async function saveZoomCredentials(clientId: string, clientSecret: string
 
 export async function connectZoom(): Promise<{ ok: boolean; error?: string }> {
   const creds = await getZoomCredentials();
-  if (!creds?.zoomClientId || !creds?.zoomClientSecret) {
-    return { ok: false, error: 'Zoom Client ID and Secret must be saved first' };
-  }
-
-  const { zoomClientId: clientId, zoomClientSecret: clientSecret } = creds;
+  // BYO credentials (user's own Zoom app) take precedence when both fields are
+  // saved; otherwise fall back to the embedded public client with PKCE — the
+  // zero-setup default.
+  const byo = !!(creds?.zoomClientId && creds?.zoomClientSecret);
+  const clientId = byo ? creds!.zoomClientId! : ZOOM_PUBLIC_CLIENT_ID;
+  const clientSecret = byo ? creds!.zoomClientSecret! : null;
   const state = crypto.randomBytes(16).toString('hex');
+  const codeVerifier = crypto.randomBytes(32).toString('base64url');
+  const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
 
   return new Promise((resolve) => {
     const server = http.createServer(async (req, res) => {
@@ -50,19 +67,23 @@ export async function connectZoom(): Promise<{ ok: boolean; error?: string }> {
       res.end('<html><body style="font-family:system-ui;text-align:center;padding:60px"><h2>Zoom Connected!</h2><p>You can close this tab and return to Inwise.</p></body></html>');
 
       try {
-        const basicCreds = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-        const tokenRes = await fetch(ZOOM_TOKEN_URL, {
-          method: 'POST',
-          headers: {
-            Authorization: `Basic ${basicCreds}`,
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          body: new URLSearchParams({
-            grant_type: 'authorization_code',
-            code,
-            redirect_uri: ZOOM_REDIRECT_URI,
-          }),
+        // BYO apps authenticate with Basic client_id:secret; the public client
+        // proves itself with the PKCE code_verifier instead (no auth header).
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        };
+        const body = new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: ZOOM_REDIRECT_URI,
         });
+        if (clientSecret) {
+          headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
+        } else {
+          body.set('client_id', clientId);
+          body.set('code_verifier', codeVerifier);
+        }
+        const tokenRes = await fetch(ZOOM_TOKEN_URL, { method: 'POST', headers, body });
 
         if (!tokenRes.ok) {
           const err = await tokenRes.text();
@@ -75,6 +96,11 @@ export async function connectZoom(): Promise<{ ok: boolean; error?: string }> {
         const tokenData = await tokenRes.json() as any;
         const expiresAt = new Date(Date.now() + (tokenData.expires_in || 3600) * 1000).toISOString();
 
+        if (!byo) {
+          // Record which public client id minted these tokens (empty secret =
+          // public client) so getValidZoomToken refreshes against the same app.
+          await setZoomClientCredentials(clientId, '');
+        }
         await setZoomTokens({
           zoomAccessToken: tokenData.access_token,
           zoomRefreshToken: tokenData.refresh_token,
@@ -92,13 +118,16 @@ export async function connectZoom(): Promise<{ ok: boolean; error?: string }> {
     });
 
     server.listen(ZOOM_OAUTH_PORT, () => {
-      const authUrl =
+      let authUrl =
         `${ZOOM_AUTH_URL}?response_type=code` +
         `&client_id=${encodeURIComponent(clientId)}` +
         `&redirect_uri=${encodeURIComponent(ZOOM_REDIRECT_URI)}` +
         `&state=${state}`;
+      if (!byo) {
+        authUrl += `&code_challenge=${codeChallenge}&code_challenge_method=S256`;
+      }
       shell.openExternal(authUrl);
-      log('info', 'zoom:oauth-started', 'opened browser for authorization');
+      log('info', 'zoom:oauth-started', `opened browser for authorization (${byo ? 'byo app' : 'public client'})`);
     });
 
     setTimeout(() => {
@@ -129,22 +158,25 @@ export async function getValidZoomToken(): Promise<string> {
     }
   }
 
-  if (!creds.zoomClientId || !creds.zoomClientSecret || !creds.zoomRefreshToken) {
+  if (!creds.zoomClientId || !creds.zoomRefreshToken) {
     throw new Error('Cannot refresh — missing credentials or refresh token');
   }
 
-  const basicCreds = Buffer.from(`${creds.zoomClientId}:${creds.zoomClientSecret}`).toString('base64');
-  const res = await fetch(ZOOM_TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${basicCreds}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: creds.zoomRefreshToken,
-    }),
+  // Empty/absent secret = tokens were minted by the public client (PKCE);
+  // refresh with client_id in the body. A saved secret = BYO app; Basic auth.
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: creds.zoomRefreshToken,
   });
+  if (creds.zoomClientSecret) {
+    headers.Authorization = `Basic ${Buffer.from(`${creds.zoomClientId}:${creds.zoomClientSecret}`).toString('base64')}`;
+  } else {
+    body.set('client_id', creds.zoomClientId);
+  }
+  const res = await fetch(ZOOM_TOKEN_URL, { method: 'POST', headers, body });
 
   if (!res.ok) throw new Error('Zoom token refresh failed — please reconnect');
 
