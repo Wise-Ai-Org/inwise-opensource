@@ -13,8 +13,10 @@ import { log } from './logger';
  * Claude Code, etc.) over Streamable HTTP. Strictly read-only, strictly
  * loopback: the listener binds to 127.0.0.1 and every request is additionally
  * checked for a loopback peer address and a localhost Host header (defense
- * against DNS-rebinding). No auth is used because the surface never leaves
- * the machine — anything that can reach it can already read the NeDB files.
+ * against DNS-rebinding). No auth is used: the surface never leaves the
+ * machine. Caveat: on a multi-user machine, loopback is shared across OS
+ * accounts, so another local user could query this port while the app runs.
+ * Disable the server in Settings → Connect to AI on shared machines.
  */
 
 export const MCP_DEFAULT_PORT = 43117;

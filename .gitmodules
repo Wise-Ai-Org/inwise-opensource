@@ -1,6 +1,0 @@
-[submodule "tools/lavish"]
-	path = tools/lavish
-	url = https://github.com/kunchenguid/lavish-axi
-[submodule "tools/no-mistakes"]
-	path = tools/no-mistakes
-	url = https://github.com/kunchenguid/no-mistakes
