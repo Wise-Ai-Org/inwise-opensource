@@ -41,7 +41,7 @@ function RecordSheet({ liveEvent, onClose, onStarted }: {
 
   useEffect(() => {
     api().getPeople?.().then((rows: any[]) => {
-      setPeople((rows || []).slice(0, 8).map(p => ({ _id: p._id, name: p.name })));
+      setPeople((rows || []).filter(p => p?.name).slice(0, 8).map(p => ({ _id: p._id, name: p.name })));
     }).catch(() => {});
     api().getAudioHealth?.().then((h: any) => {
       if (h && typeof h === 'object') setAudioOk(!(h.micSilent || h.systemSilent || h.error));

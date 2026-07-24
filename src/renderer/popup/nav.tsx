@@ -68,8 +68,8 @@ export function requestPopupNav(detail: { view?: LegacyView; meetingId?: string 
 
 // ── Small shared helpers ─────────────────────────────────────────────────────
 
-export function initials(name: string): string {
-  return name
+export function initials(name: string | null | undefined): string {
+  return (name || '')
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)

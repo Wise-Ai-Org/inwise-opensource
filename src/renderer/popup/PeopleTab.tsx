@@ -99,7 +99,7 @@ export default function PeopleTab() {
             <button key={p._id} className="pp-setrow" onClick={() => push({ kind: 'person', id: p._id, name: p.name })}>
               <span className="pp-avatar">{initials(p.name)}</span>
               <div className="pp-grow">
-                <div className="pp-rowlabel">{p.name}</div>
+                <div className="pp-rowlabel">{p.name || 'Unnamed'}</div>
                 <div className="pp-rowsub">{subtitle(p)}</div>
               </div>
               <span className="pp-chevron">›</span>
