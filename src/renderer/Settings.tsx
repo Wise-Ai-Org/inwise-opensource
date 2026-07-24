@@ -2476,7 +2476,14 @@ function VoiceEnrollment() {
   );
 }
 
-export default function Settings() {
+// Section keys used by the tray-popup drill-down pages. When `only` is set,
+// Settings renders just that section (no page header) so it can live inside a
+// narrow drill-down page; with no prop it renders the full legacy scroll.
+export type SettingsSectionOnly =
+  | 'ai' | 'transcription' | 'calendar' | 'jira' | 'zoom' | 'slack'
+  | 'ai-connect' | 'integrations' | 'voice' | 'data';
+
+export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) {
   const [config, setConfig] = useState<Config | null>(null);
   const [saved, setSaved] = useState(false);
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
@@ -2517,16 +2524,20 @@ export default function Settings() {
     setTimeout(() => setSaved(false), 2000);
   };
 
+  const show = (key: SettingsSectionOnly) => !only || only === key;
+
   return (
     <>
-      <div className="page-header">
-        <div className="page-title">Settings</div>
-        <div className="page-subtitle">Configure your AI provider, transcription model, and calendar</div>
-      </div>
-      <div className="page-body">
+      {!only && (
+        <div className="page-header">
+          <div className="page-title">Settings</div>
+          <div className="page-subtitle">Configure your AI provider, transcription model, and calendar</div>
+        </div>
+      )}
+      <div className={only ? 'pp-settings-embed' : 'page-body'}>
         <div className="settings-sections">
 
-          {/* AI Provider */}
+          {show('ai') && (
           <div className="settings-section">
             <div className="settings-section-title">AI Provider</div>
 
@@ -2555,8 +2566,9 @@ export default function Settings() {
               />
             </div>
           </div>
+          )}
 
-          {/* Transcription */}
+          {show('transcription') && (
           <div className="settings-section">
             <div className="settings-section-title">Transcription</div>
             <div className="form-group">
@@ -2618,8 +2630,9 @@ export default function Settings() {
               </span>
             </div>
           </div>
+          )}
 
-          {/* Recording */}
+          {show('transcription') && (
           <div className="settings-section">
             <div className="settings-section-title">Recording</div>
             <div className="form-group">
@@ -2643,8 +2656,9 @@ export default function Settings() {
               </span>
             </div>
           </div>
+          )}
 
-          {/* Calendar */}
+          {show('calendar') && (
           <div className="settings-section">
             <div className="settings-section-title">Calendar</div>
             <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 20, lineHeight: 1.6 }}>
@@ -2657,32 +2671,34 @@ export default function Settings() {
 
             <CalendarList />
           </div>
+          )}
 
-          {/* Jira */}
+          {show('jira') && (
           <div className="settings-section">
             <div className="settings-section-title">Jira Integration</div>
             <JiraSettings config={config} update={update} />
           </div>
+          )}
 
-          {/* Zoom */}
+          {show('zoom') && (
           <div className="settings-section">
             <div className="settings-section-title">Zoom Integration</div>
             <ZoomSettings />
           </div>
+          )}
 
-          {/* Slack */}
+          {show('slack') && (
           <div className="settings-section">
             <div className="settings-section-title">Slack Integration</div>
             <SlackSettings />
           </div>
+          )}
 
-          {/* Connect to AI (local MCP server) */}
-          <ConnectToAISection />
+          {show('ai-connect') && <ConnectToAISection />}
 
-          {/* Integrations (US-003) */}
-          <IntegrationsSection />
+          {show('integrations') && <IntegrationsSection />}
 
-          {/* Voice Enrollment */}
+          {show('voice') && (
           <div className="settings-section">
             <div className="settings-section-title">Voice Enrollment</div>
             <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16, lineHeight: 1.6 }}>
@@ -2714,14 +2730,17 @@ export default function Settings() {
 
             <VoiceEnrollment />
           </div>
+          )}
 
+          {(!only || only === 'ai' || only === 'transcription' || only === 'voice') && (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <button className="btn btn-primary" onClick={save}>Save Settings</button>
             {saved && <span style={{ fontSize: 13, color: 'var(--teal)' }}>✓ Saved</span>}
           </div>
+          )}
 
-          {/* Data Management */}
-          <div className="settings-section" style={{ marginTop: 32, borderTop: '1px solid var(--slate-200)', paddingTop: 24 }}>
+          {show('data') && (
+          <div className="settings-section" style={only ? undefined : { marginTop: 32, borderTop: '1px solid var(--slate-200)', paddingTop: 24 }}>
             <div className="settings-section-title">Data Management</div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
               <button className="btn btn-secondary btn-sm" onClick={async () => {
@@ -2752,6 +2771,7 @@ export default function Settings() {
               </button>
             </div>
           </div>
+          )}
 
         </div>
       </div>

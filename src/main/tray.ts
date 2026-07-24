@@ -15,16 +15,32 @@ function loadTrayIcon(isRecording: boolean) {
   return nativeImage.createFromPath(target).resize({ width: 16, height: 16 });
 }
 
-export function createTray(mainWindow: BrowserWindow): void {
+export function createTray(mainWindow: BrowserWindow, onToggle?: () => void): void {
   tray = new Tray(loadTrayIcon(false));
   tray.setToolTip('Inwise');
 
   updateTrayMenu(mainWindow, false);
 
+  // Single click toggles the popup anchored above the tray (Logi Tune-style).
+  tray.on('click', () => {
+    if (onToggle) onToggle();
+    else { mainWindow.show(); mainWindow.focus(); }
+  });
+
   tray.on('double-click', () => {
     mainWindow.show();
     mainWindow.focus();
   });
+}
+
+export function getTrayBounds(): Electron.Rectangle | null {
+  if (!tray) return null;
+  try {
+    const b = tray.getBounds();
+    return b && b.width > 0 ? b : null;
+  } catch {
+    return null;
+  }
 }
 
 export function updateTrayMenu(mainWindow: BrowserWindow, isRecording: boolean): void {

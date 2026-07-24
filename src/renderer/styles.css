@@ -522,11 +522,14 @@ body {
 
 .onboarding-card {
   width: 480px;
+  max-width: calc(100vw - 24px); /* fits the 380px tray popup */
   background: var(--white);
   border: 1px solid var(--slate-200);
   border-radius: 16px;
   box-shadow: var(--shadow-md);
-  padding: 40px;
+  padding: clamp(20px, 6vw, 40px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
 }
 
 .onboarding-logo { height: 40px; margin-bottom: 24px; }

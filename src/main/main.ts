@@ -1,4 +1,4 @@
-﻿import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol } from 'electron';
+﻿import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -23,6 +23,7 @@ import {
   getPersonAgendaContext, getMeetingAgendaContext,
   saveVoicePrint, getVoicePrints, getVoicePrint, deleteVoicePrint,
   getUserVoicePrint, getVoicePrintByName, getVoicePrintsWithEmbeddings,
+  renameVoicePrint,
   syncCalendarEventsToDb,
 } from './database';
 import { extractChannel, trimWav, wavBufferToSamples, stitchWavBuffers } from '@inwise/desktop-shared';
@@ -54,7 +55,7 @@ import {
 import { matchAllItems, semanticMatch } from './jira-matcher';
 import { scoreTasks } from './task-scorer';
 import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from '@inwise/desktop-shared';
-import { createTray, updateTrayMenu, destroyTray } from './tray';
+import { createTray, updateTrayMenu, destroyTray, getTrayBounds } from './tray';
 import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
 import { computeWelcomeBack } from './welcome-back';
 import { findLiveMeetingForBanner } from './live-meeting-banner';
@@ -96,12 +97,55 @@ let pendingConflict:
 
 // â”€â”€ Windows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// Tray-popup dimensions — the main window is a slim taskbar popup, not a desktop window.
+const POPUP_WIDTH = 380;
+const POPUP_HEIGHT = 680;
+
+// While an external auth flow (Zoom/Google/MS OAuth in the system browser) is in
+// progress the popup must not hide on blur — the browser stealing focus IS a blur.
+// Renderer sets this via popup:pin around auth flows.
+let popupPinned = false;
+
+function positionPopupWindow(win: BrowserWindow): void {
+  try {
+    const trayBounds = getTrayBounds();
+    const display = trayBounds
+      ? screen.getDisplayMatching(trayBounds)
+      : screen.getPrimaryDisplay();
+    const wa = display.workArea;
+    // Anchor to the work-area corner nearest the taskbar. On Windows the work
+    // area already excludes the taskbar, so bottom-right of workArea sits just
+    // above a bottom taskbar and left of a right taskbar.
+    const x = Math.round(wa.x + wa.width - POPUP_WIDTH - 12);
+    const y = Math.round(wa.y + wa.height - POPUP_HEIGHT - 12);
+    win.setBounds({ x, y, width: POPUP_WIDTH, height: POPUP_HEIGHT });
+  } catch { /* positioning is best-effort; default placement is acceptable */ }
+}
+
+// Clicking the tray icon blurs the popup, which hides it — then the click event
+// would immediately re-show it. Treat a tray click right after a blur-hide as
+// "the user clicked to close".
+let lastBlurHideAt = 0;
+
+export function togglePopupWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (Date.now() - lastBlurHideAt < 350) return;
+  if (mainWindow.isVisible() && mainWindow.isFocused()) {
+    mainWindow.hide();
+  } else {
+    positionPopupWindow(mainWindow);
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
+    width: POPUP_WIDTH,
+    height: POPUP_HEIGHT,
+    frame: false,
+    resizable: false,
+    skipTaskbar: true,
     backgroundColor: '#f8fafc',
     icon: path.join(__dirname, process.platform === 'win32' ? '../../assets/icon.ico' : '../../assets/icon.png'),
     webPreferences: {
@@ -127,6 +171,7 @@ function createMainWindow(): void {
   }
   mainWindow.once('ready-to-show', () => {
     markAppOpened();
+    if (mainWindow) positionPopupWindow(mainWindow);
     mainWindow?.show();
   });
 
@@ -134,10 +179,51 @@ function createMainWindow(): void {
     markAppOpened();
   });
 
+  // Tray-popup behavior: clicking anywhere else hides the popup — unless an
+  // auth flow pinned it open, or we're in development (devtools focus would
+  // otherwise hide the window on every inspection).
+  mainWindow.on('blur', () => {
+    if (popupPinned) return;
+    if (process.env.NODE_ENV === 'development') return;
+    if (mainWindow?.webContents.isDevToolsFocused()) return;
+    lastBlurHideAt = Date.now();
+    mainWindow?.hide();
+  });
+
   mainWindow.on('close', (e) => {
     e.preventDefault();
     mainWindow?.hide();
   });
+}
+
+// ── Transcript review window ─────────────────────────────────────────────────
+// The full transcript review flow is unusable at popup width, so it opens in a
+// normal resizable window — the one place the app steps outside the popup.
+let reviewWindow: BrowserWindow | null = null;
+
+function createReviewWindow(meetingId: string, initialTab?: string): void {
+  if (reviewWindow && !reviewWindow.isDestroyed()) {
+    reviewWindow.close();
+  }
+  reviewWindow = new BrowserWindow({
+    width: 980,
+    height: 720,
+    minWidth: 720,
+    minHeight: 560,
+    backgroundColor: '#f8fafc',
+    icon: path.join(__dirname, process.platform === 'win32' ? '../../assets/icon.ico' : '../../assets/icon.png'),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+    title: 'Inwise — Transcript review',
+    show: false,
+  });
+  const tab = initialTab ? `&tab=${encodeURIComponent(initialTab)}` : '';
+  reviewWindow.loadURL(`app://bundle/index.html?review=${encodeURIComponent(meetingId)}${tab}`);
+  reviewWindow.once('ready-to-show', () => reviewWindow?.show());
+  reviewWindow.on('closed', () => { reviewWindow = null; });
 }
 
 function createOverlayWindow(title: string, calendarEventId?: string): void {
@@ -1469,6 +1555,31 @@ ipcMain.handle('voiceprint:get-audio', async (_e, id: string) => {
   return { audioClip: clip, name: vp.name };
 });
 
+ipcMain.handle('voiceprint:rename', async (_e, id: string, name: string) => {
+  await renameVoicePrint(id, name);
+  return { success: true };
+});
+
+// ── Popup window controls ────────────────────────────────────────────────────
+ipcMain.handle('popup:pin', (_e, pinned: boolean) => {
+  popupPinned = !!pinned;
+  log('info', 'popup:pin', `pinned=${popupPinned}`);
+});
+
+ipcMain.handle('window:hide', () => {
+  mainWindow?.hide();
+});
+
+ipcMain.handle('app:quit', () => {
+  app.quit();
+});
+
+ipcMain.handle('app:version', () => app.getVersion());
+
+ipcMain.handle('review-window:open', (_e, meetingId: string, initialTab?: string) => {
+  createReviewWindow(meetingId, initialTab);
+});
+
 ipcMain.handle('voiceprint:get-user', async () => {
   const vp = await getUserVoicePrint();
   if (!vp) return null;
@@ -2204,7 +2315,7 @@ app.whenReady().then(() => {
     log('info', 'config:migrate-calendars', `Seeded calendars[] from legacy fields â€” added=${migration.added}`);
   }
   createMainWindow();
-  createTray(mainWindow!);
+  createTray(mainWindow!, togglePopupWindow);
   calendarWatcher.start();
 
   // Register Slack pipeline: normalize thread → create meeting → extract insights → save

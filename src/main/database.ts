@@ -1105,6 +1105,10 @@ export async function deleteVoicePrint(id: string): Promise<void> {
   await voicePrintsDb.removeAsync({ _id: id }, {});
 }
 
+export async function renameVoicePrint(id: string, name: string): Promise<void> {
+  await voicePrintsDb.updateAsync({ _id: id }, { $set: { name } }, {});
+}
+
 // ── Zoom Credentials ──────────────────────────────────────────────────────────
 
 export interface ZoomCredentials {

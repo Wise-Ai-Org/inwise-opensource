@@ -155,6 +155,15 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
 
+  // Popup window controls
+  pinPopup: (pinned: boolean) => ipcRenderer.invoke('popup:pin', pinned),
+  hideWindow: () => ipcRenderer.invoke('window:hide'),
+  quitApp: () => ipcRenderer.invoke('app:quit'),
+  getAppVersion: () => ipcRenderer.invoke('app:version'),
+  openReviewWindow: (meetingId: string, initialTab?: string) =>
+    ipcRenderer.invoke('review-window:open', meetingId, initialTab),
+  renameVoicePrint: (id: string, name: string) => ipcRenderer.invoke('voiceprint:rename', id, name),
+
   // Events from main → renderer
   on: (channel: string, cb: (...args: any[]) => void) => {
     const allowed = ['recording:status', 'meeting:new', 'meeting:open-details', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'tasks:likely-done-updated', 'jira:auto-synced', 'sor:write-completed', 'pipeline:error', 'audio:health'];

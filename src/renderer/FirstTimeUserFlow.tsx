@@ -35,15 +35,15 @@ const STEPS: Step[] = [
     navigateTo: 'people',
   },
   {
-    targetSelector: '[data-nav="settings"]',
+    targetSelector: '.pp-dots',
     title: 'Connect Your Calendar',
-    description: 'Add your Google or Outlook calendar link in Settings. Inwise auto-detects upcoming meetings and prompts you to record.',
-    navigateTo: 'settings',
+    description: 'Open the ••• menu and pick Settings to add your Google or Outlook calendar. Inwise auto-detects upcoming meetings and prompts you to record.',
+    navigateTo: 'communications',
   },
   {
-    targetSelector: '.sidebar-record',
+    targetSelector: '.pp-dots',
     title: 'Search Across Meetings',
-    description: 'Ask anything about your meetings. Inwise searches across all your meeting history and gives you AI-synthesized answers.',
+    description: 'The ••• menu also holds Search — ask anything about your meetings and get an AI-synthesized answer from your whole history.',
     navigateTo: 'communications',
   },
 ];
