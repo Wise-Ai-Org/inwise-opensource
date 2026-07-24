@@ -5,7 +5,7 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
   const { pop, push } = useNav();
   const [person, setPerson] = useState<any>(null);
   const [loaded, setLoaded] = useState(false);
-  const [agenda, setAgenda] = useState<string | null>(null);
+  const [agenda, setAgenda] = useState<string[] | null>(null);
   const [agendaLoading, setAgendaLoading] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
 
@@ -27,9 +27,14 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
     setAgendaLoading(true);
     try {
       const res = await api().generateAgenda?.(personId);
-      setAgenda(typeof res === 'string' ? res : res?.agenda || res?.text || null);
+      const items: string[] =
+        Array.isArray(res) ? res :
+        Array.isArray(res?.agenda) ? res.agenda :
+        typeof res === 'string' ? res.split('\n').filter(Boolean) :
+        typeof res?.text === 'string' ? res.text.split('\n').filter(Boolean) : [];
+      setAgenda(items.length ? items : ['Nothing to suggest yet — record a meeting together first.']);
     } catch {
-      setAgenda('Could not generate talking points — check your AI key in Settings.');
+      setAgenda(['Could not generate talking points — check your AI key in Settings.']);
     } finally {
       setAgendaLoading(false);
     }
@@ -64,6 +69,26 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                 </div>
               </div>
             </div>
+
+            {agenda ? (
+              <div className="pp-card" style={{ background: 'var(--pp-teal-tint)', borderColor: 'var(--pp-teal-line)' }}>
+                <div className="pp-row" style={{ marginBottom: 8 }}>
+                  <div className="pp-grow" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--pp-teal-deep)' }}>
+                    Talking points
+                  </div>
+                  <button className="pp-quiet-action" aria-label="Dismiss" onClick={() => setAgenda(null)}>✕</button>
+                </div>
+                <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {agenda.map((item, i) => (
+                    <li key={i} style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.5 }}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <button className="pp-btn pp-ghost" onClick={generateAgenda} disabled={agendaLoading}>
+                {agendaLoading ? 'Thinking…' : 'Draft talking points for next time'}
+              </button>
+            )}
 
             {openItems.length > 0 && (
               <>
@@ -101,22 +126,6 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   ))}
                 </div>
               </>
-            )}
-
-            {agenda ? (
-              <div className="pp-card" style={{ background: 'var(--pp-teal-tint)', borderColor: 'var(--pp-teal-line)' }}>
-                <div className="pp-row" style={{ marginBottom: 6 }}>
-                  <div className="pp-grow" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--pp-teal-deep)' }}>
-                    Talking points
-                  </div>
-                  <button className="pp-quiet-action" onClick={() => setAgenda(null)}>✕</button>
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--slate-700)', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{agenda}</div>
-              </div>
-            ) : (
-              <button className="pp-btn pp-ghost" onClick={generateAgenda} disabled={agendaLoading}>
-                {agendaLoading ? 'Thinking…' : 'Draft talking points for next time'}
-              </button>
             )}
 
             <div className="pp-row" style={{ justifyContent: 'center', paddingTop: 2 }}>
