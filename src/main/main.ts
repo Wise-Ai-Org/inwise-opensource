@@ -155,7 +155,9 @@ function pillPosition(): { x: number; y: number } {
 
 let pillMoveTimer: NodeJS.Timeout | null = null;
 function trackPillPosition(win: BrowserWindow): void {
-  win.on('moved', () => {
+  // 'move' (not 'moved'): on Windows 'moved' only fires when a user drag ends,
+  // so programmatic moves would never persist. Debounce absorbs the drag stream.
+  win.on('move', () => {
     if (pillMoveTimer) clearTimeout(pillMoveTimer);
     pillMoveTimer = setTimeout(() => {
       if (win.isDestroyed()) return;

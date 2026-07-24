@@ -922,6 +922,7 @@ export default function Badge() {
         .pill-stop:hover .pill-stop-inner { background: #ef4444; }
       `}</style>
       <div
+        className="pill-root"
         style={pillStyle}
         onClick={onPillClick}
         onContextMenu={onContextMenu}
