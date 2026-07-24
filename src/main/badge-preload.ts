@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('inwiseAPI', {
   on: (channel: string, cb: (...args: any[]) => void) => {
-    const allowed = ['recording:start', 'recording:status', 'recording:stop-request', 'recording:file-saved', 'recording:file-save-failed'];
+    const allowed = ['recording:start', 'recording:status', 'recording:stop-request', 'reminder:start', 'pill:switch-mic', 'pipeline:secondary'];
     if (allowed.includes(channel)) {
       ipcRenderer.on(channel, (_event, ...args) => cb(...args));
     }
@@ -13,11 +13,18 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   getConfig: () => ipcRenderer.invoke('config:get'),
   getDesktopSourceId: () => ipcRenderer.invoke('desktop:getSourceId'),
   startRecording: (title: string) => ipcRenderer.invoke('recording:start', title),
+  resizePill: (width: number, height?: number) => ipcRenderer.send('pill:resize', { width, height }),
+  showPillMenu: (payload: { mics: { id: string; label: string }[]; speakers: { id: string; label: string }[]; recording: boolean; title?: string }) => {
+    ipcRenderer.send('pill:context-menu', payload);
+  },
+  pillCancelled: () => ipcRenderer.send('pill:cancelled'),
 });
 
 contextBridge.exposeInMainWorld('electronAPI', {
   sendAudio: (payload: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
-    return ipcRenderer.invoke('recording:audio-data', payload);
+    // Must be send(), not invoke(): main listens with ipcMain.on, and invoke only
+    // routes to ipcMain.handle — the invoke pairing silently drops the audio.
+    ipcRenderer.send('recording:audio-data', payload);
   },
   sendAudioHealth: (payload: { micOk: boolean; systemAudioOk: boolean; message?: string }) => {
     ipcRenderer.send('audio:health', payload);

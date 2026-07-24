@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-type Status = 'preflight' | 'countdown' | 'recording' | 'processing' | 'done' | 'error' | 'received';
+// Compact recorder pill. Collapsed it is a small capsule with four dots that bob
+// with real audio level; hover expands it to show title, timer, and a stop square.
+// Left-click runs a device test, right-click opens the native Inwise menu (built
+// in main), drag lives on the left grip only so clicks stay clickable.
+type Status = 'idle' | 'preflight' | 'countdown' | 'recording' | 'saving' | 'error' | 'reminder';
 
 interface PreflightChecks {
   mic: boolean;
@@ -14,10 +18,18 @@ interface State {
   title: string;
   preflight?: PreflightChecks;
   countdown?: number; // 3, 2, 1
-  glowActive?: boolean;
 }
 
+// Background transcription jobs (a finished recording being processed while the
+// pill may already be recording the next meeting).
+type JobState = 'transcribing' | 'processing' | 'done' | 'error';
+interface Job { jobId: string; title: string; state: JobState; message?: string }
+
 const INWISE_TEAL = '#0F738C';
+const PILL_H = 64; // window height (44px pill + glow margin)
+const W_COLLAPSED = 240;
+const W_EXPANDED = 470;
+const W_MEDIUM = 340;
 
 // Pre-flight check: verify the saved (or default) mic exists and getUserMedia succeeds.
 // Acquires briefly, then releases — startMic() re-acquires for real recording.
@@ -96,134 +108,146 @@ function playStartChime(): void {
   } catch { /* audio failed; non-critical */ }
 }
 
-const BAR_COUNT = 12;
-
 const styles: Record<string, any> = {
   wrap: {
     position: 'fixed',
     inset: 0,
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     background: 'transparent',
-    WebkitAppRegion: 'drag',
+    padding: 10,
   },
-  badge: {
+  pill: {
     background: 'rgba(15, 23, 42, 0.97)',
-    borderRadius: 16,
-    padding: '0 20px',
-    height: 56,
+    borderRadius: 22,
+    height: 44,
+    padding: '0 14px 0 8px',
     display: 'flex',
     alignItems: 'center',
-    gap: 14,
-    boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+    gap: 9,
+    boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
     userSelect: 'none',
+    maxWidth: '100%',
+  },
+  grip: {
     WebkitAppRegion: 'drag',
+    width: 14,
+    height: 44,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#475569',
+    fontSize: 9,
+    letterSpacing: -1,
+    flexShrink: 0,
   },
   dot: {
-    width: 8,
-    height: 8,
+    width: 7,
+    height: 7,
     borderRadius: '50%',
-    background: '#ef4444',
     flexShrink: 0,
+    transition: 'background 220ms ease',
   },
   label: {
     color: '#f8fafc',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: 600,
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    maxWidth: 140,
+    maxWidth: 160,
     overflow: 'hidden',
     whiteSpace: 'nowrap',
     textOverflow: 'ellipsis',
   },
-  waveform: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 2,
-    height: 24,
-  },
-  stopBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: '50%',
-    background: '#ef4444',
-    border: 'none',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    WebkitAppRegion: 'no-drag',
-  },
-  closeBtn: {
-    width: 24,
-    height: 24,
-    borderRadius: '50%',
-    background: 'rgba(255,255,255,0.08)',
-    border: 'none',
+  timer: {
     color: '#94a3b8',
-    fontSize: 14,
-    lineHeight: 1,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    fontSize: 12,
+    fontFamily: 'monospace',
+    minWidth: 40,
     flexShrink: 0,
-    WebkitAppRegion: 'no-drag',
+  },
+  subtext: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: 500,
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    textOverflow: 'ellipsis',
   },
 };
 
-function Waveform({ active }: { active: boolean }) {
-  const [heights, setHeights] = useState<number[]>(() => Array(BAR_COUNT).fill(6));
-
-  useEffect(() => {
-    if (!active) { setHeights(Array(BAR_COUNT).fill(6)); return; }
-    const id = setInterval(() => {
-      setHeights(Array.from({ length: BAR_COUNT }, () => 4 + Math.random() * 18));
-    }, 120);
-    return () => clearInterval(id);
-  }, [active]);
-
+function StatusDot({ tone }: { tone: 'ok' | 'fail' | 'pending' }) {
+  if (tone === 'pending') return <span className="pill-spinner" />;
   return (
-    <div style={styles.waveform}>
-      {heights.map((h, i) => (
-        <div
-          key={i}
-          style={{
-            width: 3,
-            height: h,
-            borderRadius: 2,
-            background: `linear-gradient(to top, #0d9488, #14b8a6)`,
-            transition: 'height 0.1s ease',
-          }}
-        />
-      ))}
-    </div>
+    <span style={{
+      width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+      background: tone === 'ok' ? '#22c55e' : '#ef4444',
+    }} />
   );
 }
 
 export default function Badge() {
-  const [state, setState] = useState<State>({ status: 'recording', title: 'Meeting' });
+  const [state, setState] = useState<State>({ status: 'idle', title: 'Meeting' });
   const [elapsed, setElapsed] = useState(0);
+  const [hover, setHover] = useState(false);
   const [sysAudioWarning, setSysAudioWarning] = useState(false);
+  const [jobs, setJobs] = useState<Record<string, Job>>({});
+  const [test, setTest] = useState<null | { mic: 'pending' | 'ok' | 'fail'; spk: 'pending' | 'ok' | 'fail' }>(null);
+
   const startRef = useRef(Date.now());
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const mergerRef = useRef<ChannelMergerNode | null>(null);
+  const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
   const hasStereoRef = useRef(false);
   const stopRecordingRef = useRef<() => void>(() => {});
   const titleRef = useRef<string>('Meeting');
   const calendarEventIdRef = useRef<string | undefined>(undefined);
   const beginFlowRef = useRef<(title: string) => void>(() => {});
-  // Mirror status into a ref so the (mount-only) devicechange listener reads it without stale closures.
+  const runIdRef = useRef(0);
+  const dotRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const levelRef = useRef(0);
+  const testTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirror status into a ref so mount-only listeners read it without stale closures.
   const statusRef = useRef(state.status);
   statusRef.current = state.status;
 
   useEffect(() => {
-    (window as any).inwiseAPI.on('recording:start', (title: string, calendarEventId?: string) => {
+    const api = (window as any).inwiseAPI;
+
+    api.on('recording:start', (title: string, calendarEventId?: string) => {
       calendarEventIdRef.current = calendarEventId;
       beginFlowRef.current(title);
+    });
+
+    api.on('reminder:start', (title: string) => {
+      titleRef.current = title;
+      setState({ status: 'reminder', title });
+    });
+
+    api.on('recording:stop-request', () => {
+      stopRecordingRef.current();
+    });
+
+    api.on('pipeline:secondary', (msg: Job) => {
+      if (!msg?.jobId) return;
+      setJobs(prev => ({ ...prev, [msg.jobId]: msg }));
+      if (msg.state === 'done') {
+        setTimeout(() => setJobs(prev => {
+          const next = { ...prev };
+          delete next[msg.jobId];
+          return next;
+        }), 2500);
+      }
+    });
+
+    api.on('pill:switch-mic', (deviceId: string) => {
+      if (statusRef.current === 'recording') void swapMicRef.current(deviceId);
     });
 
     // Re-run the mic check when audio hardware changes while we're parked on the
@@ -239,18 +263,20 @@ export default function Badge() {
     beginFlowRef.current = async (title: string) => {
       titleRef.current = title;
       setSysAudioWarning(false);
+      const myRun = ++runIdRef.current;
+      const alive = () => runIdRef.current === myRun;
 
       // Pre-flight: run REAL checks (not setTimeouts). Each dot lights up only when its
       // corresponding check actually passes. Hard failures (mic, ready) abort the countdown.
-      // Soft failures (system audio) light the dot red and recording proceeds mic-only.
+      // Soft failures (system audio) turn the dot amber and recording proceeds mic-only.
       setState({ status: 'preflight', title, preflight: { mic: false, audio: false, ready: false } });
 
-      // Run all three checks in parallel for speed
       const [micResult, audioResult, readyResult] = await Promise.all([
         checkMic(),
         checkSystemAudio(),
         checkReady(),
       ]);
+      if (!alive()) return;
 
       // Hard fail: mic not available — abort with actionable error
       if (!micResult.ok) {
@@ -259,11 +285,13 @@ export default function Badge() {
       }
       setState(s => ({ ...s, preflight: { mic: true, audio: s.preflight!.audio, ready: s.preflight!.ready } }));
       await new Promise(r => setTimeout(r, 250));
+      if (!alive()) return;
 
       // Soft fail: system audio missing — proceed but flag it
       setState(s => ({ ...s, preflight: { ...s.preflight!, audio: audioResult.ok } }));
       if (!audioResult.ok) setSysAudioWarning(true);
       await new Promise(r => setTimeout(r, 250));
+      if (!alive()) return;
 
       // Hard fail: IPC / config not ready
       if (!readyResult.ok) {
@@ -272,33 +300,26 @@ export default function Badge() {
       }
       setState(s => ({ ...s, preflight: { ...s.preflight!, ready: true } }));
       await new Promise(r => setTimeout(r, 350));
+      if (!alive()) return;
 
-      // Countdown
+      // Countdown — clicking the pill cancels (runIdRef bump makes alive() false)
       setState(s => ({ ...s, status: 'countdown', countdown: 3 }));
       await new Promise(r => setTimeout(r, 600));
+      if (!alive()) return;
       setState(s => ({ ...s, countdown: 2 }));
       await new Promise(r => setTimeout(r, 600));
+      if (!alive()) return;
       setState(s => ({ ...s, countdown: 1 }));
       await new Promise(r => setTimeout(r, 600));
+      if (!alive()) return;
 
       // Start
       playStartChime();
       startRef.current = Date.now();
+      setElapsed(0);
       setState({ status: 'recording', title });
-      startMic(title);
-
-      // Glow fades in 1 second after the chime
-      await new Promise(r => setTimeout(r, 1000));
-      setState(s => ({ ...s, glowActive: true }));
+      startMic();
     };
-
-    (window as any).inwiseAPI.on('recording:status', ({ status, message }: { status: Status; message?: string }) => {
-      setState((s) => ({ ...s, status, message }));
-    });
-
-    (window as any).inwiseAPI.on('recording:stop-request', () => {
-      stopRecordingRef.current();
-    });
 
     return () => navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange);
   }, []);
@@ -309,7 +330,39 @@ export default function Badge() {
     return () => clearInterval(id);
   }, [state.status]);
 
-  const startMic = async (title: string) => {
+  // Drive the four dots from real audio level — direct DOM writes, no re-render.
+  useEffect(() => {
+    if (state.status !== 'recording') {
+      dotRefs.current.forEach(el => { if (el) el.style.transform = ''; });
+      return;
+    }
+    let raf = 0;
+    const buf = new Float32Array(1024);
+    const phases = [0.55, 1.0, 0.8, 0.45];
+    const tick = () => {
+      const an = analyserRef.current;
+      if (an) {
+        an.getFloatTimeDomainData(buf);
+        let sumSq = 0;
+        for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
+        const rms = Math.sqrt(sumSq / buf.length);
+        // fast attack, slow decay — mild motion, capped at 5px lift
+        levelRef.current = Math.max(rms, levelRef.current * 0.93);
+        const lift = Math.min(5, levelRef.current * 160);
+        const t = Date.now() / 260;
+        dotRefs.current.forEach((el, i) => {
+          if (!el) return;
+          const y = lift * phases[i] * (0.75 + 0.25 * Math.sin(t + i * 1.7));
+          el.style.transform = `translateY(${(-y).toFixed(1)}px)`;
+        });
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [state.status]);
+
+  const startMic = async () => {
     const reportHealth = (h: { micOk: boolean; systemAudioOk: boolean; message?: string }) => {
       try { (window as any).electronAPI?.sendAudioHealth(h); } catch { /* ignore */ }
     };
@@ -397,16 +450,30 @@ export default function Badge() {
       const audioCtx = new AudioContext({ sampleRate: 16000 });
       audioCtxRef.current = audioCtx;
       const destination = audioCtx.createMediaStreamDestination();
+      destinationRef.current = destination;
+      const micSource = audioCtx.createMediaStreamSource(micStream);
+      micSourceRef.current = micSource;
+      micStreamRef.current = micStream;
+
+      // Analyser taps the mixed signal so the pill dots move for anyone speaking,
+      // not just the local mic.
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyserRef.current = analyser;
 
       if (sysStream) {
         // Stereo: mic → left channel, system → right channel
         const merger = audioCtx.createChannelMerger(2);
-        audioCtx.createMediaStreamSource(micStream).connect(merger, 0, 0);
+        mergerRef.current = merger;
+        micSource.connect(merger, 0, 0);
         audioCtx.createMediaStreamSource(sysStream).connect(merger, 0, 1);
         merger.connect(destination);
+        merger.connect(analyser);
       } else {
         // Mono: mic only
-        audioCtx.createMediaStreamSource(micStream).connect(destination);
+        mergerRef.current = null;
+        micSource.connect(destination);
+        micSource.connect(analyser);
       }
 
       const mr = new MediaRecorder(destination.stream, { mimeType: 'audio/webm;codecs=opus' });
@@ -421,16 +488,46 @@ export default function Badge() {
     }
   };
 
+  // Live mic switch mid-recording: swap the source node feeding the existing graph.
+  // The MediaRecorder consumes the AudioContext destination, so it never notices.
+  const swapMicRef = useRef<(deviceId: string) => Promise<void>>(async () => {});
+  swapMicRef.current = async (deviceId: string) => {
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: deviceId && deviceId !== 'default' ? { deviceId: { exact: deviceId } } : true,
+      });
+    } catch {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    const src = ctx.createMediaStreamSource(stream);
+    if (mergerRef.current) {
+      src.connect(mergerRef.current, 0, 0);
+    } else if (destinationRef.current) {
+      src.connect(destinationRef.current);
+      if (analyserRef.current) src.connect(analyserRef.current);
+    }
+    try { micSourceRef.current?.disconnect(); } catch { /* ignore */ }
+    micStreamRef.current?.getTracks().forEach(t => t.stop());
+    micSourceRef.current = src;
+    micStreamRef.current = stream;
+  };
+
   const stopRecording = async () => {
     const mr = mediaRef.current;
     if (!mr) return;
     mediaRef.current = null;
     mr.stop();
     mr.stream.getTracks().forEach(t => t.stop());
+    micStreamRef.current?.getTracks().forEach(t => t.stop());
+    micStreamRef.current = null;
     audioCtxRef.current?.close();
     audioCtxRef.current = null;
+    analyserRef.current = null;
 
-    setState(s => ({ ...s, status: 'received' }));
+    setState(s => ({ ...s, status: 'saving' }));
 
     await new Promise<void>(resolve => { mr.onstop = () => resolve(); });
 
@@ -449,9 +546,8 @@ export default function Badge() {
       calendarEventId: calendarEventIdRef.current,
       stereo: hasStereoRef.current,
     });
-
-    // Close badge only after audio has been sent to main process
-    setTimeout(() => window.close(), 3000);
+    // Main owns the window lifecycle from here — it closes the pill once every
+    // queued transcription has drained (never mid-transcription).
   };
 
   stopRecordingRef.current = stopRecording;
@@ -492,178 +588,347 @@ export default function Badge() {
     return buffer;
   }
 
+  // ── Device test (left-click): real signal check, green or red per device ──
+
+  const runDeviceTest = async () => {
+    if (test) { // second click dismisses the result early
+      if (testTimerRef.current) clearTimeout(testTimerRef.current);
+      setTest(null);
+      return;
+    }
+    setTest({ mic: 'pending', spk: 'pending' });
+    const cfg = await (window as any).inwiseAPI.getConfig();
+
+    const micPromise = (async (): Promise<'ok' | 'fail'> => {
+      try {
+        const saved = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
+        let stream: MediaStream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: saved ? { deviceId: { exact: saved } } : true });
+        } catch (e: any) {
+          if (saved && (e?.name === 'OverconstrainedError' || e?.name === 'NotFoundError')) {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          } else {
+            throw e;
+          }
+        }
+        const track = stream.getAudioTracks()[0];
+        let ok = !!track && track.readyState === 'live' && !track.muted;
+        if (ok) {
+          // A live mic always yields at least noise-floor samples; flat zeros for
+          // 1.2s means a dead or disconnected virtual device.
+          const ctx = new AudioContext();
+          const src = ctx.createMediaStreamSource(stream);
+          const an = ctx.createAnalyser();
+          an.fftSize = 1024;
+          src.connect(an);
+          const buf = new Float32Array(an.fftSize);
+          let nonZero = false;
+          const t0 = Date.now();
+          while (Date.now() - t0 < 1200) {
+            an.getFloatTimeDomainData(buf);
+            for (let i = 0; i < buf.length; i++) { if (buf[i] !== 0) { nonZero = true; break; } }
+            if (nonZero) break;
+            await new Promise(r => setTimeout(r, 60));
+          }
+          await ctx.close();
+          ok = nonZero;
+        }
+        stream.getTracks().forEach(t => t.stop());
+        return ok ? 'ok' : 'fail';
+      } catch {
+        return 'fail';
+      }
+    })();
+
+    const spkPromise = (async (): Promise<'ok' | 'fail'> => {
+      try {
+        const dev = cfg?.speakerDeviceId && cfg.speakerDeviceId !== 'default' ? cfg.speakerDeviceId : undefined;
+        // sinkId in AudioContext options routes to the selected output (Chromium 110+).
+        const ctx: AudioContext = new (window as any).AudioContext(dev ? { sinkId: dev } : {});
+        await ctx.resume();
+        // One soft tick, well under the start-chime volume, so green means audible —
+        // a fully silent check would only prove the device exists.
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = 660;
+        osc.type = 'sine';
+        const t = ctx.currentTime;
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.05, t + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+        osc.start(t);
+        osc.stop(t + 0.14);
+        await new Promise(r => setTimeout(r, 220));
+        const ok = ctx.state === 'running';
+        await ctx.close();
+        return ok ? 'ok' : 'fail';
+      } catch {
+        return 'fail';
+      }
+    })();
+
+    micPromise.then(r => setTest(s => (s ? { ...s, mic: r } : s)));
+    spkPromise.then(r => setTest(s => (s ? { ...s, spk: r } : s)));
+    const [micR, spkR] = await Promise.all([micPromise, spkPromise]);
+    const hold = micR === 'fail' || spkR === 'fail' ? 8000 : 3500;
+    if (testTimerRef.current) clearTimeout(testTimerRef.current);
+    testTimerRef.current = setTimeout(() => setTest(null), hold);
+  };
+
+  // ── Interactions ──
+
+  const cancelCountdown = () => {
+    runIdRef.current++;
+    setState(s => ({ ...s, status: 'idle' }));
+    (window as any).inwiseAPI.pillCancelled?.();
+  };
+
+  const onPillClick = () => {
+    if (state.status === 'countdown' || state.status === 'preflight') { cancelCountdown(); return; }
+    if (state.status === 'reminder') { window.close(); return; }
+    void runDeviceTest();
+  };
+
+  const onContextMenu = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    let mics: { id: string; label: string }[] = [];
+    let speakers: { id: string; label: string }[] = [];
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      mics = devices
+        .filter(d => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'communications')
+        .map((d, i) => ({ id: d.deviceId, label: d.label || `Microphone ${i + 1}` }));
+      speakers = devices
+        .filter(d => d.kind === 'audiooutput' && d.deviceId && d.deviceId !== 'communications')
+        .map((d, i) => ({ id: d.deviceId, label: d.label || `Speaker ${i + 1}` }));
+    } catch { /* menu still opens without device submenus */ }
+    (window as any).inwiseAPI.showPillMenu?.({
+      mics,
+      speakers,
+      recording: statusRef.current === 'recording',
+      title: titleRef.current,
+    });
+  };
+
+  // ── Window sizing: pill is left-anchored, so the window grows rightward ──
+
+  const jobList = Object.values(jobs);
+  const busyJob = jobList.find(j => j.state === 'transcribing' || j.state === 'processing');
+  const errorJob = jobList.find(j => j.state === 'error');
+  const doneFlash = !busyJob && !errorJob && jobList.some(j => j.state === 'done');
+
+  const wantWidth = (() => {
+    if (state.status === 'error') return W_EXPANDED;
+    if (test) return W_MEDIUM;
+    if (state.status === 'countdown' || state.status === 'preflight') return W_MEDIUM;
+    if (state.status === 'reminder') return W_MEDIUM;
+    if (state.status === 'recording') return hover ? W_EXPANDED : W_COLLAPSED;
+    if (state.status === 'saving') return hover ? W_EXPANDED : W_COLLAPSED;
+    return W_COLLAPSED;
+  })();
+
+  useEffect(() => {
+    (window as any).inwiseAPI.resizePill?.(wantWidth, PILL_H);
+  }, [wantWidth]);
+
   const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
-  if (state.status === 'preflight') {
+  const truncate = (s: string, n = 30) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+
+  // ── Render pieces ──
+
+  const grip = <div style={styles.grip} title="Drag to move">⋮⋮</div>;
+
+  // Secondary slot: a previous meeting still transcribing (or failed) while the
+  // pill is busy with the current one.
+  const secondaryDot = (state.status === 'recording' || state.status === 'countdown' || state.status === 'preflight') && (busyJob || errorJob)
+    ? (errorJob ? <StatusDot tone="fail" /> : <span className="pill-spinner" />)
+    : null;
+
+  const renderDots = (fills: string[]) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      {fills.map((bg, i) => (
+        <span key={i} ref={el => { dotRefs.current[i] = el; }} style={{ ...styles.dot, background: bg }} />
+      ))}
+    </div>
+  );
+
+  const DIM = 'rgba(255,255,255,0.16)';
+  const TEAL = '#14b8a6';
+  const AMBER = '#f59e0b';
+
+  let body: React.ReactNode;
+
+  if (test) {
+    body = (
+      <>
+        {grip}
+        <span style={{ ...styles.subtext, color: '#94a3b8' }}>Mic</span>
+        <StatusDot tone={test.mic} />
+        <span style={{ ...styles.subtext, color: '#94a3b8', marginLeft: 4 }}>Speaker</span>
+        <StatusDot tone={test.spk} />
+        {(test.mic === 'fail' || test.spk === 'fail') && (
+          <span style={{ ...styles.subtext, color: '#fca5a5' }}>right-click to switch</span>
+        )}
+      </>
+    );
+  } else if (state.status === 'preflight') {
     const p = state.preflight ?? { mic: false, audio: false, ready: false };
-    const Check = ({ done, label }: { done: boolean; label: string }) => (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-        <span style={{
-          width: 14,
-          height: 14,
-          borderRadius: '50%',
-          background: done ? INWISE_TEAL : 'rgba(255,255,255,0.12)',
-          color: 'white',
-          fontSize: 10,
-          fontWeight: 700,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          transition: 'background 220ms ease',
-        }}>{done ? '✓' : ''}</span>
-        <span style={{
-          color: done ? '#f8fafc' : '#64748b',
-          fontSize: 11,
-          fontWeight: 500,
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-          transition: 'color 220ms ease',
-        }}>{label}</span>
-      </div>
+    body = (
+      <>
+        {grip}
+        {renderDots([
+          p.mic ? TEAL : DIM,
+          p.audio ? TEAL : (sysAudioWarning ? AMBER : DIM),
+          p.ready ? TEAL : DIM,
+          p.mic && p.ready ? TEAL : DIM,
+        ])}
+        <span style={styles.subtext}>checking…</span>
+      </>
     );
-    return (
-      <div style={styles.wrap}>
-        <div style={{ ...styles.badge, gap: 12 }}>
-          <Check done={p.mic} label="Mic" />
-          <Check done={p.audio} label="Audio" />
-          <Check done={p.ready} label="Ready" />
-          <span style={{ ...styles.label, color: '#94a3b8', fontSize: 11, fontWeight: 500 }}>· starting…</span>
-        </div>
-      </div>
+  } else if (state.status === 'countdown') {
+    body = (
+      <>
+        {grip}
+        <span style={{ color: INWISE_TEAL, fontSize: 18, fontWeight: 700, fontFamily: 'monospace', minWidth: 14, textAlign: 'center' }}>
+          {state.countdown}
+        </span>
+        <span style={styles.label} title={state.title}>{truncate(state.title)}</span>
+        <span style={styles.subtext}>click to cancel</span>
+      </>
     );
-  }
-
-  if (state.status === 'countdown') {
-    return (
-      <div style={styles.wrap}>
-        <div style={{ ...styles.badge, gap: 10 }}>
-          <span style={styles.label}>{state.title}</span>
-          <span style={{ color: '#94a3b8', fontSize: 12, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>· starting in</span>
-          <span style={{
-            color: INWISE_TEAL,
-            fontSize: 20,
-            fontWeight: 700,
-            fontFamily: 'monospace',
-            minWidth: 18,
-            textAlign: 'center',
-          }}>{state.countdown}</span>
-        </div>
-      </div>
+  } else if (state.status === 'error') {
+    body = (
+      <>
+        {grip}
+        <span style={{ fontSize: 14, flexShrink: 0 }}>⚠</span>
+        <span style={{ ...styles.label, color: '#fca5a5', maxWidth: 210 }} title={state.message}>{state.message || 'Error'}</span>
+        <button
+          className="pill-btn"
+          onClick={(e) => { e.stopPropagation(); beginFlowRef.current(titleRef.current); }}
+        >
+          Retry
+        </button>
+        <button
+          className="pill-btn pill-btn-ghost"
+          onClick={(e) => { e.stopPropagation(); void onContextMenu(e as any); }}
+        >
+          Devices
+        </button>
+      </>
     );
-  }
-
-  if (state.status === 'done') {
-    return (
-      <div style={styles.wrap}>
-        <div style={{ ...styles.badge, gap: 10 }}>
-          <span style={{ fontSize: 18 }}>✓</span>
-          <span style={{ ...styles.label, color: '#14b8a6' }}>Meeting saved</span>
-        </div>
-      </div>
+  } else if (state.status === 'reminder') {
+    body = (
+      <>
+        {grip}
+        <span style={{ fontSize: 13, flexShrink: 0 }}>🔔</span>
+        <span style={styles.label} title={state.title}>{truncate(state.title)}</span>
+        <span style={styles.subtext}>starting soon · click to dismiss</span>
+      </>
     );
-  }
-
-  if (state.status === 'error') {
-    return (
-      <div style={styles.wrap}>
-        <div style={{ ...styles.badge, gap: 10 }}>
-          <span style={{ fontSize: 16 }}>⚠</span>
-          <span style={{ ...styles.label, color: '#fca5a5', maxWidth: 200 }}>{state.message || 'Error'}</span>
-          <button
-            onClick={() => beginFlowRef.current(titleRef.current)}
-            style={{
-              background: INWISE_TEAL,
-              color: '#fff',
-              border: 'none',
-              borderRadius: 8,
-              padding: '6px 12px',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-              flexShrink: 0,
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      </div>
+  } else if (state.status === 'saving') {
+    // Post-stop: coalescing, then the transcription queue reports through jobs.
+    const label = errorJob
+      ? `Transcription failed — ${truncate(errorJob.title, 22)}`
+      : busyJob
+        ? `${busyJob.state === 'processing' ? 'Analyzing' : 'Transcribing'} — ${truncate(busyJob.title, 22)}`
+        : doneFlash
+          ? 'Saved'
+          : 'Saving…';
+    body = (
+      <>
+        {grip}
+        {errorJob ? <StatusDot tone="fail" /> : doneFlash ? <StatusDot tone="ok" /> : <span className="pill-spinner" />}
+        <span style={{ ...styles.label, color: errorJob ? '#fca5a5' : doneFlash ? TEAL : '#94a3b8', maxWidth: hover ? 300 : 140 }} title={errorJob?.message || label}>
+          {label}
+        </span>
+      </>
     );
-  }
-
-  if (state.status === 'received') {
-    return (
-      <div style={styles.wrap}>
-        <div style={{ ...styles.badge, gap: 10 }}>
-          <span style={{ fontSize: 16 }}>✓</span>
-          <span style={{ ...styles.label, color: '#14b8a6', maxWidth: 260 }}>Processing audio — this window will close automatically</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (state.status === 'processing') {
-    return (
-      <div style={styles.wrap}>
-        <div style={{ ...styles.badge, gap: 10 }}>
-          <span style={{ ...styles.dot, background: '#f59e0b', animation: 'pulse 1s infinite' }} />
-          <span style={styles.label}>{state.message || 'Processing…'}</span>
-        </div>
-      </div>
+  } else {
+    // recording (and brief idle)
+    const recording = state.status === 'recording';
+    body = (
+      <>
+        {grip}
+        {secondaryDot}
+        {renderDots(recording
+          ? [TEAL, sysAudioWarning ? AMBER : TEAL, TEAL, TEAL]
+          : [DIM, DIM, DIM, DIM])}
+        {recording && hover && (
+          <>
+            <span style={styles.label} title={state.title + (sysAudioWarning ? ' (mic only)' : '')}>{truncate(state.title)}</span>
+            {busyJob && (
+              <span style={{ ...styles.subtext, maxWidth: 90 }} title={`Transcribing — ${busyJob.title}`}>
+                ⟳ {truncate(busyJob.title, 14)}
+              </span>
+            )}
+            {sysAudioWarning && !busyJob && <span style={{ ...styles.subtext, color: AMBER }}>mic only</span>}
+            <span style={styles.timer}>{fmt(elapsed)}</span>
+            <button
+              className="pill-stop"
+              title="Stop & save"
+              onClick={(e) => { e.stopPropagation(); void stopRecording(); }}
+            >
+              <span className="pill-stop-inner" />
+            </button>
+          </>
+        )}
+      </>
     );
   }
 
-
-  const recordingBadgeStyle = state.glowActive ? {
-    ...styles.badge,
-    animation: 'inwise-glow-pulse 4.5s ease-in-out infinite',
-  } : {
-    ...styles.badge,
-    transition: 'box-shadow 700ms ease-out',
-  };
+  const pillStyle = state.status === 'recording'
+    ? { ...styles.pill, animation: 'inwise-glow 4.5s ease-in-out infinite' }
+    : state.status === 'error'
+      ? { ...styles.pill, boxShadow: '0 0 0 1px rgba(239,68,68,0.6), 0 6px 24px rgba(0,0,0,0.4)' }
+      : styles.pill;
 
   return (
     <div style={styles.wrap}>
       <style>{`
-        @keyframes inwise-glow-pulse {
-          0%, 100% {
-            box-shadow:
-              0 0 0 1.5px rgba(15, 115, 140, 0.65),
-              0 0 18px 5px rgba(15, 115, 140, 0.85),
-              0 0 38px 12px rgba(15, 115, 140, 0.55),
-              0 0 70px 22px rgba(15, 115, 140, 0.28);
-          }
-          50% {
-            box-shadow:
-              0 0 0 2px rgba(15, 115, 140, 0.78),
-              0 0 24px 7px rgba(15, 115, 140, 0.95),
-              0 0 48px 16px rgba(15, 115, 140, 0.65),
-              0 0 88px 28px rgba(15, 115, 140, 0.38);
-          }
+        @keyframes inwise-glow {
+          0%, 100% { box-shadow: 0 0 0 1px rgba(15,115,140,0.45), 0 0 10px 2px rgba(15,115,140,0.30), 0 6px 24px rgba(0,0,0,0.4); }
+          50%      { box-shadow: 0 0 0 1px rgba(15,115,140,0.60), 0 0 16px 4px rgba(15,115,140,0.42), 0 6px 24px rgba(0,0,0,0.4); }
         }
+        @keyframes pill-spin { to { transform: rotate(360deg); } }
+        .pill-spinner {
+          width: 9px; height: 9px; flex-shrink: 0;
+          border: 1.5px solid rgba(255,255,255,0.2);
+          border-top-color: #14b8a6;
+          border-radius: 50%;
+          display: inline-block;
+          animation: pill-spin 0.9s linear infinite;
+        }
+        .pill-btn {
+          background: ${INWISE_TEAL}; color: #fff; border: none; border-radius: 8px;
+          padding: 5px 10px; font-size: 11px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+        }
+        .pill-btn-ghost { background: rgba(255,255,255,0.08); color: #cbd5e1; }
+        .pill-btn-ghost:hover { background: rgba(255,255,255,0.15); }
+        .pill-stop {
+          width: 20px; height: 20px; flex-shrink: 0; cursor: pointer;
+          background: transparent; border: 1.5px solid #64748b; border-radius: 5px;
+          display: flex; align-items: center; justify-content: center;
+          transition: border-color 150ms ease;
+        }
+        .pill-stop:hover { border-color: #ef4444; }
+        .pill-stop-inner {
+          width: 8px; height: 8px; border-radius: 1.5px; background: #94a3b8;
+          transition: background 150ms ease;
+        }
+        .pill-stop:hover .pill-stop-inner { background: #ef4444; }
       `}</style>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-        <div style={recordingBadgeStyle}>
-          <div style={{ ...styles.dot, animation: 'pulse 1s infinite' }} />
-          <span style={styles.label}>{state.title}</span>
-          <Waveform active />
-          <span style={{ color: '#94a3b8', fontSize: 13, fontFamily: 'monospace', minWidth: 42 }}>{fmt(elapsed)}</span>
-          <button style={styles.stopBtn} onClick={stopRecording} title="Stop recording">
-            <div style={{ width: 10, height: 10, background: 'white', borderRadius: 2 }} />
-          </button>
-          <button style={styles.closeBtn} onClick={stopRecording} title="Stop & save recording">✕</button>
-        </div>
-        {sysAudioWarning && (
-          <div style={{
-            background: 'rgba(234,179,8,0.15)',
-            border: '1px solid rgba(234,179,8,0.5)',
-            borderRadius: 8,
-            padding: '4px 12px',
-            fontSize: 11,
-            color: '#fde047',
-            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-          }}>
-            ⚠ Mic only — system audio unavailable
-          </div>
-        )}
+      <div
+        style={pillStyle}
+        onClick={onPillClick}
+        onContextMenu={onContextMenu}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+      >
+        {body}
       </div>
     </div>
   );
