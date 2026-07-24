@@ -6,3 +6,6 @@ dist/
 release/
 release-v2/
 scripts/ralph/
+
+# local-only helper checkouts
+tools/
