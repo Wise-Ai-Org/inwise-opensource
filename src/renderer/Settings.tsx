@@ -17,6 +17,8 @@ interface Config {
   slackReadChannels: string[];
   slackWriteChannels: string[];
   slackInactivityWindowMin: number;
+  mcpEnabled?: boolean;
+  mcpPort?: number;
 }
 
 type CalendarProviderUI = 'google' | 'outlook' | 'ics';
@@ -1528,6 +1530,192 @@ function ZoomSettings() {
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
+// ── Connect to AI (local MCP server) ──────────────────────────────────────────
+
+function CopySnippet({ label, text }: { label: string; text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-500)' }}>{label}</span>
+        <button className="btn btn-secondary btn-sm" onClick={copy}>
+          {copied ? '✓ Copied' : 'Copy'}
+        </button>
+      </div>
+      <pre
+        style={{
+          margin: 0,
+          padding: '10px 12px',
+          background: 'var(--slate-50, #f8fafc)',
+          border: '1px solid var(--slate-200)',
+          borderRadius: 6,
+          fontSize: 12,
+          lineHeight: 1.5,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all',
+          userSelect: 'all',
+        }}
+      >{text}</pre>
+    </div>
+  );
+}
+
+interface McpStatus {
+  running: boolean;
+  port: number | null;
+  error: string | null;
+}
+
+function ConnectToAISection() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [port, setPort] = useState<number>(43117);
+  const [portInput, setPortInput] = useState('43117');
+  const [status, setStatus] = useState<McpStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refreshStatus = async () => {
+    const s = await (window as any).inwiseAPI.mcpStatus?.();
+    if (s) setStatus(s);
+  };
+
+  useEffect(() => {
+    (window as any).inwiseAPI.getConfig?.().then((cfg: any) => {
+      if (cfg) {
+        setEnabled(cfg.mcpEnabled !== false);
+        const p = typeof cfg.mcpPort === 'number' ? cfg.mcpPort : 43117;
+        setPort(p);
+        setPortInput(String(p));
+      }
+    });
+    refreshStatus();
+  }, []);
+
+  const toggle = async (next: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await (window as any).inwiseAPI.mcpSetEnabled?.(next);
+      setEnabled(next);
+      if (result && result.ok === false) setError(result.error ?? 'Could not start the server.');
+      await refreshStatus();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyPort = async () => {
+    const p = Number(portInput);
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await (window as any).inwiseAPI.mcpSetPort?.(p);
+      if (result && result.ok === false) {
+        setError(result.error ?? 'Could not change the port.');
+      } else {
+        setPort(p);
+      }
+      await refreshStatus();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (enabled === null) return null;
+
+  const effectivePort = status?.running && status.port ? status.port : port;
+  const url = `http://127.0.0.1:${effectivePort}/mcp`;
+  const claudeCodeSnippet = `claude mcp add --transport http inwise-local ${url}`;
+  const claudeDesktopSnippet = `{
+  "mcpServers": {
+    "inwise-local": {
+      "command": "npx",
+      "args": ["mcp-remote", "${url}"]
+    }
+  }
+}`;
+
+  return (
+    <div className="settings-section">
+      <div className="settings-section-title">Connect to AI</div>
+      <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16, lineHeight: 1.6 }}>
+        Let Claude Desktop or Claude Code answer questions about your meetings.
+        Inwise runs a small server on this machine only (127.0.0.1) — read-only,
+        and nothing ever leaves your computer.
+      </p>
+
+      <div className="form-group">
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={busy}
+            onChange={e => toggle(e.target.checked)}
+          />
+          <span className="form-label" style={{ margin: 0 }}>Enable local AI access</span>
+        </label>
+        <div style={{ fontSize: 12, marginTop: 6, paddingLeft: 24 }}>
+          {status?.running ? (
+            <span style={{ color: 'var(--teal)' }}>● Running at {url}</span>
+          ) : enabled && (error || status?.error) ? (
+            <span style={{ color: 'var(--red-500, #ef4444)' }}>● Not running — {error ?? status?.error}</span>
+          ) : (
+            <span style={{ color: 'var(--slate-400)' }}>○ Stopped</span>
+          )}
+        </div>
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">Port</label>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            type="number"
+            className="form-input"
+            style={{ maxWidth: 120 }}
+            min={1024}
+            max={65535}
+            value={portInput}
+            onChange={e => setPortInput(e.target.value)}
+          />
+          <button
+            className="btn btn-secondary btn-sm"
+            disabled={busy || Number(portInput) === port}
+            onClick={applyPort}
+          >
+            Apply
+          </button>
+        </div>
+        <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
+          Only change this if another app already uses port 43117.
+        </span>
+      </div>
+
+      <div className="form-group">
+        <CopySnippet label="Claude Code — run this in a terminal" text={claudeCodeSnippet} />
+        <CopySnippet
+          label="Claude Desktop — add to Settings → Developer → Edit Config (claude_desktop_config.json)"
+          text={claudeDesktopSnippet}
+        />
+      </div>
+
+      <div style={{ fontSize: 12, color: 'var(--slate-500)', lineHeight: 1.7 }}>
+        <strong style={{ color: 'var(--slate-600, #475569)' }}>Things you can ask once connected:</strong>
+        <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+          <li>"What did we decide in last Tuesday's meeting?"</li>
+          <li>"Summarize my most recent meeting with Alex."</li>
+          <li>"Which action items from this week are still open?"</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 function IntegrationsSection() {
   const [jiraStatus, setJiraStatus] = useState<{ connected: boolean; info: any } | null>(null);
   const [aggregates, setAggregates] = useState<IntegrationAggregate[]>([]);
@@ -2487,6 +2675,9 @@ export default function Settings() {
             <div className="settings-section-title">Slack Integration</div>
             <SlackSettings />
           </div>
+
+          {/* Connect to AI (local MCP server) */}
+          <ConnectToAISection />
 
           {/* Integrations (US-003) */}
           <IntegrationsSection />

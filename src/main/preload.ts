@@ -76,6 +76,11 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   zoomListRecordings: () => ipcRenderer.invoke('zoom:listRecordings'),
   zoomFetchTranscript: (recording: any) => ipcRenderer.invoke('zoom:fetchTranscript', recording),
 
+  // Local MCP server ("Connect to AI")
+  mcpStatus: () => ipcRenderer.invoke('mcp:status'),
+  mcpSetEnabled: (enabled: boolean) => ipcRenderer.invoke('mcp:setEnabled', enabled),
+  mcpSetPort: (port: number) => ipcRenderer.invoke('mcp:setPort', port),
+
   // Slack
   slackConnect: (token: string) => ipcRenderer.invoke('slack:connect', token),
   slackDisconnect: () => ipcRenderer.invoke('slack:disconnect'),

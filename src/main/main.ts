@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
-import { getConfig, setConfig, getSorJiraPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, CalendarSubscription } from './config';
+import { getConfig, setConfig, getSorJiraPrefs, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
@@ -69,6 +69,7 @@ import { ingestNormalizedTranscript } from './zoom-transcript-ingestion';
 import { validateToken, isSlackConnected, listChannels as slackListChannels } from './slack-client';
 import { normalizeSlackThread } from './slack-normalizer';
 import { startSlackPoller, stopSlackPoller, registerSlackPipeline } from './slack-poller';
+import { startMcpServer, stopMcpServer, getMcpStatus } from './mcp-server';
 
 Menu.setApplicationMenu(null);
 
@@ -2237,6 +2238,14 @@ app.whenReady().then(() => {
   // Start Slack poller (delayed 10 s to let the main window settle)
   setTimeout(() => startSlackPoller(), 10_000);
 
+  // Local MCP server ("Connect to AI") — loopback-only, read-only.
+  const mcpPrefs = getMcpPrefs();
+  if (mcpPrefs.enabled) {
+    startMcpServer(mcpPrefs.port).then((r) => {
+      if (!r.ok) log('error', 'mcp:startup', r.error || 'Failed to start local MCP server');
+    });
+  }
+
   // One-time scan for SoR writes stuck in 'pending' / 'pending-approval' / 'retrying'
   // for more than 24 hours â€” these indicate an interrupted/crashed prior session.
   setTimeout(async () => {
@@ -2315,9 +2324,35 @@ ipcMain.handle('slack:listChannels', async () => {
   catch (e: any) { return { ok: false, error: e.message }; }
 });
 
+// ── Local MCP server IPC handlers ──────────────────────────────────────────
+
+ipcMain.handle('mcp:status', () => getMcpStatus());
+
+ipcMain.handle('mcp:setEnabled', async (_e, enabled: boolean) => {
+  setConfig({ mcpEnabled: !!enabled });
+  if (enabled) {
+    return startMcpServer(getMcpPrefs().port);
+  }
+  await stopMcpServer();
+  return { ok: true, port: null };
+});
+
+ipcMain.handle('mcp:setPort', async (_e, port: number) => {
+  const p = Math.floor(Number(port));
+  if (!Number.isInteger(p) || p < 1024 || p > 65535) {
+    return { ok: false, port: null, error: 'Port must be a number between 1024 and 65535.' };
+  }
+  setConfig({ mcpPort: p });
+  if (getMcpPrefs().enabled) {
+    return startMcpServer(p);
+  }
+  return { ok: true, port: p };
+});
+
 app.on('before-quit', () => {
   calendarWatcher.stop();
   stopSlackPoller();
+  void stopMcpServer();
   destroyTray();
   globalShortcut.unregisterAll();
   mainWindow?.removeAllListeners('close');

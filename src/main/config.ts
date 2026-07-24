@@ -53,6 +53,10 @@ interface Config {
   welcomeBackLastSeenAt: string | null;
   calendarFreeRecordingEnabled: boolean;
   sor: SorPrefs;
+  /** Local MCP server ("Connect to AI"): loopback-only, read-only access for MCP clients like Claude Desktop / Claude Code. */
+  mcpEnabled: boolean;
+  /** Port the local MCP server listens on (127.0.0.1 only). */
+  mcpPort: number;
 }
 
 const store = new Store<Config>({
@@ -81,6 +85,8 @@ const store = new Store<Config>({
     lastOpenedAt: null,
     welcomeBackLastSeenAt: null,
     calendarFreeRecordingEnabled: true,
+    mcpEnabled: true,
+    mcpPort: 43117,
     sor: {
       dismissedReceiptIds: [],
       jira: { approvalGateEnabled: false, approvalThreshold: 0.6 },
@@ -104,6 +110,20 @@ export function getSorJiraPrefs(): SorJiraPrefs {
   return {
     approvalGateEnabled: jira?.approvalGateEnabled ?? false,
     approvalThreshold: typeof jira?.approvalThreshold === 'number' ? jira.approvalThreshold : 0.6,
+  };
+}
+
+/**
+ * Safe accessor for local MCP server prefs. Stores created before these keys
+ * existed may not have them persisted — fall back to the shipped defaults
+ * (enabled, port 43117) instead of `undefined`.
+ */
+export function getMcpPrefs(): { enabled: boolean; port: number } {
+  const enabled = store.get('mcpEnabled') as boolean | undefined;
+  const port = store.get('mcpPort') as number | undefined;
+  return {
+    enabled: typeof enabled === 'boolean' ? enabled : true,
+    port: typeof port === 'number' && Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : 43117,
   };
 }
 
