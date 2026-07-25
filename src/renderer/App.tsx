@@ -145,11 +145,23 @@ export default function App() {
       setConflict(payload);
     };
     const onResolved = () => setConflict(null);
+    const onOpenDetails = (payload: { meetingId: string; focusTab?: string }) => {
+      if (!payload?.meetingId) return;
+      requestPopupNav({ meetingId: payload.meetingId });
+    };
+    // Pill context menu's "Settings" (and future deep links) land here.
+    const onNavigate = (target: string) => {
+      if (target) requestPopupNav({ view: target as LegacyView });
+    };
     api.on('meeting:conflict', onConflict);
     api.on('meeting:conflict:resolved', onResolved);
+    api.on('meeting:open-details', onOpenDetails);
+    api.on('app:navigate', onNavigate);
     return () => {
       api.off?.('meeting:conflict', onConflict);
       api.off?.('meeting:conflict:resolved', onResolved);
+      api.off?.('meeting:open-details', onOpenDetails);
+      api.off?.('app:navigate', onNavigate);
     };
   }, []);
 

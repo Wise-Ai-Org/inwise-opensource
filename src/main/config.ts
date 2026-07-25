@@ -57,6 +57,9 @@ interface Config {
   mcpEnabled: boolean;
   /** Port the local MCP server listens on (127.0.0.1 only). */
   mcpPort: number;
+  /** Last dragged position of the recorder pill; null = default top-left. */
+  pillX: number | null;
+  pillY: number | null;
 }
 
 const store = new Store<Config>({
@@ -87,6 +90,8 @@ const store = new Store<Config>({
     calendarFreeRecordingEnabled: true,
     mcpEnabled: true,
     mcpPort: 43117,
+    pillX: null,
+    pillY: null,
     sor: {
       dismissedReceiptIds: [],
       jira: { approvalGateEnabled: false, approvalThreshold: 0.6 },
