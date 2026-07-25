@@ -8,6 +8,31 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
   const [agenda, setAgenda] = useState<string[] | null>(null);
   const [agendaLoading, setAgendaLoading] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [mergePicking, setMergePicking] = useState(false);
+  const [mergeOptions, setMergeOptions] = useState<Array<{ _id: string; name: string; email?: string | null }>>([]);
+  const [mergeConfirm, setMergeConfirm] = useState<{ _id: string; name: string } | null>(null);
+  const [merging, setMerging] = useState(false);
+
+  const openMergePicker = async () => {
+    const rows = await api().getPeople?.().catch(() => []);
+    setMergeOptions((rows || []).filter((p: any) => p._id !== personId && p.name));
+    setMergePicking(true);
+  };
+
+  const doMerge = async () => {
+    if (!mergeConfirm) return;
+    setMerging(true);
+    try {
+      // Keep the person currently on screen; fold the picked duplicate into them.
+      await api().mergePeople?.(personId, mergeConfirm._id);
+      setMergePicking(false);
+      setMergeConfirm(null);
+      const refreshed = await api().getPerson?.(personId);
+      if (refreshed) setPerson(refreshed);
+    } finally {
+      setMerging(false);
+    }
+  };
 
   useEffect(() => {
     api().getPerson?.(personId)
@@ -128,7 +153,52 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
               </>
             )}
 
-            <div className="pp-row" style={{ justifyContent: 'center', paddingTop: 2 }}>
+            {mergePicking && (
+              <>
+                <div className="pp-seclabel">
+                  {mergeConfirm ? 'Confirm merge' : `Which person is also ${person.name}?`}
+                </div>
+                {mergeConfirm ? (
+                  <div className="pp-card" style={{ background: 'var(--pp-teal-tint)', borderColor: 'var(--pp-teal-line)' }}>
+                    <div style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.5 }}>
+                      Merge <b>{mergeConfirm.name}</b> into <b>{person.name}</b>? Their meetings, open items, and
+                      voiceprints combine, and "{mergeConfirm.name}" becomes an alias. This can't be undone.
+                    </div>
+                    <div className="pp-row" style={{ marginTop: 10, gap: 8 }}>
+                      <button className="pp-btn pp-solid" style={{ flex: 1, padding: '6px 0' }} disabled={merging} onClick={doMerge}>
+                        {merging ? 'Merging…' : 'Merge them'}
+                      </button>
+                      <button className="pp-btn pp-ghost" style={{ flex: 1, padding: '6px 0' }} onClick={() => setMergeConfirm(null)}>Back</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="pp-listcard">
+                    {mergeOptions.length === 0 && (
+                      <div className="pp-setrow" style={{ cursor: 'default' }}>
+                        <span className="pp-meta">No one else to merge with.</span>
+                      </div>
+                    )}
+                    {mergeOptions.map(p => (
+                      <button key={p._id} className="pp-setrow" onClick={() => setMergeConfirm({ _id: p._id, name: p.name })}>
+                        <span className="pp-avatar">{initials(p.name)}</span>
+                        <div className="pp-grow">
+                          <div className="pp-rowlabel" style={{ fontSize: 13 }}>{p.name}</div>
+                          {p.email && <div className="pp-rowsub">{p.email}</div>}
+                        </div>
+                      </button>
+                    ))}
+                    <div className="pp-setrow" style={{ cursor: 'default', justifyContent: 'center' }}>
+                      <button className="pp-quiet-action" onClick={() => setMergePicking(false)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="pp-row" style={{ justifyContent: 'center', gap: 18, paddingTop: 2 }}>
+              {!mergePicking && (
+                <button className="pp-quiet-action" onClick={openMergePicker}>Same as another person…</button>
+              )}
               {confirmArchive ? (
                 <span className="pp-row" style={{ gap: 10 }}>
                   <span className="pp-meta">Archive {person.name}?</span>

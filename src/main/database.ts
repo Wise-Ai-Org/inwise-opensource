@@ -510,14 +510,20 @@ export async function getPerson(id: string): Promise<any> {
 
   const personName = ((person as any).name || '').toLowerCase();
   const personEmail = ((person as any).email || '').toLowerCase();
+  // Match meetings under every identity this person is known by — primary
+  // name/email plus aliases absorbed from merged duplicate records.
+  const identities = [
+    personName, personEmail,
+    ...((((person as any).altNames || []) as string[]).map(s => s.toLowerCase())),
+    ...((((person as any).altEmails || []) as string[]).map(s => s.toLowerCase())),
+  ].filter(Boolean);
   const allMeetings = await meetingsDb.findAsync({});
   const personMeetings = allMeetings
     .filter((m: any) =>
       (m.attendees || []).some((a: string) => {
         if (!a) return false;
         const lower = a.toLowerCase();
-        return (personName && (lower.includes(personName) || personName.includes(lower))) ||
-               (personEmail && (lower.includes(personEmail) || personEmail.includes(lower)));
+        return identities.some(idn => lower.includes(idn) || idn.includes(lower));
       })
     )
     .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -794,6 +800,15 @@ export async function mergePeople(keepId: string, dropId: string): Promise<void>
   if (drop.archived === false) patch.archived = false;
   const insights = [...(keep.relationshipInsights || []), ...(drop.relationshipInsights || [])];
   if (insights.length) patch.relationshipInsights = [...new Set(insights)];
+  // Never lose an identity: the dropped record's name/email become aliases so
+  // meeting-attendee matching still finds this person under either identity.
+  if (drop.name && normalizeNameStr(drop.name) !== normalizeNameStr(keep.name)) {
+    patch.altNames = [...new Set([...(keep.altNames || []), drop.name])];
+  }
+  const dropEmail = (drop.email || '').trim().toLowerCase();
+  if (dropEmail && dropEmail !== (keep.email || '').trim().toLowerCase()) {
+    patch.altEmails = [...new Set([...(keep.altEmails || []), drop.email])];
+  }
   if (Object.keys(patch).length) {
     await peopleDb.updateAsync({ _id: keepId }, { $set: patch }, {});
   }
@@ -999,14 +1014,20 @@ export async function getPersonAgendaContext(personId: string): Promise<string |
 
   const personName = ((person as any).name || '').toLowerCase();
   const personEmail = ((person as any).email || '').toLowerCase();
+  // Match meetings under every identity this person is known by — primary
+  // name/email plus aliases absorbed from merged duplicate records.
+  const identities = [
+    personName, personEmail,
+    ...((((person as any).altNames || []) as string[]).map(s => s.toLowerCase())),
+    ...((((person as any).altEmails || []) as string[]).map(s => s.toLowerCase())),
+  ].filter(Boolean);
   const allMeetings = await meetingsDb.findAsync({});
   const personMeetings = allMeetings
     .filter((m: any) =>
       (m.attendees || []).some((a: string) => {
         if (!a) return false;
         const lower = a.toLowerCase();
-        return (personName && (lower.includes(personName) || personName.includes(lower))) ||
-               (personEmail && (lower.includes(personEmail) || personEmail.includes(lower)));
+        return identities.some(idn => lower.includes(idn) || idn.includes(lower));
       })
     )
     .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
