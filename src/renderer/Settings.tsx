@@ -1640,12 +1640,13 @@ function ConnectToAISection() {
     }
   }
 }`;
+  const codexSnippet = `codex mcp add inwise-local -- npx -y mcp-remote ${url}`;
 
   return (
     <div className="settings-section">
       <div className="settings-section-title">Connect to AI</div>
       <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16, lineHeight: 1.6 }}>
-        Let Claude Desktop or Claude Code answer questions about your meetings.
+        Let Claude Desktop, Claude Code, or Codex answer questions about your meetings.
         Inwise runs a small server on this machine only (127.0.0.1) — read-only,
         and nothing ever leaves your computer.
       </p>
@@ -1702,6 +1703,7 @@ function ConnectToAISection() {
           label="Claude Desktop — add to Settings → Developer → Edit Config (claude_desktop_config.json)"
           text={claudeDesktopSnippet}
         />
+        <CopySnippet label="Codex CLI — run this in a terminal" text={codexSnippet} />
       </div>
 
       <div style={{ fontSize: 12, color: 'var(--slate-500)', lineHeight: 1.7 }}>
