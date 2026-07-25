@@ -15,6 +15,7 @@ interface MeetingRow {
   calendarEventId?: string;
   durationMin?: number;
   meetingUrl?: string;
+  hasTranscript?: boolean;
 }
 
 interface LiveEvent { id: string; title: string; attendees?: string[] }
@@ -177,6 +178,7 @@ export default function MeetingsTab() {
         source: 'db' as const,
         calendarEventId: m.calendarEventId,
         durationMin: m.duration ? Math.round(m.duration / 60) : undefined,
+        hasTranscript: !!m.transcript,
       }));
 
       const dbCalIds = new Set(fromDb.map(m => m.calendarEventId).filter(Boolean));
@@ -424,7 +426,12 @@ export default function MeetingsTab() {
                 <div className="pp-title-sm">{m.title}</div>
                 <div className="pp-meta" style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                   {isDb && m.hasInsights && <span className="pp-chip pp-teal">Recorded</span>}
-                  {isDb && !m.hasInsights && <span className="pp-chip">{m.status === 'recording' ? 'Recording…' : 'Processing'}</span>}
+                  {isDb && !m.hasInsights && m.status === 'recording' && <span className="pp-chip">Recording…</span>}
+                  {isDb && !m.hasInsights && m.status !== 'recording' && (m.hasTranscript || m.status === 'transcribed' || m.status === 'pending')
+                    ? <span className="pp-chip">Processing</span> : null}
+                  {isDb && !m.hasInsights && !m.hasTranscript && m.status !== 'recording' && m.status !== 'transcribed' && m.status !== 'pending' && (
+                    <span className="pp-chip">No transcript</span>
+                  )}
                   {m.actionItemCount > 0 && <span className="pp-chip">{m.actionItemCount} action item{m.actionItemCount === 1 ? '' : 's'}</span>}
                   {pendingCount > 0 && (
                     <button

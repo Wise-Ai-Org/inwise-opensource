@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
 import JiraMappingModal from '../views/communications/JiraMappingModal';
+import TranscriptUploadModal from '../views/communications/TranscriptUploadModal';
 
 interface Insights {
   summary?: string;
@@ -17,6 +18,7 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
   const [loaded, setLoaded] = useState(false);
   const [jiraConnected, setJiraConnected] = useState(false);
   const [mappingOpen, setMappingOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   useEffect(() => {
     api().getMeeting?.(meetingId)
@@ -63,6 +65,16 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               )}
               {!insights.summary && meeting.transcript && (
                 <div className="pp-meta" style={{ marginTop: 8 }}>Transcribed — insights not extracted yet.</div>
+              )}
+              {!meeting.transcript && meeting.status !== 'recording' && (
+                <div style={{ marginTop: 10 }}>
+                  <div className="pp-meta" style={{ lineHeight: 1.5 }}>
+                    No transcript was captured for this meeting. If notes or a transcript exist elsewhere, add them here.
+                  </div>
+                  <button className="pp-btn pp-ghost" style={{ marginTop: 8, padding: '6px 14px' }} onClick={() => setUploadOpen(true)}>
+                    Upload transcript for this meeting
+                  </button>
+                </div>
               )}
             </div>
 
@@ -139,6 +151,16 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
                 Map action items to Jira
               </button>
             )}
+
+            <TranscriptUploadModal
+              isOpen={uploadOpen}
+              onClose={() => setUploadOpen(false)}
+              onUpload={async ({ content }) => {
+                const updated = await api().attachTranscriptToMeeting?.(meetingId, content);
+                if (updated) setMeeting(updated);
+                setUploadOpen(false);
+              }}
+            />
 
             {mappingOpen && (
               <JiraMappingModal

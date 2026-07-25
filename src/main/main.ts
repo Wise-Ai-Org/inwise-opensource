@@ -5,6 +5,7 @@ import * as os from 'os';
 
 import { getConfig, setConfig, getSorJiraPrefs, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
+import { fuzzyNameScore, SAME_PERSON_THRESHOLD } from './fuzzy-name';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
 import { transcribeAudio, setupWhisper } from './transcriber';
@@ -20,7 +21,8 @@ import {
   markLikelyDone, confirmLikelyDone, rejectLikelyDone,
   getPeople, getArchivedPeople, getPerson, addPerson, addTrackedPeople,
   archivePerson, unarchivePerson, getSuggestedPeople, updatePersonProfile,
-  dedupePeopleByName,
+  dedupePeopleByName, dedupeCalendarSyncMeetings,
+  getPersonMergeCandidates, mergePeople, markNotSamePerson,
   getPersonAgendaContext, getMeetingAgendaContext,
   saveVoicePrint, getVoicePrints, getVoicePrint, deleteVoicePrint,
   getUserVoicePrint, getVoicePrintByName, getVoicePrintsWithEmbeddings,
@@ -382,11 +384,14 @@ async function autoEnrollVoices(audioPath: string, attendees: string[]): Promise
   // Compute embedding for this clip
   const clipEmbedding = computeEmbeddingFromWav(rightChannelClip);
 
-  // Check which attendees already have voice prints
+  // Check which attendees already have voice prints — fuzzy name match so
+  // "Zee" and "Zeeshan Khan" resolve to the same enrolled voice.
+  const allPrints = await getVoicePrints();
   const enrolled: string[] = [];
   const unenrolled: string[] = [];
   for (const name of otherAttendees) {
-    const existing = await getVoicePrintByName(name);
+    const existing = await getVoicePrintByName(name)
+      || (allPrints as any[]).find(p => !p.isUser && fuzzyNameScore(p.name, name) >= SAME_PERSON_THRESHOLD);
     if (existing) enrolled.push(name);
     else unenrolled.push(name);
   }
@@ -1173,6 +1178,32 @@ ipcMain.handle('db:createMeetingFromTranscript', async (_e, data) => {
   } catch {
     return meeting;
   }
+});
+
+// Attach a transcript to an EXISTING meeting (e.g. a calendar-synced meeting
+// that was never recorded) and run insight extraction on it.
+ipcMain.handle('db:attachTranscriptToMeeting', async (_e, meetingId: string, content: string) => {
+  const existing = await getMeeting(meetingId);
+  await updateMeetingTranscript(meetingId, content, existing?.duration || 0);
+  try {
+    const insights = await extractInsights(content);
+    await saveInsights(meetingId, insights);
+  } catch (err: any) {
+    await updateMeetingStatus(meetingId, 'transcribed');
+    log('error', 'attach-transcript:extract-failed', err?.message || String(err));
+  }
+  return getMeeting(meetingId);
+});
+
+// ── Person identity (fuzzy merge triage) ─────────────────────────────────────
+ipcMain.handle('people:mergeCandidates', async () => getPersonMergeCandidates());
+ipcMain.handle('people:merge', async (_e, keepId: string, dropId: string) => {
+  await mergePeople(keepId, dropId);
+  return { success: true };
+});
+ipcMain.handle('people:notSame', async (_e, idA: string, idB: string) => {
+  await markNotSamePerson(idA, idB);
+  return { success: true };
 });
 
 // Tasks
@@ -2308,6 +2339,9 @@ app.whenReady().then(() => {
   initDatabase();
   void dedupePeopleByName().then(n => {
     if (n > 0) log('info', 'people:dedupe', `merged ${n} duplicate person record(s)`);
+  }).catch(() => { /* repair pass is best-effort */ });
+  void dedupeCalendarSyncMeetings().then(n => {
+    if (n > 0) log('info', 'meetings:dedupe', `removed ${n} duplicate calendar-sync meeting row(s)`);
   }).catch(() => { /* repair pass is best-effort */ });
   initSorWriteLog();
   initPendingApprovals();

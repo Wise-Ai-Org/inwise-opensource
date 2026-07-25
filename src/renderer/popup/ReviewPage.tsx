@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, useNav } from './nav';
 import { useReview } from './PopupShell';
-import type { ApprovalItem, UnknownVoiceItem } from './useReviewItems';
+import type { ApprovalItem, UnknownVoiceItem, MergeCandidateItem } from './useReviewItems';
 import { RecentSyncActivity } from '../Communications';
 
 const DISMISSED_SUGGESTIONS_KEY = 'pp-dismissed-suggested-people';
@@ -219,6 +219,57 @@ function UnknownVoiceCard({ voice, onDone }: { voice: UnknownVoiceItem; onDone: 
   );
 }
 
+// ── Same-person triage card ──────────────────────────────────────────────────
+
+function MergeCandidateCard({ pair, onDone }: { pair: MergeCandidateItem; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const who = (p: MergeCandidateItem['a']) =>
+    [p.email, p.role || p.company].filter(Boolean).join(' · ') || 'no email on file';
+
+  const act = async (fn: () => Promise<any>) => {
+    setBusy(true);
+    try { await fn(); onDone(); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="pp-card">
+      <div className="pp-row" style={{ marginBottom: 6 }}>
+        <span className="pp-chip pp-teal">Same person?</span>
+        <span className="pp-grow" />
+        <span className="pp-meta">{Math.round(pair.score * 100)}% name match</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div>
+          <div className="pp-title-sm">{pair.a.name}</div>
+          <div className="pp-meta">{who(pair.a)}</div>
+        </div>
+        <div>
+          <div className="pp-title-sm">{pair.b.name}</div>
+          <div className="pp-meta">{who(pair.b)}</div>
+        </div>
+      </div>
+      <div className="pp-row" style={{ marginTop: 9, gap: 8 }}>
+        <button
+          className="pp-btn pp-solid"
+          style={{ flex: 1, padding: '6px 0' }}
+          disabled={busy}
+          onClick={() => act(() => api().mergePeople?.(pair.a._id, pair.b._id))}
+        >
+          Merge
+        </button>
+        <button
+          className="pp-btn pp-ghost"
+          style={{ flex: 1, padding: '6px 0' }}
+          disabled={busy}
+          onClick={() => act(() => api().markNotSamePerson?.(pair.a._id, pair.b._id))}
+        >
+          Keep separate
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Pending AI-task card ─────────────────────────────────────────────────────
 
 function PendingTaskCard({ task, onDone }: { task: { _id: string; title: string; description?: string; dueDate?: string | null; aiConfidence?: number }; onDone: () => void }) {
@@ -309,7 +360,7 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
     review.reload();
   };
 
-  const total = review.approvals.length + review.pendingTasks.length + suggested.length + review.unknownVoices.length;
+  const total = review.approvals.length + review.pendingTasks.length + review.mergeCandidates.length + suggested.length + review.unknownVoices.length;
   const empty = review.loaded && total === 0 && !showPriorities;
 
   return (
@@ -382,6 +433,15 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {review.mergeCandidates.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="pp-seclabel">Possible duplicate people</div>
+            {review.mergeCandidates.map(pair => (
+              <MergeCandidateCard key={`${pair.a._id}-${pair.b._id}`} pair={pair} onDone={review.reload} />
+            ))}
           </div>
         )}
 

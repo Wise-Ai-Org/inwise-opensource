@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   getMeeting: (id: string) => ipcRenderer.invoke('db:getMeeting', id),
   deleteMeeting: (id: string) => ipcRenderer.invoke('db:deleteMeeting', id),
   createMeetingFromTranscript: (data: any) => ipcRenderer.invoke('db:createMeetingFromTranscript', data),
+  attachTranscriptToMeeting: (meetingId: string, content: string) =>
+    ipcRenderer.invoke('db:attachTranscriptToMeeting', meetingId, content),
   reviewMeeting: (id: string) => ipcRenderer.invoke('db:reviewMeeting', id),
 
   // Tasks
@@ -53,6 +55,9 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   archivePerson: (id: string) => ipcRenderer.invoke('db:archivePerson', id),
   unarchivePerson: (id: string) => ipcRenderer.invoke('db:unarchivePerson', id),
   getSuggestedPeople: () => ipcRenderer.invoke('db:getSuggestedPeople'),
+  getPersonMergeCandidates: () => ipcRenderer.invoke('people:mergeCandidates'),
+  mergePeople: (keepId: string, dropId: string) => ipcRenderer.invoke('people:merge', keepId, dropId),
+  markNotSamePerson: (idA: string, idB: string) => ipcRenderer.invoke('people:notSame', idA, idB),
 
   // Briefing + Task Scoring
   getBriefing: () => ipcRenderer.invoke('briefing:get'),

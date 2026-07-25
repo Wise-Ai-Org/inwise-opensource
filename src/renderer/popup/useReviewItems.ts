@@ -45,9 +45,16 @@ export interface PendingTaskItem {
   source?: { type: string };
 }
 
+export interface MergeCandidateItem {
+  a: { _id: string; name: string; email?: string | null; company?: string | null; role?: string | null };
+  b: { _id: string; name: string; email?: string | null; company?: string | null; role?: string | null };
+  score: number;
+}
+
 export interface ReviewItems {
   approvals: ApprovalItem[];
   pendingTasks: PendingTaskItem[];
+  mergeCandidates: MergeCandidateItem[];
   suggested: SuggestedPersonItem[];
   unknownVoices: UnknownVoiceItem[];
   scoredTasks: ScoredTaskItem[];
@@ -66,6 +73,7 @@ function parseUnidentifiedCandidates(label: string): string[] {
 export function useReviewItems(): ReviewItems {
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [pendingTasks, setPendingTasks] = useState<PendingTaskItem[]>([]);
+  const [mergeCandidates, setMergeCandidates] = useState<MergeCandidateItem[]>([]);
   const [suggested, setSuggested] = useState<SuggestedPersonItem[]>([]);
   const [unknownVoices, setUnknownVoices] = useState<UnknownVoiceItem[]>([]);
   const [scoredTasks, setScoredTasks] = useState<ScoredTaskItem[]>([]);
@@ -79,7 +87,9 @@ export function useReviewItems(): ReviewItems {
       a.getVoicePrints?.(),
       a.getScoredTasks?.(),
       a.getTasks?.(),
-    ]).then(([ap, sp, vp, st, tk]) => {
+      a.getPersonMergeCandidates?.(),
+    ]).then(([ap, sp, vp, st, tk, mc]) => {
+      setMergeCandidates(mc.status === 'fulfilled' && Array.isArray(mc.value) ? mc.value : []);
       setApprovals(ap.status === 'fulfilled' && Array.isArray(ap.value) ? ap.value : []);
       setPendingTasks(
         tk.status === 'fulfilled' && Array.isArray(tk.value)
@@ -135,11 +145,12 @@ export function useReviewItems(): ReviewItems {
   return {
     approvals,
     pendingTasks,
+    mergeCandidates,
     suggested,
     unknownVoices,
     scoredTasks,
     loaded,
-    count: approvals.length + pendingTasks.length + suggested.length + unknownVoices.length,
+    count: approvals.length + pendingTasks.length + mergeCandidates.length + suggested.length + unknownVoices.length,
     reload,
   };
 }

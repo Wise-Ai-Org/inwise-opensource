@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import Datastore from '@seald-io/nedb';
 import { getConfig } from './config';
 import { isSelf } from './self-identity';
+import { fuzzyNameScore, normalizeNameStr, SAME_PERSON_THRESHOLD, REVIEW_THRESHOLD } from './fuzzy-name';
 
 let meetingsDb: Datastore;
 let tasksDb: Datastore;
@@ -647,13 +648,16 @@ export async function addPerson(data: {
     (m.attendees || []).some((a: string) => a && a.toLowerCase().includes(name.toLowerCase()))
   ) : [];
 
-  // Dedup: an existing person with the same email or the same (case-insensitive)
-  // name is the same person — update them instead of inserting a duplicate.
+  // Dedup: an existing person with the same email, or a fuzzy-matching name
+  // (nicknames, initials, typos — same matcher as the cloud contact graph),
+  // is the same person — update them instead of inserting a duplicate.
+  // A prior "keep separate" decision (notSameAs) always wins.
   const email = (data.email || '').trim().toLowerCase();
   const all = await peopleDb.findAsync({});
   const existing = (all as any[]).find(p =>
     (email && (p.email || '').trim().toLowerCase() === email) ||
-    (name && (p.name || '').trim().toLowerCase() === name.toLowerCase())
+    (name && fuzzyNameScore(p.name, name) >= SAME_PERSON_THRESHOLD &&
+      !(p.notSameAs || []).some((n: string) => normalizeNameStr(n) === normalizeNameStr(name)))
   );
   if (existing) {
     const patch: Record<string, any> = { trackedBy: true, archived: false };
@@ -683,10 +687,17 @@ export async function addPerson(data: {
 export async function addTrackedPeople(names: string[]): Promise<any[]> {
   const results = [];
   for (const name of names) {
-    // Exact-name match (anchored + escaped) — an unanchored regex made "Zee"
-    // match "Zeeshan" and silently attach to the wrong person.
+    // Exact match first, then fuzzy (nicknames/initials/typos) at the
+    // same-person threshold, honoring prior "keep separate" decisions.
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const existing = await peopleDb.findOneAsync({ name: new RegExp(`^${escaped}$`, 'i') } as any);
+    let existing = await peopleDb.findOneAsync({ name: new RegExp(`^${escaped}$`, 'i') } as any);
+    if (!existing) {
+      const all = await peopleDb.findAsync({});
+      existing = (all as any[]).find(p =>
+        fuzzyNameScore(p.name, name) >= SAME_PERSON_THRESHOLD &&
+        !(p.notSameAs || []).some((n: string) => normalizeNameStr(n) === normalizeNameStr(name))
+      ) || null;
+    }
     if (existing) {
       await peopleDb.updateAsync({ _id: (existing as any)._id }, { $set: { trackedBy: true } }, {});
       results.push(existing);
@@ -737,6 +748,98 @@ export async function dedupePeopleByName(): Promise<number> {
     }
     if (Object.keys(patch).length) {
       await peopleDb.updateAsync({ _id: keeper._id }, { $set: patch }, {});
+    }
+  }
+  return removed;
+}
+
+/**
+ * Fuzzy merge candidates for human triage: pairs of active people whose names
+ * score in [REVIEW_THRESHOLD, 1) and who haven't been marked "not the same".
+ * Auto-merge never happens at this band — the Review inbox decides.
+ */
+export async function getPersonMergeCandidates(): Promise<Array<{ a: any; b: any; score: number }>> {
+  const people = (await peopleDb.findAsync({ archived: { $ne: true } })) as any[];
+  const out: Array<{ a: any; b: any; score: number }> = [];
+  for (let i = 0; i < people.length; i++) {
+    for (let j = i + 1; j < people.length; j++) {
+      const a = people[i], b = people[j];
+      if (!a.name || !b.name) continue;
+      // Different explicit emails = different identities unless names are identical
+      const ea = (a.email || '').trim().toLowerCase();
+      const eb = (b.email || '').trim().toLowerCase();
+      const score = fuzzyNameScore(a.name, b.name);
+      if (score >= 1 && ea && eb && ea !== eb) continue; // exact dupes with distinct emails still triage below
+      if (score < REVIEW_THRESHOLD) continue;
+      const aNot = (a.notSameAs || []).some((n: string) => normalizeNameStr(n) === normalizeNameStr(b.name));
+      const bNot = (b.notSameAs || []).some((n: string) => normalizeNameStr(n) === normalizeNameStr(a.name));
+      if (aNot || bNot) continue;
+      const pick = (p: any) => ({ _id: p._id, name: p.name, email: p.email, company: p.company, role: p.role });
+      out.push({ a: pick(a), b: pick(b), score });
+    }
+  }
+  return out.sort((x, y) => y.score - x.score).slice(0, 10);
+}
+
+/** Merge person `dropId` into `keepId`: fill empty fields, OR flags, delete the duplicate. */
+export async function mergePeople(keepId: string, dropId: string): Promise<void> {
+  const keep = await peopleDb.findOneAsync({ _id: keepId }) as any;
+  const drop = await peopleDb.findOneAsync({ _id: dropId }) as any;
+  if (!keep || !drop) return;
+  const patch: Record<string, any> = {};
+  for (const field of ['email', 'company', 'role', 'bio', 'notes'] as const) {
+    if (!keep[field] && drop[field]) patch[field] = drop[field];
+  }
+  if (drop.trackedBy) patch.trackedBy = true;
+  if (drop.archived === false) patch.archived = false;
+  const insights = [...(keep.relationshipInsights || []), ...(drop.relationshipInsights || [])];
+  if (insights.length) patch.relationshipInsights = [...new Set(insights)];
+  if (Object.keys(patch).length) {
+    await peopleDb.updateAsync({ _id: keepId }, { $set: patch }, {});
+  }
+  await peopleDb.removeAsync({ _id: dropId }, {});
+  // Voiceprints named after the dropped spelling keep working — rename to the kept name.
+  const prints = await voicePrintsDb.findAsync({}) as any[];
+  for (const vp of prints) {
+    if (vp.name && normalizeNameStr(vp.name) === normalizeNameStr(drop.name) && keep.name) {
+      await voicePrintsDb.updateAsync({ _id: vp._id }, { $set: { name: keep.name } }, {});
+    }
+  }
+}
+
+/** Record a "these are different people" decision so the pair is never re-suggested. */
+export async function markNotSamePerson(idA: string, idB: string): Promise<void> {
+  const a = await peopleDb.findOneAsync({ _id: idA }) as any;
+  const b = await peopleDb.findOneAsync({ _id: idB }) as any;
+  if (!a || !b) return;
+  await peopleDb.updateAsync({ _id: idA }, { $set: { notSameAs: [...new Set([...(a.notSameAs || []), b.name])] } }, {});
+  await peopleDb.updateAsync({ _id: idB }, { $set: { notSameAs: [...new Set([...(b.notSameAs || []), a.name])] } }, {});
+}
+
+/**
+ * One-time repair: calendar-sync created duplicate meeting rows for the same
+ * (calendarEventId, date) before the idempotency check existed. Keep the row
+ * with a transcript/insights (or the oldest bare row), delete the rest.
+ */
+export async function dedupeCalendarSyncMeetings(): Promise<number> {
+  const all = (await meetingsDb.findAsync({})) as any[];
+  const byKey = new Map<string, any[]>();
+  for (const m of all) {
+    if (!m.calendarEventId) continue;
+    const key = `${m.calendarEventId}|${m.date}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key)!.push(m);
+  }
+  let removed = 0;
+  for (const group of byKey.values()) {
+    if (group.length < 2) continue;
+    const score = (m: any) => (m.insights ? 2 : 0) + (m.transcript ? 1 : 0);
+    group.sort((a, b) => score(b) - score(a) || String(a.createdAt || a.date).localeCompare(String(b.createdAt || b.date)));
+    for (const dup of group.slice(1)) {
+      // Never delete a row that holds real content the keeper lacks
+      if (score(dup) > 0 && score(dup) >= score(group[0])) continue;
+      await meetingsDb.removeAsync({ _id: dup._id }, {});
+      removed++;
     }
   }
   return removed;
