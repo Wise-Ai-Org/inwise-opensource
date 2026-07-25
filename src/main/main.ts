@@ -1950,7 +1950,14 @@ ipcMain.handle('sor:reject', async (_e, id: string): Promise<{ ok: boolean; erro
 });
 
 // Recording
-ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string) => {
+// People the user tagged on the pre-record sheet for an ad-hoc recording (no
+// calendar event). Consumed by flushPendingAudio so the created meeting carries
+// them as attendees — which routes insights to their person pages and feeds the
+// voice-enrollment cascade.
+let adHocAttendees: string[] = [];
+
+ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string, attendees?: string[]) => {
+  adHocAttendees = Array.isArray(attendees) ? attendees.filter(Boolean) : [];
   createOverlayWindow(title, calendarEventId);
   updateTrayMenu(mainWindow!, true);
   isRecordingActive = true;
@@ -2182,10 +2189,14 @@ async function flushPendingAudio(key: string): Promise<void> {
     const tmpPath = path.join(recordingsDir, `inwise-rec-${Date.now()}.wav`);
     fs.writeFileSync(tmpPath, wav);
     updateTrayMenu(mainWindow!, false);
-    // Look up attendees from the calendar event if available
-    const attendees = entry.calendarEventId
+    // Attendees: calendar event first; for ad-hoc recordings, the people the
+    // user tagged on the pre-record sheet. Merged so a linked event plus extra
+    // tagged people keeps both.
+    const calendarAttendees = entry.calendarEventId
       ? calendarWatcher.getUpcomingEvents().find((e: any) => e.id === entry.calendarEventId)?.attendees || []
       : [];
+    const attendees = [...new Set([...calendarAttendees, ...adHocAttendees])];
+    adHocAttendees = [];
 
     const jobId = path.basename(tmpPath);
     activePipelineJobs++;

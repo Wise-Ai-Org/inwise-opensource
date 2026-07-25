@@ -147,8 +147,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
     ipcRenderer.invoke('ai:suggestTaskFields', data),
 
   // Recording (manual)
-  startRecording: (title: string, calendarEventId?: string) =>
-    ipcRenderer.invoke('recording:start', title, calendarEventId),
+  startRecording: (title: string, calendarEventId?: string, attendees?: string[]) =>
+    ipcRenderer.invoke('recording:start', title, calendarEventId, attendees),
   stopRecording: () => ipcRenderer.invoke('recording:stop'),
 
   // Whisper setup

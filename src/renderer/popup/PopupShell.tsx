@@ -50,6 +50,13 @@ function MenuDropdown({ onClose }: { onClose: () => void }) {
         >
           <span className="pp-menu-icon">↻</span>Check for updates
         </button>
+        <button
+          className="pp-menu-item pp-quiet"
+          role="menuitem"
+          onClick={() => window.location.reload()}
+        >
+          <span className="pp-menu-icon">⟳</span>Reload UI
+        </button>
         <div className="pp-menu-item pp-quiet" style={{ cursor: 'default' }}>
           <span className="pp-menu-icon">i</span>About Inwise{version ? ` · v${version}` : ''}
         </div>

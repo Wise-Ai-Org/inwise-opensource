@@ -42,8 +42,18 @@ function RecordSheet({ liveEvent, onClose, onStarted }: {
   const [starting, setStarting] = useState(false);
 
   useEffect(() => {
+    // Rank chips by recency of contact — the people you're meeting these days
+    // come first; the rest are reachable via typing a title anyway.
     api().getPeople?.().then((rows: any[]) => {
-      setPeople((rows || []).filter(p => p?.name).slice(0, 8).map(p => ({ _id: p._id, name: p.name })));
+      const named = (rows || []).filter(p => p?.name);
+      named.sort((a: any, b: any) =>
+        (a.daysSinceLastContact ?? Infinity) - (b.daysSinceLastContact ?? Infinity));
+      setPeople(named.slice(0, 8).map(p => ({ _id: p._id, name: p.name })));
+    }).catch(() => {});
+    // The tab-level live-event hint can be minutes old; ask for the active
+    // calendar event at the moment the sheet opens.
+    api().getActiveCalendarEvent?.().then((ev: any) => {
+      if (ev?.id && ev?.title) setLinkedEvent(prev => prev ?? { id: ev.id, title: ev.title });
     }).catch(() => {});
     api().getAudioHealth?.().then((h: any) => {
       if (h && typeof h === 'object') setAudioOk(!(h.micSilent || h.systemSilent || h.error));
@@ -59,7 +69,7 @@ function RecordSheet({ liveEvent, onClose, onStarted }: {
       (linkedEvent ? linkedEvent.title : title.trim()) ||
       (chosen.length ? `Meeting with ${chosen.join(', ')}` : 'Recorded conversation');
     try {
-      await api().startRecording?.(finalTitle, linkedEvent?.id);
+      await api().startRecording?.(finalTitle, linkedEvent?.id, chosen);
       onStarted();
     } finally {
       setStarting(false);
