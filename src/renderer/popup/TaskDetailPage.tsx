@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
+import { OwnerPicker } from './TasksTab';
 
 type Status = 'todo' | 'inProgress' | 'completed';
 const STATUS_LABEL: Record<Status, string> = { todo: 'To Do', inProgress: 'In Progress', completed: 'Done' };
@@ -109,18 +110,14 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
             <div className="pp-listcard">
               <div className="pp-setrow" style={{ cursor: 'default' }}>
                 <div className="pp-grow pp-rowlabel" style={{ fontWeight: 500 }}>Who's responsible</div>
-                <select
+                <OwnerPicker
                   value={task.owner || ''}
-                  onChange={e => patch({ owner: e.target.value || null })}
+                  userName={userName}
+                  people={people}
+                  onChange={(name) => patch({ owner: name || null })}
+                  onPersonAdded={(name) => setPeople(p => (p.includes(name) ? p : [...p, name]))}
                   style={{ border: 'none', outline: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit', maxWidth: 160 }}
-                >
-                  <option value="">Unassigned</option>
-                  {userName && <option value={userName}>{userName} (me)</option>}
-                  {people.filter(n => n !== userName).map(n => <option key={n} value={n}>{n}</option>)}
-                  {task.owner && !people.includes(task.owner) && task.owner !== userName && (
-                    <option value={task.owner}>{task.owner}</option>
-                  )}
-                </select>
+                />
               </div>
               <div className="pp-setrow" style={{ cursor: 'default' }}>
                 <div className="pp-grow pp-rowlabel" style={{ fontWeight: 500 }}>Due date</div>

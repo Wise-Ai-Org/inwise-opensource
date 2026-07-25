@@ -19,6 +19,76 @@ interface TaskRow {
 
 const STATUS_LABEL: Record<Status, string> = { todo: 'To Do', inProgress: 'In Progress', completed: 'Done' };
 
+// ── Owner picker: me + tracked people + "Someone else…" free entry ──────────
+// A typed name goes through addTrackedPeople, whose fuzzy matcher attaches it
+// to an existing person when it can ("Bob" → "Robert Smith") — the canonical
+// name comes back as the owner, so no duplicate people are minted.
+
+export function OwnerPicker({ value, userName, people, onChange, onPersonAdded, style }: {
+  value: string;
+  userName: string;
+  people: string[];
+  onChange: (name: string) => void;
+  onPersonAdded?: (name: string) => void;
+  style?: React.CSSProperties;
+}) {
+  const [typing, setTyping] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [resolving, setResolving] = useState(false);
+
+  const confirmTyped = async () => {
+    const name = typed.trim();
+    if (!name) { setTyping(false); return; }
+    setResolving(true);
+    try {
+      const results = await api().addTrackedPeople?.([name]).catch(() => null);
+      const canonical = results?.[0]?.name || name;
+      onChange(canonical);
+      onPersonAdded?.(canonical);
+    } finally {
+      setResolving(false);
+      setTyping(false);
+      setTyped('');
+    }
+  };
+
+  if (typing) {
+    return (
+      <span className="pp-search" style={{ padding: '4px 8px', maxWidth: 190 }}>
+        <input
+          autoFocus
+          placeholder={resolving ? 'Adding…' : 'Type a name — Enter'}
+          value={typed}
+          disabled={resolving}
+          onChange={e => setTyped(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') confirmTyped();
+            if (e.key === 'Escape') { setTyping(false); setTyped(''); }
+          }}
+          onBlur={() => { if (typed.trim()) confirmTyped(); else setTyping(false); }}
+        />
+      </span>
+    );
+  }
+
+  return (
+    <select
+      value={value}
+      onChange={e => {
+        if (e.target.value === '__other__') { setTyping(true); return; }
+        onChange(e.target.value);
+      }}
+      style={style}
+    >
+      <option value="">Unassigned</option>
+      {userName && <option value={userName}>{userName} (me)</option>}
+      {people.filter(n => n !== userName).map(n => <option key={n} value={n}>{n}</option>)}
+      {value && !people.includes(value) && value !== userName && <option value={value}>{value}</option>}
+      <option value="__other__">Someone else…</option>
+    </select>
+  );
+}
+
 // ── Create-task sheet — deliberately not engineering-shaped ──────────────────
 // Just: what, who's responsible, best if done by, priority, details.
 
@@ -102,12 +172,14 @@ function CreateTaskSheet({ onClose, onCreated }: { onClose: () => void; onCreate
         <div className="pp-listcard">
           <div style={rowStyle}>
             <span style={{ fontSize: 13, color: 'var(--navy)' }}>Who's responsible</span>
-            <select value={owner} onChange={e => { touched.current.owner = true; setOwner(e.target.value); }} style={controlStyle}>
-              <option value="">Unassigned</option>
-              {userName && <option value={userName}>{userName} (me)</option>}
-              {people.filter(n => n !== userName).map(n => <option key={n} value={n}>{n}</option>)}
-              {owner && !people.includes(owner) && owner !== userName && <option value={owner}>{owner}</option>}
-            </select>
+            <OwnerPicker
+              value={owner}
+              userName={userName}
+              people={people}
+              onChange={(name) => { touched.current.owner = true; setOwner(name); }}
+              onPersonAdded={(name) => setPeople(p => (p.includes(name) ? p : [...p, name]))}
+              style={controlStyle}
+            />
           </div>
           <div style={{ ...rowStyle, borderTop: '1px solid var(--slate-100)' }}>
             <span style={{ fontSize: 13, color: 'var(--navy)' }}>Best if done by</span>
