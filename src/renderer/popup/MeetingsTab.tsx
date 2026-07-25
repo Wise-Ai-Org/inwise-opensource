@@ -14,6 +14,7 @@ interface MeetingRow {
   source: 'db' | 'calendar';
   calendarEventId?: string;
   durationMin?: number;
+  meetingUrl?: string;
 }
 
 interface LiveEvent { id: string; title: string; attendees?: string[] }
@@ -146,6 +147,9 @@ export default function MeetingsTab() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [agendas, setAgendas] = useState<Record<string, string[] | 'loading' | 'failed'>>({});
 
   const reload = useCallback(async () => {
     try {
@@ -187,6 +191,7 @@ export default function MeetingsTab() {
           actionItemCount: 0,
           status: 'pending',
           source: 'calendar' as const,
+          meetingUrl: e.url,
         }));
 
       setMeetings([...fromDb, ...fromCal]);
@@ -219,14 +224,44 @@ export default function MeetingsTab() {
     const days: Date[] = [];
     const today = new Date();
     const monday = new Date(today);
-    monday.setDate(today.getDate() - ((today.getDay() + 6) % 7)); // Monday of this week
+    monday.setDate(today.getDate() - ((today.getDay() + 6) % 7) + weekOffset * 7);
     for (let i = 0; i < 7; i++) {
       const d = new Date(monday);
       d.setDate(monday.getDate() + i);
       days.push(d);
     }
     return days;
-  }, []);
+  }, [weekOffset]);
+
+  const weekLabel = useMemo(() => {
+    const first = week[0], last = week[6];
+    const sameMonth = first.getMonth() === last.getMonth();
+    const a = first.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    const b = last.toLocaleDateString([], sameMonth ? { day: 'numeric' } : { month: 'short', day: 'numeric' });
+    return `${a} – ${b}`;
+  }, [week]);
+
+  const shiftWeek = (dir: number) => {
+    setWeekOffset(o => {
+      const next = o + dir;
+      const monday = new Date();
+      monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7) + next * 7);
+      setSelectedDay(next === 0 ? new Date() : monday);
+      return next;
+    });
+  };
+
+  const loadAgenda = async (ev: MeetingRow & { when: Date }) => {
+    if (agendas[ev._id]) return;
+    setAgendas(a => ({ ...a, [ev._id]: 'loading' }));
+    try {
+      const res = await api().generateMeetingAgenda?.(ev.title, ev.attendees || []);
+      const items: string[] = Array.isArray(res) ? res : Array.isArray(res?.agenda) ? res.agenda : [];
+      setAgendas(a => ({ ...a, [ev._id]: items.length ? items : 'failed' }));
+    } catch {
+      setAgendas(a => ({ ...a, [ev._id]: 'failed' }));
+    }
+  };
 
   const meetingsWithDates = useMemo(
     () => meetings
@@ -278,6 +313,16 @@ export default function MeetingsTab() {
 
   return (
     <div className="pp-body">
+      <div className="pp-row" style={{ justifyContent: 'space-between', padding: '0 2px' }}>
+        <button className="pp-quiet-action" aria-label="Previous week" onClick={() => shiftWeek(-1)}>‹</button>
+        <span className="pp-row" style={{ gap: 8 }}>
+          <span className="pp-meta" style={{ fontWeight: 600 }}>{weekLabel}</span>
+          {weekOffset !== 0 && (
+            <button className="pp-link" onClick={() => { setWeekOffset(0); setSelectedDay(new Date()); }}>Today</button>
+          )}
+        </span>
+        <button className="pp-quiet-action" aria-label="Next week" onClick={() => shiftWeek(1)}>›</button>
+      </div>
       <div className="pp-datestrip">
         {week.map(d => {
           const selected = sameDay(d, selectedDay);
@@ -300,8 +345,15 @@ export default function MeetingsTab() {
                 {[
                   briefing.topTasks?.length ? `${briefing.topTasks.length} top task${briefing.topTasks.length === 1 ? '' : 's'} today` : null,
                   briefing.overdueCommitments?.length ? `${briefing.overdueCommitments.length} overdue commitment${briefing.overdueCommitments.length === 1 ? '' : 's'}` : null,
-                  review.count > 0 ? `${review.count} to review` : null,
                 ].filter(Boolean).join(' · ')}
+                {review.count > 0 && (
+                  <>
+                    {' · '}
+                    <button className="pp-link" style={{ fontSize: 11.5, padding: 0 }} onClick={() => push({ kind: 'review' })}>
+                      {review.count} to review
+                    </button>
+                  </>
+                )}
               </div>
             </div>
             <button className="pp-quiet-action" aria-label="Dismiss briefing" onClick={() => setBriefingDismissed(true)}>✕</button>
@@ -347,13 +399,21 @@ export default function MeetingsTab() {
 
       {dayMeetings.map(m => {
         const pendingCount = pendingByMeetingTitle.get(m.title) || 0;
-        const clickable = m.source === 'db';
+        const isDb = m.source === 'db';
+        const isExpanded = expandedEventId === m._id;
+        const agenda = agendas[m._id];
+        const onCardClick = isDb
+          ? () => push({ kind: 'meeting', id: m._id, title: m.title })
+          : () => {
+              setExpandedEventId(isExpanded ? null : m._id);
+              if (!isExpanded) loadAgenda(m);
+            };
         return (
           <div
             key={m._id}
-            className={`pp-card meeting-card ${clickable ? 'pp-clickable' : ''}`}
-            onClick={clickable ? () => push({ kind: 'meeting', id: m._id, title: m.title }) : undefined}
-            role={clickable ? 'button' : undefined}
+            className="pp-card meeting-card pp-clickable"
+            onClick={onCardClick}
+            role="button"
           >
             <div className="pp-row">
               <div className="pp-timecol">
@@ -362,9 +422,9 @@ export default function MeetingsTab() {
               </div>
               <div className="pp-grow">
                 <div className="pp-title-sm">{m.title}</div>
-                <div className="pp-meta" style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {m.source === 'db' && m.hasInsights && <span className="pp-chip pp-teal">Recorded</span>}
-                  {m.source === 'db' && !m.hasInsights && <span className="pp-chip">{m.status === 'recording' ? 'Recording…' : 'Processing'}</span>}
+                <div className="pp-meta" style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {isDb && m.hasInsights && <span className="pp-chip pp-teal">Recorded</span>}
+                  {isDb && !m.hasInsights && <span className="pp-chip">{m.status === 'recording' ? 'Recording…' : 'Processing'}</span>}
                   {m.actionItemCount > 0 && <span className="pp-chip">{m.actionItemCount} action item{m.actionItemCount === 1 ? '' : 's'}</span>}
                   {pendingCount > 0 && (
                     <button
@@ -374,11 +434,40 @@ export default function MeetingsTab() {
                       {pendingCount} approval{pendingCount === 1 ? '' : 's'} waiting
                     </button>
                   )}
-                  {m.source === 'calendar' && <span style={{ fontSize: 11.5 }}>Not started · will auto-join</span>}
+                  {!isDb && <span style={{ fontSize: 11.5 }}>Not started · will auto-join</span>}
+                  {!isDb && m.meetingUrl && (
+                    <button
+                      className="pp-chip pp-teal"
+                      onClick={e => { e.stopPropagation(); api().openExternal?.(m.meetingUrl!); }}
+                    >
+                      Join
+                    </button>
+                  )}
                 </div>
               </div>
-              {clickable && <span className="pp-chevron">›</span>}
+              <span className="pp-chevron">{isDb ? '›' : isExpanded ? '⌄' : '›'}</span>
             </div>
+            {!isDb && isExpanded && (
+              <div style={{ marginTop: 10, borderTop: '1px solid var(--slate-100)', paddingTop: 10 }} onClick={e => e.stopPropagation()}>
+                <div className="pp-seclabel" style={{ padding: '0 0 6px' }}>Suggested agenda</div>
+                {agenda === 'loading' && (
+                  <div className="pp-row" style={{ gap: 8 }}>
+                    <span className="pp-pulse" />
+                    <span className="pp-meta">Drafting an agenda from your history…</span>
+                  </div>
+                )}
+                {agenda === 'failed' && (
+                  <div className="pp-meta">Inwise needs a bit more meeting history to draft this agenda.</div>
+                )}
+                {Array.isArray(agenda) && (
+                  <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {agenda.map((item, i) => (
+                      <li key={i} style={{ fontSize: 12, color: 'var(--slate-700)', lineHeight: 1.45 }}>{item}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
         );
       })}

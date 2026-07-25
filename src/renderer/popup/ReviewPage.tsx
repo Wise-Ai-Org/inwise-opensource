@@ -2,8 +2,23 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, useNav } from './nav';
 import { useReview } from './PopupShell';
 import type { ApprovalItem, UnknownVoiceItem } from './useReviewItems';
+import { RecentSyncActivity } from '../Communications';
 
 const DISMISSED_SUGGESTIONS_KEY = 'pp-dismissed-suggested-people';
+
+/** True when a 16-bit PCM WAV buffer contains (near-)silence only. */
+export function isSilentWav(bytes: Uint8Array): boolean {
+  if (bytes.length < 100) return true;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let peak = 0;
+  // Sample every 50th frame past the 44-byte header — plenty for a peak check.
+  for (let i = 44; i + 1 < bytes.length; i += 100) {
+    const s = Math.abs(view.getInt16(i, true));
+    if (s > peak) peak = s;
+    if (peak > 500) return false;
+  }
+  return peak <= 500;
+}
 
 function loadDismissed(): Set<string> {
   try {
@@ -110,23 +125,35 @@ function UnknownVoiceCard({ voice, onDone }: { voice: UnknownVoiceItem; onDone: 
   const [naming, setNaming] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  const [playError, setPlayError] = useState<string | null>(null);
+
   const play = async () => {
     if (playing) {
       audioRef.current?.pause();
       setPlaying(false);
       return;
     }
+    setPlayError(null);
     try {
       const raw = await api().getVoicePrintAudio?.(voice._id);
-      const bytes = raw?.data ? new Uint8Array(raw.data) : new Uint8Array(raw);
-      const blob = new Blob([bytes], { type: 'audio/wav' });
+      // IPC returns { audioClip, name }; the clip may arrive as Uint8Array or a
+      // plain numeric-keyed object depending on serialization.
+      const clip = raw?.audioClip;
+      if (!clip) { setPlayError('No audio stored for this clip.'); return; }
+      const bytes = clip instanceof Uint8Array ? clip : new Uint8Array(Object.values(clip) as number[]);
+      if (isSilentWav(bytes)) {
+        setPlayError('This clip is silent — the call audio channel recorded nothing.');
+        return;
+      }
+      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'audio/wav' });
       const audio = new Audio(URL.createObjectURL(blob));
       audioRef.current = audio;
       audio.onended = () => setPlaying(false);
       await audio.play();
       setPlaying(true);
-    } catch {
+    } catch (e: any) {
       setPlaying(false);
+      setPlayError(e?.message || 'Could not play this clip.');
     }
   };
 
@@ -185,6 +212,43 @@ function UnknownVoiceCard({ voice, onDone }: { voice: UnknownVoiceItem; onDone: 
         <span className="pp-grow" />
         <button className="pp-quiet-action" onClick={dismiss}>Dismiss</button>
       </div>
+      {playError && (
+        <div className="pp-meta" style={{ color: 'var(--pp-amber-ink)', marginTop: 6, lineHeight: 1.4 }}>{playError}</div>
+      )}
+    </div>
+  );
+}
+
+// ── Pending AI-task card ─────────────────────────────────────────────────────
+
+function PendingTaskCard({ task, onDone }: { task: { _id: string; title: string; description?: string; dueDate?: string | null; aiConfidence?: number }; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const act = async (status: 'approved' | 'rejected') => {
+    setBusy(true);
+    try {
+      await api().updateTask?.(task._id, { approval: { status } });
+      onDone();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="pp-card">
+      <div className="pp-row" style={{ marginBottom: 6 }}>
+        <span className="pp-chip pp-teal">New task from meeting</span>
+        <span className="pp-grow" />
+        {typeof task.aiConfidence === 'number' && <span className="pp-meta">{Math.round(task.aiConfidence * 100)}% confident</span>}
+      </div>
+      <div className="pp-title-sm">{task.title}</div>
+      {task.description && (
+        <div className="pp-meta" style={{ marginTop: 4, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+          {task.description}
+        </div>
+      )}
+      <div className="pp-row" style={{ marginTop: 9, gap: 8 }}>
+        <button className="pp-btn pp-solid" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={() => act('approved')}>Approve</button>
+        <button className="pp-btn pp-ghost pp-danger" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={() => act('rejected')}>Reject</button>
+      </div>
     </div>
   );
 }
@@ -238,7 +302,14 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
     review.reload();
   };
 
-  const total = review.approvals.length + suggested.length + review.unknownVoices.length;
+  const approveAllTasks = async () => {
+    for (const t of review.pendingTasks) {
+      try { await api().updateTask?.(t._id, { approval: { status: 'approved' } }); } catch { /* keep going */ }
+    }
+    review.reload();
+  };
+
+  const total = review.approvals.length + review.pendingTasks.length + suggested.length + review.unknownVoices.length;
   const empty = review.loaded && total === 0 && !showPriorities;
 
   return (
@@ -265,6 +336,20 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
             <div className="pp-seclabel">Waiting to sync — approve first</div>
             {review.approvals.map(row => (
               <ApprovalCard key={row.pending._id} row={row} onDone={review.reload} />
+            ))}
+          </div>
+        )}
+
+        {review.pendingTasks.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="pp-row">
+              <div className="pp-seclabel pp-grow" style={{ padding: '6px 4px 0' }}>Tasks waiting for approval</div>
+              {review.pendingTasks.length > 1 && (
+                <button className="pp-link" onClick={approveAllTasks}>Approve all ({review.pendingTasks.length})</button>
+              )}
+            </div>
+            {review.pendingTasks.map(t => (
+              <PendingTaskCard key={t._id} task={t} onDone={review.reload} />
             ))}
           </div>
         )}
@@ -333,6 +418,9 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
             ))}
           </div>
         )}
+
+        {/* Jira write receipts — expandable rows with retry on failures */}
+        <RecentSyncActivity />
       </div>
     </>
   );

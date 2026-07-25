@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
+import JiraMappingModal from '../views/communications/JiraMappingModal';
 
 interface Insights {
   summary?: string;
@@ -14,12 +15,17 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
   const [meeting, setMeeting] = useState<any>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [jiraConnected, setJiraConnected] = useState(false);
+  const [mappingOpen, setMappingOpen] = useState(false);
 
   useEffect(() => {
     api().getMeeting?.(meetingId)
       .then((m: any) => setMeeting(m))
       .catch(() => {})
       .finally(() => setLoaded(true));
+    api().jiraStatus?.()
+      .then((s: any) => setJiraConnected(!!(s?.connected || s?.isConnected)))
+      .catch(() => {});
   }, [meetingId]);
 
   const insights: Insights = meeting?.insights || {};
@@ -126,6 +132,23 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               >
                 Open full review
               </button>
+            )}
+
+            {jiraConnected && (insights.actionItems?.length || 0) > 0 && (
+              <button className="pp-btn pp-ghost" onClick={() => setMappingOpen(true)}>
+                Map action items to Jira
+              </button>
+            )}
+
+            {mappingOpen && (
+              <JiraMappingModal
+                isOpen={mappingOpen}
+                onClose={() => setMappingOpen(false)}
+                actionItems={(insights.actionItems || []).map(ai => ({ text: ai.text, owner: ai.owner || ai.assignee }))}
+                meetingTitle={meeting.title}
+                meetingId={meetingId}
+                onComplete={() => { /* receipts feed picks up the writes */ }}
+              />
             )}
 
             <div className="pp-row" style={{ justifyContent: 'center', paddingTop: 4 }}>

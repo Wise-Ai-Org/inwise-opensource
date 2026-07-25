@@ -29,7 +29,9 @@
   -webkit-app-region: drag;
   flex-shrink: 0;
 }
-.pp-titlebar > * { -webkit-app-region: no-drag; }
+.pp-titlebar > *,
+.pp-titlebar button,
+.pp-titlebar .pp-review-pill { -webkit-app-region: no-drag; }
 .pp-titlebar-left { display: flex; align-items: center; gap: 10px; }
 .pp-dots {
   color: var(--teal);

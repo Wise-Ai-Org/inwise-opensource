@@ -79,6 +79,23 @@ function ShellInner() {
   const { tab, stack, setTab, openPage } = useNav();
   const review = useReviewItems();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pipelineError, setPipelineError] = useState<string | null>(null);
+
+  // Extraction/pipeline failures were toasted in the old app; surface them as a
+  // dismissible banner so a failed recording never dies silently.
+  useEffect(() => {
+    const a = api();
+    const onPipelineError = (payload: any) => {
+      const msg = String(payload?.message || payload?.error || 'Something went wrong processing a recording.');
+      if (/api key|401|invalid[_ ]?key|authentication/i.test(msg)) {
+        setPipelineError('Insight extraction failed — your AI API key looks invalid. Fix it in Settings › AI provider, then upload the transcript again.');
+      } else {
+        setPipelineError(`A recording failed to process: ${msg}`);
+      }
+    };
+    a.on?.('pipeline:error', onPipelineError);
+    return () => { a.off?.('pipeline:error', onPipelineError); };
+  }, []);
 
   // Legacy navigation bridge: WelcomeBack, the first-time tour, and main-process
   // deep links (meeting:open-details) all speak the old view vocabulary.
@@ -136,6 +153,13 @@ function ShellInner() {
         </div>
 
         {menuOpen && <MenuDropdown onClose={() => setMenuOpen(false)} />}
+
+        {pipelineError && (
+          <div style={{ margin: '4px 14px 0', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: '10px 12px', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1, fontSize: 12, color: 'var(--red)', lineHeight: 1.5 }}>{pipelineError}</div>
+            <button className="pp-quiet-action" aria-label="Dismiss error" onClick={() => setPipelineError(null)}>✕</button>
+          </div>
+        )}
 
         {topPage ? (
           <PageView page={topPage} />

@@ -20,6 +20,7 @@ import {
   markLikelyDone, confirmLikelyDone, rejectLikelyDone,
   getPeople, getArchivedPeople, getPerson, addPerson, addTrackedPeople,
   archivePerson, unarchivePerson, getSuggestedPeople, updatePersonProfile,
+  dedupePeopleByName,
   getPersonAgendaContext, getMeetingAgendaContext,
   saveVoicePrint, getVoicePrints, getVoicePrint, deleteVoicePrint,
   getUserVoicePrint, getVoicePrintByName, getVoicePrintsWithEmbeddings,
@@ -2305,6 +2306,9 @@ app.whenReady().then(() => {
     }
   });
   initDatabase();
+  void dedupePeopleByName().then(n => {
+    if (n > 0) log('info', 'people:dedupe', `merged ${n} duplicate person record(s)`);
+  }).catch(() => { /* repair pass is best-effort */ });
   initSorWriteLog();
   initPendingApprovals();
   onWriteCompleted((entry) => {

@@ -36,13 +36,23 @@ export interface ScoredTaskItem {
   dueDate?: string | null;
 }
 
+export interface PendingTaskItem {
+  _id: string;
+  title: string;
+  description?: string;
+  dueDate?: string | null;
+  aiConfidence?: number;
+  source?: { type: string };
+}
+
 export interface ReviewItems {
   approvals: ApprovalItem[];
+  pendingTasks: PendingTaskItem[];
   suggested: SuggestedPersonItem[];
   unknownVoices: UnknownVoiceItem[];
   scoredTasks: ScoredTaskItem[];
   loaded: boolean;
-  /** approvals + suggested people + unknown voices (priorities never inflate the badge) */
+  /** approvals + pending tasks + suggested people + unknown voices (priorities never inflate the badge) */
   count: number;
   reload: () => void;
 }
@@ -55,6 +65,7 @@ function parseUnidentifiedCandidates(label: string): string[] {
 
 export function useReviewItems(): ReviewItems {
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
+  const [pendingTasks, setPendingTasks] = useState<PendingTaskItem[]>([]);
   const [suggested, setSuggested] = useState<SuggestedPersonItem[]>([]);
   const [unknownVoices, setUnknownVoices] = useState<UnknownVoiceItem[]>([]);
   const [scoredTasks, setScoredTasks] = useState<ScoredTaskItem[]>([]);
@@ -67,8 +78,14 @@ export function useReviewItems(): ReviewItems {
       a.getSuggestedPeople?.(),
       a.getVoicePrints?.(),
       a.getScoredTasks?.(),
-    ]).then(([ap, sp, vp, st]) => {
+      a.getTasks?.(),
+    ]).then(([ap, sp, vp, st, tk]) => {
       setApprovals(ap.status === 'fulfilled' && Array.isArray(ap.value) ? ap.value : []);
+      setPendingTasks(
+        tk.status === 'fulfilled' && Array.isArray(tk.value)
+          ? tk.value.filter((t: any) => t.aiExtracted && t.approval?.status === 'pending')
+          : [],
+      );
       setSuggested(sp.status === 'fulfilled' && Array.isArray(sp.value) ? sp.value : []);
       if (vp.status === 'fulfilled' && Array.isArray(vp.value)) {
         setUnknownVoices(
@@ -117,11 +134,12 @@ export function useReviewItems(): ReviewItems {
 
   return {
     approvals,
+    pendingTasks,
     suggested,
     unknownVoices,
     scoredTasks,
     loaded,
-    count: approvals.length + suggested.length + unknownVoices.length,
+    count: approvals.length + pendingTasks.length + suggested.length + unknownVoices.length,
     reload,
   };
 }

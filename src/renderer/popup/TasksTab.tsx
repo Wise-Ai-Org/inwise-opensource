@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api, fmtDueDate, useNav } from './nav';
+import CreateTaskModal from '../components/tasks/CreateTaskModal';
 
 type Status = 'todo' | 'inProgress' | 'completed';
 
@@ -24,8 +25,7 @@ export default function TasksTab() {
   const [snoozed, setSnoozed] = useState<TaskRow[]>([]);
   const [seg, setSeg] = useState<Status>('todo');
   const [showSnoozed, setShowSnoozed] = useState(false);
-  const [newTitle, setNewTitle] = useState('');
-  const [adding, setAdding] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   const reload = useCallback(() => {
@@ -71,15 +71,6 @@ export default function TasksTab() {
     try { await api().updateTask?.(t._id, { status: next }); } catch { reload(); }
   };
 
-  const addTask = async () => {
-    const title = newTitle.trim();
-    if (!title) { setAdding(false); return; }
-    setNewTitle('');
-    setAdding(false);
-    await api().createTask?.({ title, status: 'todo' });
-    reload();
-  };
-
   const bringBack = async (id: string) => {
     await api().bringBackTask?.(id);
     reload();
@@ -105,23 +96,8 @@ export default function TasksTab() {
 
           <div className="pp-row" style={{ justifyContent: 'space-between', padding: '0 2px' }}>
             <button className="pp-link" onClick={() => push({ kind: 'review', focus: 'priorities' })}>Review priorities</button>
-            <button className="pp-link" onClick={() => setAdding(a => !a)}>+ New task</button>
+            <button className="pp-link" onClick={() => setCreateOpen(true)}>+ New task</button>
           </div>
-
-          {adding && (
-            <div className="pp-search">
-              <input
-                autoFocus
-                placeholder="Task title — Enter to add"
-                value={newTitle}
-                onChange={e => setNewTitle(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') addTask();
-                  if (e.key === 'Escape') { setAdding(false); setNewTitle(''); }
-                }}
-              />
-            </div>
-          )}
 
           {loaded && visible.length === 0 && (
             <div className="pp-meta" style={{ textAlign: 'center', padding: '28px 0' }}>
@@ -189,6 +165,12 @@ export default function TasksTab() {
           ))}
         </>
       )}
+
+      <CreateTaskModal
+        isOpen={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onTaskCreated={() => { setCreateOpen(false); reload(); }}
+      />
     </div>
   );
 }

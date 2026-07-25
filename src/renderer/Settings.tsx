@@ -2111,6 +2111,21 @@ function VoiceEnrollment() {
       // IPC may deliver Uint8Array as a plain object — normalize
       const raw = result.audioClip;
       const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(Object.values(raw) as number[]);
+      // A clip can exist yet be pure silence (the system-audio channel recorded
+      // nothing during enrollment). Say so instead of "playing" dead air.
+      {
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        let peak = 0;
+        for (let i = 44; i + 1 < bytes.length; i += 100) {
+          const s = Math.abs(view.getInt16(i, true));
+          if (s > peak) peak = s;
+          if (peak > 500) break;
+        }
+        if (peak <= 500) {
+          showPlayError(id, 'This clip is silent — the call audio channel recorded nothing during enrollment. Re-enroll after the next meeting with this person.');
+          return null;
+        }
+      }
       const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'audio/wav' });
       const url = URL.createObjectURL(blob);
       cache.set(id, url);

@@ -489,11 +489,13 @@ async function computePeopleStats(person: any): Promise<any> {
 export async function getPeople(search?: string): Promise<any[]> {
   const query: any = { archived: { $ne: true } };
   if (search) {
-    const re = new RegExp(search, 'i');
+    const re = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     query.$or = [{ name: re }, { email: re }, { company: re }];
   }
   const people = await peopleDb.findAsync(query);
-  return Promise.all(people.map(computePeopleStats));
+  // The user is not a "person you meet with" — keep them out of the People list.
+  const others = people.filter((p: any) => !isSelf(p.name || '') && !isSelf(p.email || ''));
+  return Promise.all(others.map(computePeopleStats));
 }
 
 export async function getArchivedPeople(): Promise<any[]> {
@@ -645,6 +647,22 @@ export async function addPerson(data: {
     (m.attendees || []).some((a: string) => a && a.toLowerCase().includes(name.toLowerCase()))
   ) : [];
 
+  // Dedup: an existing person with the same email or the same (case-insensitive)
+  // name is the same person — update them instead of inserting a duplicate.
+  const email = (data.email || '').trim().toLowerCase();
+  const all = await peopleDb.findAsync({});
+  const existing = (all as any[]).find(p =>
+    (email && (p.email || '').trim().toLowerCase() === email) ||
+    (name && (p.name || '').trim().toLowerCase() === name.toLowerCase())
+  );
+  if (existing) {
+    const patch: Record<string, any> = { trackedBy: true, archived: false };
+    if (!existing.email && data.email) patch.email = data.email;
+    if (!existing.notes && data.notes) patch.notes = data.notes;
+    await peopleDb.updateAsync({ _id: existing._id }, { $set: patch }, {});
+    return { ...existing, ...patch, retroactiveMeetingCount: retroMeetings.length, deduped: true };
+  }
+
   const doc = await peopleDb.insertAsync({
     _id: uuidv4(),
     name,
@@ -665,7 +683,10 @@ export async function addPerson(data: {
 export async function addTrackedPeople(names: string[]): Promise<any[]> {
   const results = [];
   for (const name of names) {
-    const existing = await peopleDb.findOneAsync({ name: new RegExp(name, 'i') } as any);
+    // Exact-name match (anchored + escaped) — an unanchored regex made "Zee"
+    // match "Zeeshan" and silently attach to the wrong person.
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const existing = await peopleDb.findOneAsync({ name: new RegExp(`^${escaped}$`, 'i') } as any);
     if (existing) {
       await peopleDb.updateAsync({ _id: (existing as any)._id }, { $set: { trackedBy: true } }, {});
       results.push(existing);
@@ -682,6 +703,43 @@ export async function addTrackedPeople(names: string[]): Promise<any[]> {
     }
   }
   return results;
+}
+
+/**
+ * One-time repair for duplicate person records (same trimmed case-insensitive
+ * name). Keeps the oldest record, fills its empty fields from the duplicates
+ * (email, company, role, bio, notes), ORs trackedBy, un-archives if any copy
+ * was active, and deletes the rest. Returns how many duplicates were removed.
+ */
+export async function dedupePeopleByName(): Promise<number> {
+  const all = await peopleDb.findAsync({});
+  const byName = new Map<string, any[]>();
+  for (const p of all as any[]) {
+    const key = (p.name || '').trim().toLowerCase();
+    if (!key) continue;
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key)!.push(p);
+  }
+  let removed = 0;
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    const keeper = group[0];
+    const patch: Record<string, any> = {};
+    for (const dup of group.slice(1)) {
+      for (const field of ['email', 'company', 'role', 'bio', 'notes'] as const) {
+        if (!keeper[field] && !patch[field] && dup[field]) patch[field] = dup[field];
+      }
+      if (dup.trackedBy) patch.trackedBy = true;
+      if (dup.archived === false) patch.archived = false;
+      await peopleDb.removeAsync({ _id: dup._id }, {});
+      removed++;
+    }
+    if (Object.keys(patch).length) {
+      await peopleDb.updateAsync({ _id: keeper._id }, { $set: patch }, {});
+    }
+  }
+  return removed;
 }
 
 export async function archivePerson(id: string): Promise<void> {
