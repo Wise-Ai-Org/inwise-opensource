@@ -339,6 +339,7 @@ export async function createTask(data: {
   priority?: string;
   dueDate?: string;
   status?: string;
+  owner?: string;
 }): Promise<any> {
   const now = new Date().toISOString();
   const doc = await tasksDb.insertAsync({
@@ -348,6 +349,7 @@ export async function createTask(data: {
     status: data.status || 'todo',
     priority: data.priority || 'medium',
     dueDate: data.dueDate || null,
+    owner: data.owner || null,
     source: { type: 'manual' },
     aiExtracted: false,
     approval: { status: 'auto_approved' },

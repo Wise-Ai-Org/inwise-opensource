@@ -11,16 +11,33 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
   const [loaded, setLoaded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
+  const [people, setPeople] = useState<string[]>([]);
+  const [userName, setUserName] = useState('');
+  const [savedAt, setSavedAt] = useState(0);
 
   useEffect(() => {
     api().getTasks?.().then((rows: any[]) => {
       setTask((rows || []).find(t => t._id === taskId) || null);
     }).catch(() => {}).finally(() => setLoaded(true));
+    api().getPeople?.().then((rows: any[]) =>
+      setPeople((rows || []).map(p => p.name).filter(Boolean))).catch(() => {});
+    api().getConfig?.().then((c: any) => setUserName(c?.userName || '')).catch(() => {});
   }, [taskId]);
+
+  // Show a transient confirmation after every silent auto-save — edits here
+  // persist immediately and the user should see that.
+  useEffect(() => {
+    if (!savedAt) return;
+    const t = setTimeout(() => setSavedAt(0), 1800);
+    return () => clearTimeout(t);
+  }, [savedAt]);
 
   const patch = async (updates: Record<string, any>) => {
     setTask((t: any) => (t ? { ...t, ...updates } : t));
-    try { await api().updateTask?.(taskId, updates); } catch { /* refetch on next open */ }
+    try {
+      await api().updateTask?.(taskId, updates);
+      setSavedAt(Date.now());
+    } catch { /* refetch on next open */ }
   };
 
   const doDelete = async () => {
@@ -43,7 +60,9 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
       <div className="pp-drillhead">
         <button className="pp-back" aria-label="Back" onClick={pop}>←</button>
         <div className="pp-drilltitle">Task</div>
-        <span />
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--teal)', textAlign: 'right' }}>
+          {savedAt ? '✓ Saved' : ''}
+        </span>
       </div>
       <div className="pp-body" style={{ paddingTop: 4 }}>
         {!loaded && <div className="pp-meta" style={{ textAlign: 'center', padding: 20 }}>Loading…</div>}
@@ -86,8 +105,23 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
               </div>
             </div>
 
-            <div className="pp-seclabel">Details</div>
+            <div className="pp-seclabel">Details — changes save automatically</div>
             <div className="pp-listcard">
+              <div className="pp-setrow" style={{ cursor: 'default' }}>
+                <div className="pp-grow pp-rowlabel" style={{ fontWeight: 500 }}>Who's responsible</div>
+                <select
+                  value={task.owner || ''}
+                  onChange={e => patch({ owner: e.target.value || null })}
+                  style={{ border: 'none', outline: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit', maxWidth: 160 }}
+                >
+                  <option value="">Unassigned</option>
+                  {userName && <option value={userName}>{userName} (me)</option>}
+                  {people.filter(n => n !== userName).map(n => <option key={n} value={n}>{n}</option>)}
+                  {task.owner && !people.includes(task.owner) && task.owner !== userName && (
+                    <option value={task.owner}>{task.owner}</option>
+                  )}
+                </select>
+              </div>
               <div className="pp-setrow" style={{ cursor: 'default' }}>
                 <div className="pp-grow pp-rowlabel" style={{ fontWeight: 500 }}>Due date</div>
                 <input

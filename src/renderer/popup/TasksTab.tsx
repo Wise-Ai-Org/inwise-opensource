@@ -1,6 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtDueDate, useNav } from './nav';
-import CreateTaskModal from '../components/tasks/CreateTaskModal';
 
 type Status = 'todo' | 'inProgress' | 'completed';
 
@@ -9,6 +8,7 @@ interface TaskRow {
   title: string;
   status: Status | 'cancelled';
   priority?: string;
+  owner?: string | null;
   dueDate: string | null;
   source?: { type: string; id?: string };
   aiExtracted?: boolean;
@@ -18,6 +18,128 @@ interface TaskRow {
 }
 
 const STATUS_LABEL: Record<Status, string> = { todo: 'To Do', inProgress: 'In Progress', completed: 'Done' };
+
+// ── Create-task sheet — deliberately not engineering-shaped ──────────────────
+// Just: what, who's responsible, best if done by, priority, details.
+
+function CreateTaskSheet({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [owner, setOwner] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [priority, setPriority] = useState('medium');
+  const [people, setPeople] = useState<string[]>([]);
+  const [userName, setUserName] = useState('');
+  const [aiFilled, setAiFilled] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touched = useRef<{ owner: boolean; dueDate: boolean; priority: boolean }>({ owner: false, dueDate: false, priority: false });
+
+  useEffect(() => {
+    api().getPeople?.().then((rows: any[]) =>
+      setPeople((rows || []).map(p => p.name).filter(Boolean))).catch(() => {});
+    api().getConfig?.().then((c: any) => setUserName(c?.userName || '')).catch(() => {});
+  }, []);
+
+  // AI pre-fill: once the title says enough, fill only the fields the user
+  // hasn't touched. Quiet — one note line, no banners.
+  useEffect(() => {
+    if (title.trim().length < 8) return;
+    if (suggestTimer.current) clearTimeout(suggestTimer.current);
+    suggestTimer.current = setTimeout(async () => {
+      try {
+        const res = await api().suggestTaskFields?.({ title: title.trim(), modalType: 'create' });
+        if (!res) return;
+        let applied = false;
+        const val = (k: string) => res[k]?.value ?? res[k];
+        if (!touched.current.priority && typeof val('priority') === 'string') { setPriority(val('priority')); applied = true; }
+        if (!touched.current.dueDate && typeof val('dueDate') === 'string' && /^\d{4}-\d{2}-\d{2}/.test(val('dueDate'))) {
+          setDueDate(val('dueDate').slice(0, 10)); applied = true;
+        }
+        if (!touched.current.owner && typeof val('assignee') === 'string') { setOwner(val('assignee')); applied = true; }
+        if (applied) setAiFilled(true);
+      } catch { /* suggestions are optional */ }
+    }, 700);
+    return () => { if (suggestTimer.current) clearTimeout(suggestTimer.current); };
+  }, [title]);
+
+  const create = async () => {
+    if (!title.trim() || saving) return;
+    setSaving(true);
+    try {
+      await api().createTask?.({
+        title: title.trim(),
+        description: description.trim() || undefined,
+        owner: owner || undefined,
+        dueDate: dueDate ? new Date(dueDate + 'T12:00:00').toISOString() : undefined,
+        priority,
+        status: 'todo',
+      });
+      onCreated();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '9px 2px' };
+  const controlStyle: React.CSSProperties = { border: 'none', outline: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit', textAlign: 'right', maxWidth: 170 };
+
+  return (
+    <>
+      <div className="pp-sheet-backdrop" onClick={onClose} />
+      <div className="pp-sheet" role="dialog" aria-label="New task">
+        <div className="pp-sheet-handle" />
+        <div className="pp-title-sm" style={{ fontSize: 15 }}>New task</div>
+        <div className="pp-search">
+          <input
+            autoFocus
+            placeholder="What needs to be done?"
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Escape') onClose(); }}
+          />
+        </div>
+        <div className="pp-listcard">
+          <div style={rowStyle}>
+            <span style={{ fontSize: 13, color: 'var(--navy)' }}>Who's responsible</span>
+            <select value={owner} onChange={e => { touched.current.owner = true; setOwner(e.target.value); }} style={controlStyle}>
+              <option value="">Unassigned</option>
+              {userName && <option value={userName}>{userName} (me)</option>}
+              {people.filter(n => n !== userName).map(n => <option key={n} value={n}>{n}</option>)}
+              {owner && !people.includes(owner) && owner !== userName && <option value={owner}>{owner}</option>}
+            </select>
+          </div>
+          <div style={{ ...rowStyle, borderTop: '1px solid var(--slate-100)' }}>
+            <span style={{ fontSize: 13, color: 'var(--navy)' }}>Best if done by</span>
+            <input type="date" value={dueDate} onChange={e => { touched.current.dueDate = true; setDueDate(e.target.value); }} style={controlStyle} />
+          </div>
+          <div style={{ ...rowStyle, borderTop: '1px solid var(--slate-100)' }}>
+            <span style={{ fontSize: 13, color: 'var(--navy)' }}>Priority</span>
+            <select value={priority} onChange={e => { touched.current.priority = true; setPriority(e.target.value); }} style={controlStyle}>
+              {['low', 'medium', 'high', 'critical'].map(p => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="pp-search" style={{ alignItems: 'flex-start' }}>
+          <textarea
+            placeholder="Details (optional)"
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            rows={2}
+            style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', fontSize: 12.5, fontFamily: 'inherit', color: 'var(--navy)', background: 'transparent' }}
+          />
+        </div>
+        {aiFilled && <div className="pp-meta">Some fields were pre-filled from the title — change anything that's off.</div>}
+        <div className="pp-row" style={{ gap: 8 }}>
+          <button className="pp-btn pp-ghost" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
+          <button className="pp-btn pp-solid" style={{ flex: 2 }} disabled={!title.trim() || saving} onClick={create}>
+            {saving ? 'Creating…' : 'Create task'}
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
 
 export default function TasksTab() {
   const { push } = useNav();
@@ -117,6 +239,7 @@ export default function TasksTab() {
                 <div className="pp-title-sm">{t.title}</div>
                 <div className="pp-row" style={{ marginTop: 7, flexWrap: 'wrap', gap: 6 }}>
                   {due && <span className={`pp-chip ${due.overdue ? 'pp-amber' : ''}`}>{due.label}</span>}
+                  {t.owner && <span className="pp-chip">{t.owner}</span>}
                   {t.source?.type === 'meeting' && <span className="pp-chip">From meeting</span>}
                   {t.jiraKey && <span className="pp-chip">Jira · {t.jiraKey}</span>}
                   {t.aiExtracted && t.approval?.status === 'pending' && <span className="pp-chip pp-amber">Awaiting approval</span>}
@@ -166,11 +289,12 @@ export default function TasksTab() {
         </>
       )}
 
-      <CreateTaskModal
-        isOpen={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onTaskCreated={() => { setCreateOpen(false); reload(); }}
-      />
+      {createOpen && (
+        <CreateTaskSheet
+          onClose={() => setCreateOpen(false)}
+          onCreated={() => { setCreateOpen(false); reload(); }}
+        />
+      )}
     </div>
   );
 }
