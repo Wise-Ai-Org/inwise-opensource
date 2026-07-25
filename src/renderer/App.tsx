@@ -163,13 +163,19 @@ export default function App() {
       setView('communications');
       setPendingMeetingOpen({ meetingId: payload.meetingId, focusTab: payload.focusTab });
     };
+    // Pill context menu's "Settings" (and future deep links) land here.
+    const onNavigate = (target: string) => {
+      if (target) setView(target as View);
+    };
     api.on('meeting:conflict', onConflict);
     api.on('meeting:conflict:resolved', onResolved);
     api.on('meeting:open-details', onOpenDetails);
+    api.on('app:navigate', onNavigate);
     return () => {
       api.off?.('meeting:conflict', onConflict);
       api.off?.('meeting:conflict:resolved', onResolved);
       api.off?.('meeting:open-details', onOpenDetails);
+      api.off?.('app:navigate', onNavigate);
     };
   }, []);
 

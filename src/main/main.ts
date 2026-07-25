@@ -140,17 +140,40 @@ function createMainWindow(): void {
   });
 }
 
-function createOverlayWindow(title: string, calendarEventId?: string): void {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.webContents.send('recording:start', title, calendarEventId);
-    return;
-  }
+// Recorder pill window: collapsed capsule that the renderer resizes on hover
+// via 'pill:resize'. Height covers the 44px pill plus glow margin.
+const PILL_WIDTH = 240;
+const PILL_HEIGHT = 64;
 
-  overlayWindow = new BrowserWindow({
-    width: 480,
-    height: 170,
-    x: 20,
-    y: 20,
+function pillPosition(): { x: number; y: number } {
+  const cfg = getConfig();
+  return {
+    x: typeof cfg.pillX === 'number' ? cfg.pillX : 20,
+    y: typeof cfg.pillY === 'number' ? cfg.pillY : 20,
+  };
+}
+
+let pillMoveTimer: NodeJS.Timeout | null = null;
+function trackPillPosition(win: BrowserWindow): void {
+  // 'move' (not 'moved'): on Windows 'moved' only fires when a user drag ends,
+  // so programmatic moves would never persist. Debounce absorbs the drag stream.
+  win.on('move', () => {
+    if (pillMoveTimer) clearTimeout(pillMoveTimer);
+    pillMoveTimer = setTimeout(() => {
+      if (win.isDestroyed()) return;
+      const [x, y] = win.getPosition();
+      setConfig({ pillX: x, pillY: y });
+    }, 500);
+  });
+}
+
+function createPillWindow(): BrowserWindow {
+  const { x, y } = pillPosition();
+  const win = new BrowserWindow({
+    width: PILL_WIDTH,
+    height: PILL_HEIGHT,
+    x,
+    y,
     alwaysOnTop: true,
     frame: false,
     transparent: true,
@@ -162,8 +185,19 @@ function createOverlayWindow(title: string, calendarEventId?: string): void {
       nodeIntegration: false,
     },
   });
+  // Invisible to screen capture and screen shares — the pill is for the user only.
+  win.setContentProtection(true);
+  trackPillPosition(win);
+  win.loadFile(path.join(__dirname, '../../dist/renderer/badge.html'));
+  return win;
+}
 
-  overlayWindow.loadFile(path.join(__dirname, '../../dist/renderer/badge.html'));
+function createOverlayWindow(title: string, calendarEventId?: string): void {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('recording:start', title, calendarEventId);
+    return;
+  }
+  overlayWindow = createPillWindow();
   overlayWindow.webContents.once('did-finish-load', () => {
     overlayWindow?.webContents.send('recording:start', title, calendarEventId);
   });
@@ -172,36 +206,36 @@ function createOverlayWindow(title: string, calendarEventId?: string): void {
 function createReminderBadge(title: string): void {
   if (overlayWindow && !overlayWindow.isDestroyed()) return; // don't interrupt active recording
 
-  const win = new BrowserWindow({
-    width: 340,
-    height: 72,
-    x: 20,
-    y: 20,
-    alwaysOnTop: true,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    skipTaskbar: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'badge-preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  win.loadFile(path.join(__dirname, '../../dist/renderer/badge.html'));
+  const win = createPillWindow();
   win.webContents.once('did-finish-load', () => {
-    win.webContents.send('recording:start', title);
+    // Dedicated reminder channel — 'recording:start' would run the full
+    // preflight/countdown/record flow, which a reminder must never do.
+    win.webContents.send('reminder:start', title);
   });
 
   // Auto-dismiss after 30 seconds if user doesn't interact
   setTimeout(() => { if (!win.isDestroyed()) win.close(); }, 30_000);
 }
 
-function sendToOverlay(msg: any) {
+// Transcriptions of finished recordings run as background jobs; the pill shows
+// them in a secondary slot so a new recording is never interrupted by an old
+// meeting's pipeline status.
+let activePipelineJobs = 0;
+function emitSecondary(msg: { jobId: string; title: string; state: 'transcribing' | 'processing' | 'done' | 'error'; message?: string }) {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.webContents.send('recording:status', msg);
+    overlayWindow.webContents.send('pipeline:secondary', msg);
   }
+}
+
+// The pill lives from first recording start until the last queued transcription
+// drains — never close it mid-job.
+function maybeCloseOverlay(delayMs = 2500): void {
+  setTimeout(() => {
+    if (isRecordingActive) return;
+    if (activePipelineJobs > 0 || pendingAudio.size > 0) return;
+    if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.close();
+    overlayWindow = null;
+  }, delayMs);
 }
 
 // â”€â”€ Voice auto-enrollment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -369,8 +403,9 @@ async function autoEnrollVoices(audioPath: string, attendees: string[]): Promise
 
 // â”€â”€ Recording pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function runRecordingPipeline(audioPath: string, meetingTitle: string, calendarEventId?: string, stereo?: boolean, attendees?: string[]): Promise<void> {
-  sendToOverlay({ status: 'processing', message: 'Transcribingâ€¦' });
+async function runRecordingPipeline(audioPath: string, meetingTitle: string, calendarEventId?: string, stereo?: boolean, attendees?: string[], jobId?: string): Promise<boolean> {
+  const job = jobId || path.basename(audioPath);
+  emitSecondary({ jobId: job, title: meetingTitle, state: 'transcribing' });
   log('info', 'pipeline:start', `title="${meetingTitle}" stereo=${!!stereo} path=${audioPath}`);
 
   // Create the meeting record FIRST so failed transcriptions are still recoverable.
@@ -413,7 +448,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
     // Always notify renderer so meeting appears even if insights fail
     mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
 
-    sendToOverlay({ status: 'processing', message: 'Extracting insightsâ€¦' });
+    emitSecondary({ jobId: job, title: meetingTitle, state: 'processing' });
     try {
       // When merging segments, re-extract insights from the combined transcript
       const fullTranscript = merging ? ((await getMeeting(meetingId))?.transcript || transcript) : transcript;
@@ -422,7 +457,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       // Detect contradictions against past decisions
       try {
         if (insights.decisions && insights.decisions.length > 0) {
-          sendToOverlay({ status: 'processing', message: 'Checking for contradictionsâ€¦' });
+          emitSecondary({ jobId: job, title: meetingTitle, state: 'processing' });
           const pastDecisions = await getAllPastDecisions();
           const contradictions = await detectContradictions(insights.decisions, pastDecisions);
           insights.contradictions = contradictions;
@@ -678,13 +713,9 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       log('error', 'pipeline:likely-done-failed', inferErr.message);
     }
 
-    sendToOverlay({ status: 'done' });
+    emitSecondary({ jobId: job, title: meetingTitle, state: 'done' });
     mainWindow?.webContents.send('recording:status', { status: 'done' });
     log('info', 'pipeline:done', meetingId);
-    setTimeout(() => {
-      if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.close();
-      overlayWindow = null;
-    }, 3000);
   } catch (err: any) {
     log('error', 'pipeline:failed', err.message);
     // Mark the meeting as failed so it stays visible in the UI
@@ -693,12 +724,18 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
       mainWindow?.webContents.send('pipeline:error', { meetingId, error: err.message, stage: 'transcribe' });
     } catch { /* ignore */ }
-    sendToOverlay({ status: 'error', message: err.message });
+    emitSecondary({ jobId: job, title: meetingTitle, state: 'error', message: err.message });
     mainWindow?.webContents.send('recording:status', { status: 'error', message: err.message });
-    // Keep audio file on failure so user can retry â€” delete only on success
-    return;
+    // The pill may already be recording the next meeting, so a failed background
+    // transcription also gets a notification the user can't miss.
+    if (Notification.isSupported()) {
+      new Notification({ title: 'Transcription failed', body: `${meetingTitle}: ${err.message}` }).show();
+    }
+    // Keep audio file on failure so user can retry — delete only on success
+    return false;
   }
-  // Recording preserved on success and failure â€” user explicitly requested retention.
+  // Recording preserved on success and failure — user explicitly requested retention.
+  return true;
 }
 
 function getAudioDuration(filePath: string): number {
@@ -1786,6 +1823,101 @@ ipcMain.handle('recording:stop', async () => {
   return true;
 });
 
+// ── Recorder pill ──────────────────────────────────────────────────────────
+
+// Renderer drives window width (hover expand/collapse); position stays anchored.
+ipcMain.on('pill:resize', (e, { width, height }: { width: number; height?: number }) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed()) return;
+  const [x, y] = win.getPosition();
+  const bounds = win.getBounds();
+  win.setBounds({
+    x,
+    y,
+    width: Math.max(120, Math.round(width) || bounds.width),
+    height: Math.max(48, Math.round(height ?? bounds.height)),
+  });
+});
+
+// User clicked the pill during preflight/countdown — abort before recording starts.
+ipcMain.on('pill:cancelled', () => {
+  isRecordingActive = false;
+  updateTrayMenu(mainWindow!, false);
+  // Re-arm calendar-free VAD in the main window (it waits for a terminal status).
+  mainWindow?.webContents.send('recording:status', { status: 'done' });
+  maybeCloseOverlay(150);
+});
+
+// Right-click menu: the pill's attribution ("whose widget is this") and the
+// fix-it-here surface — switch devices without opening the main app.
+ipcMain.on('pill:context-menu', (e, payload: {
+  mics: { id: string; label: string }[];
+  speakers: { id: string; label: string }[];
+  recording: boolean;
+  title?: string;
+}) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  const cfg = getConfig();
+  const currentMic = cfg.micDeviceId || 'default';
+  const currentSpeaker = cfg.speakerDeviceId || 'default';
+
+  const deviceItems = (
+    devices: { id: string; label: string }[],
+    current: string,
+    onPick: (id: string) => void,
+  ): Electron.MenuItemConstructorOptions[] => {
+    if (!devices.length) return [{ label: 'No devices found', enabled: false }];
+    return devices.map(d => ({
+      label: d.label,
+      type: 'radio' as const,
+      checked: d.id === current || (current === 'default' && d.id === 'default'),
+      click: () => onPick(d.id),
+    }));
+  };
+
+  const template: Electron.MenuItemConstructorOptions[] = [
+    { label: 'Inwise — recording saved on this device', enabled: false },
+    ...(payload.title ? [{ label: payload.title.length > 44 ? payload.title.slice(0, 43) + '…' : payload.title, enabled: false }] : []),
+    { type: 'separator' },
+    {
+      label: 'Open Inwise',
+      click: () => { mainWindow?.show(); mainWindow?.focus(); },
+    },
+    {
+      label: 'Microphone',
+      submenu: deviceItems(payload.mics || [], currentMic, (id) => {
+        setConfig({ micDeviceId: id });
+        // Live swap if a recording is in flight; otherwise the next one picks it up.
+        win?.webContents.send('pill:switch-mic', id);
+      }),
+    },
+    {
+      label: 'Speaker',
+      submenu: deviceItems(payload.speakers || [], currentSpeaker, (id) => {
+        setConfig({ speakerDeviceId: id });
+      }),
+    },
+    { type: 'separator' },
+    {
+      label: 'Settings',
+      click: () => {
+        mainWindow?.show();
+        mainWindow?.focus();
+        mainWindow?.webContents.send('app:navigate', 'settings');
+      },
+    },
+    ...(payload.recording ? [
+      { type: 'separator' as const },
+      {
+        label: 'Stop recording',
+        click: () => { win?.webContents.send('recording:stop-request'); },
+      },
+    ] : []),
+  ];
+
+  Menu.buildFromTemplate(template).popup({ window: win ?? undefined });
+});
+
 ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
   if (!payload || typeof payload.micOk !== 'boolean' || typeof payload.systemAudioOk !== 'boolean') return;
   const prev = latestAudioHealth;
@@ -1889,6 +2021,10 @@ ipcMain.on('recording:audio-data', (_e, { buffer, title, calendarEventId, stereo
   pendingAudio.set(key, { buffers: [Buffer.from(buffer)], title, calendarEventId, stereo, timer });
 });
 
+// Transcriptions run strictly one at a time: whisper is CPU-heavy and two
+// concurrent runs mid-meeting would chew into the call itself.
+let pipelineChain: Promise<unknown> = Promise.resolve();
+
 async function flushPendingAudio(key: string): Promise<void> {
   const entry = pendingAudio.get(key);
   if (!entry) return;
@@ -1907,7 +2043,24 @@ async function flushPendingAudio(key: string): Promise<void> {
     const attendees = entry.calendarEventId
       ? calendarWatcher.getUpcomingEvents().find((e: any) => e.id === entry.calendarEventId)?.attendees || []
       : [];
-    await runRecordingPipeline(tmpPath, entry.title, entry.calendarEventId, entry.stereo, attendees);
+
+    const jobId = path.basename(tmpPath);
+    activePipelineJobs++;
+    emitSecondary({ jobId, title: entry.title, state: 'transcribing' });
+    pipelineChain = pipelineChain
+      .then(() => runRecordingPipeline(tmpPath, entry.title, entry.calendarEventId, entry.stereo, attendees, jobId))
+      .then((ok) => {
+        activePipelineJobs--;
+        // Failed jobs hold the pill longer so the red state is actually seen.
+        maybeCloseOverlay(ok === false ? 8000 : 2500);
+      })
+      .catch((e: any) => {
+        activePipelineJobs--;
+        log('error', 'audio-data:pipeline-failed', e?.message || String(e));
+        emitSecondary({ jobId, title: entry.title, state: 'error', message: e?.message || 'Pipeline failed' });
+        maybeCloseOverlay(8000);
+      });
+    await pipelineChain;
   } catch (e: any) {
     log('error', 'audio-data:failed', e.message);
   }
