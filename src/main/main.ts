@@ -172,6 +172,13 @@ function createMainWindow(): void {
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
   }
+  // Electron persists per-origin zoom; a stray Ctrl+= at any point would leave
+  // the 380px popup permanently rendering oversized, clipped content. Pin it.
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow?.webContents.setZoomFactor(1);
+    mainWindow?.webContents.setVisualZoomLevelLimits(1, 1);
+  });
+
   mainWindow.once('ready-to-show', () => {
     markAppOpened();
     if (mainWindow) positionPopupWindow(mainWindow);
