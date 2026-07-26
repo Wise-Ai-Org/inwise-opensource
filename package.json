@@ -1,6 +1,6 @@
 {
   "name": "inwise-opensource",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "Open-source AI meeting recorder — local transcription, local storage, your own API key",
   "license": "MIT",
   "author": "Inwise.ai",
@@ -46,7 +46,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "artifactName": "Inwise-Setup-${version}.exe"
     },
     "mac": {
       "target": [
