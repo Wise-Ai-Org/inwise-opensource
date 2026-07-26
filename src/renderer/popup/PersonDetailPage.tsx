@@ -59,7 +59,7 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
         typeof res?.text === 'string' ? res.text.split('\n').filter(Boolean) : [];
       setAgenda(items.length ? items : ['Nothing to suggest yet — record a meeting together first.']);
     } catch {
-      setAgenda(['Could not generate talking points — check your AI key in Settings.']);
+      setAgenda(["Wiser couldn't draft talking points — check your API key in Settings."]);
     } finally {
       setAgendaLoading(false);
     }

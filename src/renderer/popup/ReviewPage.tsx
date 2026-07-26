@@ -377,8 +377,8 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
               <span className="pp-blob1" /><span className="pp-blob2" />
               <span className="pp-glyph">✓</span>
             </div>
-            <h3>All clear</h3>
-            <span className="pp-meta">Nothing waiting for your review.</span>
+            <h3>All quiet</h3>
+            <span className="pp-meta">Nothing needs your review. Enjoy it while it lasts.</span>
           </div>
         )}
 
@@ -447,7 +447,7 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
 
         {suggested.length > 0 && (
           <div ref={sectionRefs.people} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div className="pp-seclabel">People the AI keeps hearing</div>
+            <div className="pp-seclabel">People Wiser keeps hearing</div>
             {suggested.map(s => (
               <div key={s.name} className="pp-card">
                 <div className="pp-row" style={{ marginBottom: 6 }}>

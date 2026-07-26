@@ -201,7 +201,7 @@ function CreateTaskSheet({ onClose, onCreated }: { onClose: () => void; onCreate
             style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', fontSize: 12.5, fontFamily: 'inherit', color: 'var(--navy)', background: 'transparent' }}
           />
         </div>
-        {aiFilled && <div className="pp-meta">Some fields were pre-filled from the title — change anything that's off.</div>}
+        {aiFilled && <div className="pp-meta">Wiser filled in a few fields from the title — change anything that's off.</div>}
         <div className="pp-row" style={{ gap: 8 }}>
           <button className="pp-btn pp-ghost" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
           <button className="pp-btn pp-solid" style={{ flex: 2 }} disabled={!title.trim() || saving} onClick={create}>

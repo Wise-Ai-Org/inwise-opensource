@@ -77,7 +77,7 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
               )}
               <div className="pp-row" style={{ marginTop: 8, gap: 6, flexWrap: 'wrap' }}>
                 {task.jiraKey && <span className="pp-chip">Jira · {task.jiraKey}</span>}
-                {task.aiExtracted && <span className="pp-chip pp-teal">AI extracted</span>}
+                {task.aiExtracted && <span className="pp-chip pp-teal">Wiser caught this</span>}
                 {task.likelyDone && <span className="pp-chip pp-amber">Looks done — confirm?</span>}
               </div>
             </div>

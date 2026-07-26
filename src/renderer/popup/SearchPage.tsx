@@ -62,7 +62,7 @@ export default function SearchPage() {
         {loading && (
           <div className="pp-row" style={{ justifyContent: 'center', gap: 8, padding: '20px 0' }}>
             <span className="pp-pulse" />
-            <span className="pp-meta">Reading your meetings…</span>
+            <span className="pp-meta">Wiser is reading your meetings…</span>
           </div>
         )}
 
