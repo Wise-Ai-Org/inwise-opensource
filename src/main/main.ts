@@ -1,4 +1,4 @@
-﻿import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol } from 'electron';
+﻿import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -141,9 +141,9 @@ function createMainWindow(): void {
 }
 
 // Recorder pill window: collapsed capsule that the renderer resizes on hover
-// via 'pill:resize'. Height covers the 44px pill plus glow margin.
+// via 'pill:resize'. Height covers the 44px pill plus halo margin.
 const PILL_WIDTH = 240;
-const PILL_HEIGHT = 64;
+const PILL_HEIGHT = 72;
 
 function pillPosition(): { x: number; y: number } {
   const cfg = getConfig();
@@ -1850,9 +1850,16 @@ ipcMain.on('pill:cancelled', () => {
 
 // Right-click menu: the pill's attribution ("whose widget is this") and the
 // fix-it-here surface — switch devices without opening the main app.
+// Menu icons: green dot = device checked out working, red = not. 16px PNGs,
+// generated offline (native menus can't render colored text).
+const DOT_GREEN = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAVElEQVR42mNQOhrHQAlmoJUBCkpH4xKA7AYorUCKASBN/7HgBmIMwKUZpyHozv5PBFbAZUACkQYk4DKggUgDGmjmAorDgOJYoEo6oEpKHByZiWgMANUlk8sF9YQFAAAAAElFTkSuQmCC');
+const DOT_RED = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAVElEQVR42mN47+LCQAlmoJUBCu9dXBKA7AYorUCKASBN/7HgBmIMwKUZpyHozv5PBFbAZUACkQYk4DKggUgDGmjmAorDgOJYoEo6oEpKHByZiWgMAGsuxcvReI2kAAAAAElFTkSuQmCC');
+
 ipcMain.on('pill:context-menu', (e, payload: {
   mics: { id: string; label: string }[];
   speakers: { id: string; label: string }[];
+  micOk?: boolean;
+  spkOk?: boolean;
   recording: boolean;
   title?: string;
 }) => {
@@ -1860,6 +1867,7 @@ ipcMain.on('pill:context-menu', (e, payload: {
   const cfg = getConfig();
   const currentMic = cfg.micDeviceId || 'default';
   const currentSpeaker = cfg.speakerDeviceId || 'default';
+  const statusDot = (ok?: boolean) => (ok === undefined ? undefined : ok ? DOT_GREEN : DOT_RED);
 
   const deviceItems = (
     devices: { id: string; label: string }[],
@@ -1876,8 +1884,8 @@ ipcMain.on('pill:context-menu', (e, payload: {
   };
 
   const template: Electron.MenuItemConstructorOptions[] = [
-    { label: 'Inwise — recording saved on this device', enabled: false },
-    ...(payload.title ? [{ label: payload.title.length > 44 ? payload.title.slice(0, 43) + '…' : payload.title, enabled: false }] : []),
+    { label: 'Inwise · saved on-device', enabled: false },
+    ...(payload.title ? [{ label: payload.title.length > 28 ? payload.title.slice(0, 27) + '…' : payload.title, enabled: false }] : []),
     { type: 'separator' },
     {
       label: 'Open Inwise',
@@ -1885,6 +1893,7 @@ ipcMain.on('pill:context-menu', (e, payload: {
     },
     {
       label: 'Microphone',
+      icon: statusDot(payload.micOk),
       submenu: deviceItems(payload.mics || [], currentMic, (id) => {
         setConfig({ micDeviceId: id });
         // Live swap if a recording is in flight; otherwise the next one picks it up.
@@ -1893,6 +1902,7 @@ ipcMain.on('pill:context-menu', (e, payload: {
     },
     {
       label: 'Speaker',
+      icon: statusDot(payload.spkOk),
       submenu: deviceItems(payload.speakers || [], currentSpeaker, (id) => {
         setConfig({ speakerDeviceId: id });
       }),
@@ -1916,6 +1926,12 @@ ipcMain.on('pill:context-menu', (e, payload: {
   ];
 
   Menu.buildFromTemplate(template).popup({ window: win ?? undefined });
+});
+
+// "Saved — open Inwise" click on the pill after a transcription lands.
+ipcMain.on('pill:open-inwise', () => {
+  mainWindow?.show();
+  mainWindow?.focus();
 });
 
 ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
@@ -2051,8 +2067,9 @@ async function flushPendingAudio(key: string): Promise<void> {
       .then(() => runRecordingPipeline(tmpPath, entry.title, entry.calendarEventId, entry.stereo, attendees, jobId))
       .then((ok) => {
         activePipelineJobs--;
-        // Failed jobs hold the pill longer so the red state is actually seen.
-        maybeCloseOverlay(ok === false ? 8000 : 2500);
+        // Failed jobs hold the pill longer so the red state is actually seen;
+        // successes hold long enough to read the "open Inwise" invite.
+        maybeCloseOverlay(ok === false ? 8000 : 6500);
       })
       .catch((e: any) => {
         activePipelineJobs--;
