@@ -158,6 +158,13 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   // Mic test
   testMic: (buffer: Buffer) => ipcRenderer.invoke('mic:test', buffer),
 
+  // Voice memos
+  transcribeVoiceMemo: (buffer: Uint8Array, durationSec: number) =>
+    ipcRenderer.invoke('voice:transcribe', buffer, durationSec),
+  classifyVoiceMemo: (transcript: string, ctx: any) =>
+    ipcRenderer.invoke('voice:classify', transcript, ctx),
+  applyVoiceMemo: (payload: any) => ipcRenderer.invoke('voice:applyMemo', payload),
+
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
 

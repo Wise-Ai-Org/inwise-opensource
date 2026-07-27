@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, fmtTime, sameDay, useNav } from './nav';
 import { useReview } from './PopupShell';
 import TranscriptUploadModal from '../views/communications/TranscriptUploadModal';
+import { MicGlyph } from './VoiceMemo';
 
 interface MeetingRow {
   _id: string;
@@ -16,6 +17,7 @@ interface MeetingRow {
   durationMin?: number;
   meetingUrl?: string;
   hasTranscript?: boolean;
+  voiceMemo?: { items: any[]; appliedAt: string };
 }
 
 interface LiveEvent { id: string; title: string; attendees?: string[] }
@@ -189,6 +191,7 @@ export default function MeetingsTab() {
         calendarEventId: m.calendarEventId,
         durationMin: m.duration ? Math.round(m.duration / 60) : undefined,
         hasTranscript: !!m.transcript,
+        voiceMemo: m.source === 'voice_memo' ? m.voiceMemo : undefined,
       }));
 
       const dbCalIds = new Set(fromDb.map(m => m.calendarEventId).filter(Boolean));
@@ -296,6 +299,22 @@ export default function MeetingsTab() {
     }
     return map;
   }, [review.approvals]);
+
+  // Agenda points spoken into voice memos, keyed by the calendar event they
+  // were bound to — they render right on that meeting's card.
+  const memoAgendaByEventId = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const m of meetings) {
+      for (const it of m.voiceMemo?.items || []) {
+        if (it?.kind === 'agenda' && it.targetMeetingId) {
+          const list = map.get(it.targetMeetingId) || [];
+          list.push(it.text);
+          map.set(it.targetMeetingId, list);
+        }
+      }
+    }
+    return map;
+  }, [meetings]);
 
   const handleUpload = async (data: { title: string; content: string; date: string }) => {
     await api().createMeetingFromTranscript?.(data);
@@ -410,10 +429,42 @@ export default function MeetingsTab() {
       )}
 
       {dayMeetings.map(m => {
+        if (m.voiceMemo) {
+          const counts: Record<string, number> = { task: 0, agenda: 0, note: 0 };
+          for (const it of m.voiceMemo.items || []) counts[it.kind] = (counts[it.kind] || 0) + 1;
+          const summary = [
+            counts.task ? `${counts.task} task${counts.task === 1 ? '' : 's'}` : null,
+            counts.agenda ? `${counts.agenda} agenda item${counts.agenda === 1 ? '' : 's'}` : null,
+            counts.note ? `${counts.note} note${counts.note === 1 ? '' : 's'}` : null,
+          ].filter(Boolean).join(' · ');
+          return (
+            <div
+              key={m._id}
+              className="pp-card meeting-card pp-clickable"
+              onClick={() => push({ kind: 'voice-memo', id: m._id })}
+              role="button"
+            >
+              <div className="pp-row">
+                <div className="pp-timecol">{fmtTime(m.when)}</div>
+                <div className="pp-grow">
+                  <div className="pp-title-sm pp-row" style={{ gap: 7 }}>
+                    <span style={{ color: 'var(--pp-teal-deep)', display: 'inline-flex' }}><MicGlyph size={12} /></span>
+                    Voice note
+                  </div>
+                  <div className="pp-meta" style={{ marginTop: 3 }}>
+                    {summary ? `${summary} — tap for transcript` : 'Tap for transcript'}
+                  </div>
+                </div>
+                <span className="pp-chevron">›</span>
+              </div>
+            </div>
+          );
+        }
         const pendingCount = pendingByMeetingTitle.get(m.title) || 0;
         const isDb = m.source === 'db';
         const isExpanded = expandedEventId === m._id;
         const agenda = agendas[m._id];
+        const memoAgenda = memoAgendaByEventId.get(isDb ? m.calendarEventId || '' : m._id) || [];
         const onCardClick = isDb
           ? () => push({ kind: 'meeting', id: m._id, title: m.title })
           : () => {
@@ -464,6 +515,16 @@ export default function MeetingsTab() {
               </div>
               <span className="pp-chevron">{isDb ? '›' : isExpanded ? '⌄' : '›'}</span>
             </div>
+            {memoAgenda.length > 0 && (
+              <div className="vm-agenda-mini" onClick={e => e.stopPropagation()}>
+                {memoAgenda.map((text, i) => (
+                  <div key={i} className="vm-li">
+                    <span className="vm-n">{i + 1}.</span>
+                    <span className="vm-new">{text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {!isDb && isExpanded && (
               <div style={{ marginTop: 10, borderTop: '1px solid var(--slate-100)', paddingTop: 10 }} onClick={e => e.stopPropagation()}>
                 <div className="pp-seclabel" style={{ padding: '0 0 6px' }}>Suggested agenda</div>

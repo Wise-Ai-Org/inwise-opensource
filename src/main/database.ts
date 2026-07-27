@@ -251,6 +251,68 @@ export async function createMeetingFromTranscript(data: {
   return doc;
 }
 
+// ── Voice memos ──────────────────────────────────────────────────────────────
+// A memo is a meeting doc (source 'voice_memo') so it lists in the Meetings day
+// timeline for free; the applied items ride along under `voiceMemo`.
+
+export async function createVoiceMemo(data: {
+  transcript: string;
+  durationSec: number;
+  audioPath: string | null;
+  items: any[];
+}): Promise<any> {
+  const now = new Date().toISOString();
+  return meetingsDb.insertAsync({
+    _id: uuidv4(),
+    title: 'Voice note',
+    date: now,
+    duration: data.durationSec || 0,
+    attendees: [],
+    transcript: data.transcript,
+    status: 'processed',
+    source: 'voice_memo',
+    sourceMetadata: data.audioPath ? { audioPath: data.audioPath } : null,
+    calendarEventId: null,
+    insights: null,
+    voiceMemo: { items: data.items, appliedAt: now },
+    createdAt: now,
+  });
+}
+
+/**
+ * Tasks born from a reviewed voice memo: the review sheet is the confirm gate,
+ * so they land approved and never re-enter the Review inbox.
+ */
+export async function createVoiceMemoTask(memoId: string, item: {
+  title: string;
+  details?: string;
+  owner?: string | null;
+  dueDate?: string | null;
+  priority?: string;
+}): Promise<any> {
+  const now = new Date().toISOString();
+  return tasksDb.insertAsync({
+    _id: uuidv4(),
+    title: item.title,
+    description: item.details || '',
+    status: 'todo',
+    priority: item.priority || 'medium',
+    dueDate: item.dueDate || null,
+    owner: item.owner || null,
+    source: { type: 'voice_memo', id: memoId },
+    aiExtracted: true,
+    approval: { status: 'approved', approvedAt: now },
+    provenance: { meetingId: memoId, extractionMethod: 'voice_memo', extractedAt: now },
+    archivedAt: null,
+    snoozedAt: null,
+    snoozedReason: null,
+    lastMentionedAt: null,
+    likelyDone: false,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
 // ── Calendar Sync ────────────────────────────────────────────────────────────
 
 export async function syncCalendarEventsToDb(events: {

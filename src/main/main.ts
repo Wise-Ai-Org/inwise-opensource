@@ -9,13 +9,14 @@ import { fuzzyNameScore, SAME_PERSON_THRESHOLD } from './fuzzy-name';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
 import { transcribeAudio, setupWhisper } from './transcriber';
-import { extractInsights, searchMeetings, detectContradictions, generateAgenda, suggestTaskFields } from './extractor';
+import { extractInsights, searchMeetings, detectContradictions, generateAgenda, suggestTaskFields, classifyVoiceMemo, VoiceMemoItem } from './extractor';
 import {
   initDatabase,
   createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus,
   findRecentRecordingMeeting, appendMeetingTranscript,
   getMeetings, getMeeting, deleteMeeting, getAllPastDecisions, getOverdueCommitments,
   createMeetingFromTranscript,
+  createVoiceMemo, createVoiceMemoTask,
   getTasks, createTask, updateTask, deleteTask,
   getSnoozedTasks, snoozeTask, bringBackTask,
   markLikelyDone, confirmLikelyDone, rejectLikelyDone,
@@ -997,6 +998,138 @@ ipcMain.handle('mic:test', async (_e, buffer: Buffer) => {
     return { ok: false, error: e.message };
   } finally {
     fs.unlink(tmpPath, () => {});
+  }
+});
+
+// ── Voice memos (header mic → capture → review → apply) ─────────────────────
+
+ipcMain.handle('voice:transcribe', async (_e, buffer: Buffer, durationSec: number) => {
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+  if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
+  const audioPath = path.join(recordingsDir, `inwise-memo-${Date.now()}.wav`);
+  try {
+    fs.writeFileSync(audioPath, buffer);
+    const transcript = (await transcribeAudio(audioPath)).trim();
+    if (!transcript) {
+      fs.unlink(audioPath, () => {});
+      return { ok: false, error: 'no_speech' };
+    }
+    log('info', 'voice:transcribe', `memo transcribed (${durationSec}s, ${transcript.length} chars)`);
+    return { ok: true, transcript, audioPath };
+  } catch (e: any) {
+    fs.unlink(audioPath, () => {});
+    log('error', 'voice:transcribe', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+const VOICE_MEMO_PRIORITIES = ['low', 'medium', 'high'];
+
+ipcMain.handle('voice:classify', async (_e, transcript: string, ctx: {
+  userName?: string;
+  peopleNames?: string[];
+  meetings?: Array<{ id: string; title: string; when: string }>;
+}) => {
+  const meetings = (ctx?.meetings || []).slice(0, 20);
+  const meetingIds = new Set(meetings.map(m => m.id));
+  const now = new Date();
+  const contextText = [
+    `NOW: ${now.toISOString()} (${now.toLocaleDateString([], { weekday: 'long' })})`,
+    ctx?.userName ? `USER: ${ctx.userName}` : null,
+    ctx?.peopleNames?.length ? `KNOWN PEOPLE: ${ctx.peopleNames.slice(0, 30).join(', ')}` : null,
+    meetings.length
+      ? `UPCOMING MEETINGS:\n${meetings.map(m => `- id: ${m.id} | ${m.title} | ${m.when}`).join('\n')}`
+      : 'UPCOMING MEETINGS: none',
+  ].filter(Boolean).join('\n');
+
+  try {
+    const raw = await classifyVoiceMemo(transcript, contextText);
+    // Same posture as the cloud sanitizer: clamp enums, drop fabricated ids.
+    const items: VoiceMemoItem[] = [];
+    for (const item of raw) {
+      if (item?.kind === 'task' && item.title) {
+        const prio = String((item as any).suggestedPriority || '').toLowerCase();
+        items.push({
+          kind: 'task',
+          title: String(item.title),
+          details: item.details ? String(item.details) : '',
+          owner: item.owner ? String(item.owner) : null,
+          dueDate: item.dueDate && !Number.isNaN(Date.parse(item.dueDate)) ? item.dueDate : null,
+          suggestedPriority: (VOICE_MEMO_PRIORITIES.includes(prio) ? prio : 'medium') as 'low' | 'medium' | 'high',
+          priorityReason: (item as any).priorityReason ? String((item as any).priorityReason) : null,
+        });
+      } else if (item?.kind === 'agenda' && item.text) {
+        items.push({
+          kind: 'agenda',
+          text: String(item.text),
+          targetMeetingId: item.targetMeetingId && meetingIds.has(String(item.targetMeetingId)) ? String(item.targetMeetingId) : null,
+        });
+      } else if (item?.kind === 'note' && item.text) {
+        items.push({ kind: 'note', text: String(item.text) });
+      }
+    }
+    return { ok: true, items };
+  } catch (e: any) {
+    const noKey = /api key not configured/i.test(e.message || '');
+    log(noKey ? 'info' : 'error', 'voice:classify', e.message);
+    return { ok: false, error: noKey ? 'no_api_key' : e.message };
+  }
+});
+
+ipcMain.handle('voice:applyMemo', async (_e, payload: {
+  transcript: string;
+  audioPath: string | null;
+  durationSec: number;
+  items: any[];
+}) => {
+  try {
+    const applied: any[] = [];
+    for (const item of payload?.items || []) {
+      if (item?.kind === 'task' && item.title) {
+        const prio = String(item.priority || '').toLowerCase();
+        applied.push({
+          kind: 'task',
+          title: String(item.title),
+          details: item.details ? String(item.details) : '',
+          owner: item.owner ? String(item.owner) : null,
+          dueDate: item.dueDate && !Number.isNaN(Date.parse(item.dueDate)) ? item.dueDate : null,
+          priority: VOICE_MEMO_PRIORITIES.includes(prio) ? prio : 'medium',
+        });
+      } else if (item?.kind === 'agenda' && item.text) {
+        // An agenda point with no meeting to land on degrades to a note rather
+        // than being dropped — same posture as the cloud apply path.
+        if (item.targetMeetingId) {
+          applied.push({
+            kind: 'agenda',
+            text: String(item.text),
+            targetMeetingId: String(item.targetMeetingId),
+            targetTitle: item.targetTitle ? String(item.targetTitle) : null,
+          });
+        } else {
+          applied.push({ kind: 'note', text: String(item.text) });
+        }
+      } else if (item?.kind === 'note' && item.text) {
+        applied.push({ kind: 'note', text: String(item.text) });
+      }
+    }
+    if (!applied.length) return { ok: false, error: 'nothing_to_apply' };
+
+    const memo = await createVoiceMemo({
+      transcript: String(payload.transcript || ''),
+      durationSec: Number(payload.durationSec) || 0,
+      audioPath: payload.audioPath || null,
+      items: applied,
+    });
+    const memoId = (memo as any)._id;
+    for (const item of applied) {
+      if (item.kind === 'task') await createVoiceMemoTask(memoId, item);
+    }
+    log('info', 'voice:applyMemo', `memo ${memoId}: ${applied.length} item(s) applied`);
+    mainWindow?.webContents.send('meeting:new', memo);
+    return { ok: true, memoId };
+  } catch (e: any) {
+    log('error', 'voice:applyMemo', e.message);
+    return { ok: false, error: e.message };
   }
 });
 

@@ -338,6 +338,86 @@ export async function generateAgenda(context: string): Promise<string[]> {
   }
 }
 
+// ── Voice memo classification ────────────────────────────────────────────────
+
+export type VoiceMemoItem =
+  | { kind: 'task'; title: string; details: string; owner: string | null; dueDate: string | null; suggestedPriority: 'low' | 'medium' | 'high'; priorityReason: string | null }
+  | { kind: 'agenda'; text: string; targetMeetingId: string | null }
+  | { kind: 'note'; text: string };
+
+const VOICE_MEMO_SYSTEM_PROMPT = `You are Wiser, a note-sorting assistant. The user recorded a spoken voice note. Split it into discrete items and classify each as exactly one of: task, agenda, note.
+
+- task: something someone needs to do.
+- agenda: a point to raise in one of the user's UPCOMING MEETINGS. Only use this when the note clearly refers to discussing or covering something in a meeting; bind it to one of the listed meetings when the match is clear, else leave targetMeetingId null.
+- note: any other thought worth keeping.
+
+Return a JSON object with this exact shape:
+{"items":[
+  {"kind":"task","title":"imperative, concise","details":"extra spoken context, else empty string","owner":"name as spoken or null","dueDate":"YYYY-MM-DD or null","suggestedPriority":"low|medium|high","priorityReason":"short reason quoting the speaker or null"},
+  {"kind":"agenda","text":"the point to raise","targetMeetingId":"id from UPCOMING MEETINGS or null"},
+  {"kind":"note","text":"the thought"}
+]}
+
+Rules:
+- Every distinct spoken item appears exactly once, in spoken order.
+- Resolve relative dates ("Friday", "tomorrow") against NOW given in the context.
+- suggestedPriority: explicit urgency ("urgent", "asap", "critical") or a due date within 48 hours of NOW → high; a concrete due date or clear commitment → medium; someday / nice-to-have phrasing → low; nothing said about urgency → medium.
+- priorityReason: one short clause quoting the speaker's own words when possible (e.g. you said "by Friday"); null when nothing was said about urgency.
+- owner: only a person actually named as responsible, or the user themselves. Never invent a name.
+- targetMeetingId must be one of the listed meeting ids — never invent one.
+Return only valid JSON, no markdown fences.`;
+
+export async function classifyVoiceMemo(transcript: string, contextText: string): Promise<VoiceMemoItem[]> {
+  const config = getConfig();
+  if (!config.apiKey) throw new Error('API key not configured');
+
+  const userMessage = `${contextText}\n\nVoice note transcript:\n\n${transcript}`;
+
+  let text: string;
+  if (config.apiProvider === 'anthropic') {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': config.apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1536,
+        system: VOICE_MEMO_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: userMessage }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Claude API error: ${await res.text()}`);
+    const data = await res.json() as any;
+    text = data.content?.[0]?.text || '';
+  } else {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: VOICE_MEMO_SYSTEM_PROMPT },
+          { role: 'user', content: userMessage },
+        ],
+      }),
+    });
+    if (!res.ok) throw new Error(`OpenAI API error: ${await res.text()}`);
+    const data = await res.json() as any;
+    text = data.choices?.[0]?.message?.content || '';
+  }
+
+  const stripped = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  const parsed = JSON.parse(stripped);
+  return Array.isArray(parsed?.items) ? parsed.items : [];
+}
+
 // ── Task field suggestion ────────────────────────────────────────────────────
 
 const TASK_FIELDS_SYSTEM_PROMPT = `You are a task planning assistant. Given a task title and context (recent meetings, existing tasks, people), suggest appropriate field values for the task.

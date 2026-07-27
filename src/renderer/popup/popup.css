@@ -461,6 +461,207 @@ button.pp-chip { cursor: pointer; }
 }
 .pp-sheet-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--slate-200); margin: 0 auto; flex-shrink: 0; }
 
+/* ── Voice memos (header mic → capture → review) ───────────────────────── */
+.vm-micbtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--pp-teal-line);
+  background: var(--pp-teal-tint);
+  color: var(--pp-teal-deep);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex: none;
+}
+.vm-micbtn:hover { background: #dcfaf5; }
+.vm-micbtn:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
+
+.vm-page { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.vm-sheethead { display: flex; align-items: center; padding: 6px 16px 4px; flex-shrink: 0; }
+.vm-sheettitle { flex: 1; font-size: 15px; font-weight: 700; color: var(--navy); }
+.vm-wiser {
+  margin: 6px 14px 0;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--white);
+  border: 1px solid var(--slate-200);
+  border-radius: 10px;
+  padding: 10px 12px;
+  flex-shrink: 0;
+}
+.vm-owl {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--teal);
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+}
+.vm-wiser p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--navy); }
+
+.vm-reczone {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  min-height: 0;
+}
+.vm-wave { display: flex; gap: 3px; align-items: center; height: 44px; }
+.vm-wave span {
+  width: 4px;
+  height: 5px;
+  border-radius: 2px;
+  background: var(--teal);
+  opacity: 0.85;
+  transition: height 0.08s linear;
+}
+.vm-timer {
+  font-size: 26px;
+  font-weight: 650;
+  color: var(--navy);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.vm-stop {
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  border: none;
+  background: var(--teal);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(13, 148, 136, 0.4);
+}
+.vm-stop:hover { background: var(--pp-teal-deep); }
+.vm-stop-square { width: 22px; height: 22px; border-radius: 5px; background: #fff; }
+.vm-privacy {
+  margin: 0 16px 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--slate-200);
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--slate-500);
+  flex-shrink: 0;
+}
+.vm-privacy b { color: var(--pp-teal-deep); font-weight: 600; }
+
+.vm-review {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.vm-card {
+  background: var(--white);
+  border: 1px solid var(--slate-200);
+  border-radius: 10px;
+  padding: 11px 12px;
+}
+.vm-card.vm-dropped { opacity: 0.5; }
+.vm-cardtop { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.vm-cbx {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--slate-300);
+  background: var(--white);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex: none;
+  padding: 0;
+}
+.vm-cbx.vm-on { background: var(--teal); border-color: var(--teal); }
+.vm-kind {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 3px 8px;
+}
+.vm-kind-task   { background: #e7f0fb; color: #2a5e9e; }
+.vm-kind-agenda { background: #f0eaf9; color: #6b4fa3; }
+.vm-kind-note   { background: #eef1f2; color: var(--slate-500); }
+.vm-text {
+  width: 100%;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--navy);
+  font-family: inherit;
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--slate-200);
+  border-radius: 0;
+  padding: 0 0 3px;
+  outline: none;
+  resize: none;
+}
+.vm-text:focus {
+  border: 1px solid var(--teal);
+  border-radius: 7px;
+  padding: 7px 9px;
+  background: var(--white);
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.12);
+}
+.vm-fields { display: flex; gap: 8px; margin-top: 9px; }
+.vm-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-family: inherit;
+  color: var(--navy);
+  border: 1px solid var(--slate-200);
+  border-radius: 7px;
+  padding: 7px 10px;
+  background: #fafcfc;
+  outline: none;
+}
+.vm-select:focus { border-color: var(--teal); }
+.vm-select.vm-slim { flex: 0 0 122px; }
+.vm-prio {
+  display: inline-flex;
+  border: 1px solid var(--slate-200);
+  border-radius: 7px;
+  overflow: hidden;
+  margin-top: 9px;
+}
+.vm-prio button {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 7px 12px;
+  color: var(--slate-500);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+.vm-prio button + button { border-left: 1px solid var(--slate-200); }
+.vm-prio button.vm-on { background: var(--pp-amber-bg); color: var(--pp-amber-ink); }
+.vm-fate { font-size: 11.5px; color: var(--slate-500); margin-top: 8px; line-height: 1.45; }
+.vm-cta { display: flex; gap: 10px; padding: 10px 14px 4px; flex-shrink: 0; }
+
+/* Memo rows in the Meetings day timeline */
+.vm-agenda-mini { margin-top: 10px; border-top: 1px dashed var(--slate-200); padding-top: 9px; }
+.vm-agenda-mini .vm-li { display: flex; gap: 7px; font-size: 12px; line-height: 1.4; margin-top: 4px; color: var(--slate-700); }
+.vm-agenda-mini .vm-n { color: var(--teal); font-weight: 700; font-size: 11px; padding-top: 1px; flex: none; }
+.vm-agenda-mini .vm-new { background: #fdf6e3; border-radius: 4px; padding: 0 3px; }
+
 /* ── Settings section wrapper (legacy sections inside drill-downs) ─────── */
 .pp-settings-embed .settings-section { border: none; padding: 0; margin: 0 0 16px; background: transparent; }
 .pp-settings-embed .settings-section-title { font-size: 10.5px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--slate-500); margin-bottom: 10px; }

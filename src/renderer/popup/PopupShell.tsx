@@ -10,6 +10,7 @@ import { SettingsRootPage, SettingsSectionPage } from './SettingsPages';
 import MeetingDetailPage from './MeetingDetailPage';
 import TaskDetailPage from './TaskDetailPage';
 import PersonDetailPage from './PersonDetailPage';
+import { VoiceCapturePage, VoiceMemoDetailPage, MicGlyph } from './VoiceMemo';
 import './popup.css';
 
 const ReviewContext = createContext<ReviewItems | null>(null);
@@ -78,6 +79,8 @@ function PageView({ page }: { page: Page }) {
     case 'meeting': return <MeetingDetailPage meetingId={page.id} />;
     case 'task': return <TaskDetailPage taskId={page.id} />;
     case 'person': return <PersonDetailPage personId={page.id} />;
+    case 'voice-capture': return <VoiceCapturePage />;
+    case 'voice-memo': return <VoiceMemoDetailPage memoId={page.id} />;
     default: return null;
   }
 }
@@ -172,7 +175,17 @@ function ShellInner() {
           <PageView page={topPage} />
         ) : (
           <>
-            <div className="pp-datehead">{dateLabel}</div>
+            <div className="pp-datehead pp-row" style={{ gap: 8 }}>
+              <span className="pp-grow">{dateLabel}</span>
+              <button
+                className="vm-micbtn"
+                aria-label="New voice note"
+                title="New voice note"
+                onClick={() => openPage({ kind: 'voice-capture' })}
+              >
+                <MicGlyph />
+              </button>
+            </div>
             <div className="pp-tabs" role="tablist">
               <button role="tab" aria-selected={tab === 'meetings'} className={`pp-tab ${tab === 'meetings' ? 'pp-on' : ''}`} onClick={() => setTab('meetings')}>
                 Meetings

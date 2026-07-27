@@ -13,7 +13,9 @@ export type Page =
   | { kind: 'search' }
   | { kind: 'meeting'; id: string; title?: string }
   | { kind: 'task'; id: string }
-  | { kind: 'person'; id: string; name?: string };
+  | { kind: 'person'; id: string; name?: string }
+  | { kind: 'voice-capture' }
+  | { kind: 'voice-memo'; id: string };
 
 interface NavState {
   tab: Tab;
