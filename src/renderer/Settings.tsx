@@ -19,6 +19,7 @@ interface Config {
   slackInactivityWindowMin: number;
   mcpEnabled?: boolean;
   mcpPort?: number;
+  dailyPlanEnabled?: boolean;
 }
 
 type CalendarProviderUI = 'google' | 'outlook' | 'ics';
@@ -2483,9 +2484,13 @@ export default function Settings() {
   const [saved, setSaved] = useState(false);
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [speakers, setSpeakers] = useState<MediaDeviceInfo[]>([]);
+  const [openAtLogin, setOpenAtLogin] = useState<boolean | null>(null);
 
   useEffect(() => {
     (window as any).inwiseAPI.getConfig().then(setConfig);
+    (window as any).inwiseAPI.getLoginItemSettings?.()
+      .then((s: { openAtLogin: boolean }) => setOpenAtLogin(!!s?.openAtLogin))
+      .catch(() => setOpenAtLogin(false));
     const refreshDevices = () => {
       navigator.mediaDevices.enumerateDevices().then(devices => {
         setMics(devices.filter(d => d.kind === 'audioinput'));
@@ -2617,6 +2622,48 @@ export default function Settings() {
               </select>
               <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4 }}>
                 Downloaded automatically on first use. Runs 100% locally — no audio ever leaves your device.
+              </span>
+            </div>
+          </div>
+
+          {/* Startup & Daily Plan */}
+          <div className="settings-section">
+            <div className="settings-section-title">Startup</div>
+            <div className="form-group">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={openAtLogin === true}
+                  disabled={openAtLogin === null}
+                  onChange={e => {
+                    const value = e.target.checked;
+                    setOpenAtLogin(value);
+                    (window as any).inwiseAPI.setLoginItemOpenAtLogin(value);
+                  }}
+                />
+                <span className="form-label" style={{ margin: 0 }}>Launch Inwise when you log in</span>
+              </label>
+              <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
+                Starts quietly in the tray, so Wiser is ready before your first meeting.
+              </span>
+            </div>
+            <div className="form-group">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={config.dailyPlanEnabled !== false}
+                  onChange={e => {
+                    const value = e.target.checked;
+                    setConfig(c => c ? { ...c, dailyPlanEnabled: value } : c);
+                    setSaved(false);
+                    (window as any).inwiseAPI.setConfig({ dailyPlanEnabled: value });
+                  }}
+                />
+                <span className="form-label" style={{ margin: 0 }}>Daily plan from Wiser</span>
+              </label>
+              <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
+                About 10 minutes after you open your computer, Wiser pops up today's meetings, drafted
+                agendas, and your top priorities. Waits until you're out of any meeting in progress.
               </span>
             </div>
           </div>

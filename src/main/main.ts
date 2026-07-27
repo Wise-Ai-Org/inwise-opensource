@@ -1,9 +1,9 @@
-﻿import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage } from 'electron';
+﻿import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage, powerMonitor, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
-import { getConfig, setConfig, getSorJiraPrefs, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, CalendarSubscription } from './config';
+import { getConfig, setConfig, getSorJiraPrefs, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, getDailyPlanPrefs, markDailyPlanShown, wasAutostartConfigured, markAutostartConfigured, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
@@ -57,6 +57,10 @@ import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from 
 import { createTray, updateTrayMenu, destroyTray } from './tray';
 import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
 import { computeWelcomeBack } from './welcome-back';
+import {
+  computeDailyPlanGate, selectTodaysMeetings, hasAgendaHistory, buildGreeting,
+  DAILY_PLAN_DELAY_MS, DAILY_PLAN_RECHECK_MS,
+} from './daily-plan';
 import { findLiveMeetingForBanner } from './live-meeting-banner';
 import { inferCompletedTaskIds } from './task-completion-inference';
 import {
@@ -75,6 +79,11 @@ Menu.setApplicationMenu(null);
 
 let mainWindow: BrowserWindow | null = null;
 let overlayWindow: BrowserWindow | null = null;
+let dailyPlanWindow: BrowserWindow | null = null;
+let dailyPlanTimer: NodeJS.Timeout | null = null;
+// Set by the login-item registration; when launched at OS login the main
+// window stays hidden and the app lives in the tray until the user opens it.
+const startHidden = process.argv.includes('--hidden');
 const calendarWatcher = new CalendarWatcher();
 let activeRecording: { mediaRecorder?: any; chunks: Buffer[]; tmpPath?: string } | null = null;
 
@@ -127,7 +136,11 @@ function createMainWindow(): void {
   }
   mainWindow.once('ready-to-show', () => {
     markAppOpened();
-    mainWindow?.show();
+    let openedAsHidden = startHidden;
+    if (process.platform === 'darwin') {
+      try { openedAsHidden = openedAsHidden || app.getLoginItemSettings().wasOpenedAsHidden; } catch { /* keep flag */ }
+    }
+    if (!openedAsHidden) mainWindow?.show();
   });
 
   mainWindow.on('show', () => {
@@ -215,6 +228,111 @@ function createReminderBadge(title: string): void {
 
   // Auto-dismiss after 30 seconds if user doesn't interact
   setTimeout(() => { if (!win.isDestroyed()) win.close(); }, 30_000);
+}
+
+// ── Daily plan ("Wiser planned your day") ────────────────────────────────────
+
+const DAILY_PLAN_WIDTH = 400;
+const DAILY_PLAN_HEIGHT = 660;
+
+function createDailyPlanWindow(): void {
+  if (dailyPlanWindow && !dailyPlanWindow.isDestroyed()) {
+    dailyPlanWindow.show();
+    dailyPlanWindow.focus();
+    return;
+  }
+  const workArea = screen.getPrimaryDisplay().workArea;
+  const win = new BrowserWindow({
+    width: DAILY_PLAN_WIDTH,
+    height: DAILY_PLAN_HEIGHT,
+    x: workArea.x + workArea.width - DAILY_PLAN_WIDTH - 16,
+    y: workArea.y + workArea.height - DAILY_PLAN_HEIGHT - 16,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'dailyplan-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  win.loadFile(path.join(__dirname, '../../dist/renderer/dailyplan.html'));
+  win.once('ready-to-show', () => {
+    win.show();
+    // On top just long enough to be noticed, then behave like a normal window.
+    setTimeout(() => { if (!win.isDestroyed()) win.setAlwaysOnTop(false); }, 4_000);
+  });
+  win.on('closed', () => { dailyPlanWindow = null; });
+  dailyPlanWindow = win;
+}
+
+/** In a meeting right now? Recording, overlay pill up, or a live calendar event. */
+function dailyPlanBusyNow(): boolean {
+  if (isRecordingActive) return true;
+  if (overlayWindow && !overlayWindow.isDestroyed()) return true;
+  return findLiveMeetingForBanner({
+    events: calendarWatcher.getUpcomingEvents(),
+    now: new Date(),
+    isRecordingActive: false,
+    overlayWindowOpen: false,
+  }) !== null;
+}
+
+function scheduleDailyPlan(delayMs: number): void {
+  const prefs = getDailyPlanPrefs();
+  const gate = computeDailyPlanGate({
+    now: new Date(),
+    enabled: prefs.enabled,
+    lastShownAt: prefs.lastShownAt,
+    liveMeeting: false,
+  });
+  if (gate !== 'show') return;
+  if (dailyPlanTimer) clearTimeout(dailyPlanTimer);
+  dailyPlanTimer = setTimeout(() => tryShowDailyPlan(), delayMs);
+  log('info', 'daily-plan', `Scheduled in ${Math.round(delayMs / 60_000)} min`);
+}
+
+function tryShowDailyPlan(force = false): void {
+  dailyPlanTimer = null;
+  if (!force) {
+    const prefs = getDailyPlanPrefs();
+    const gate = computeDailyPlanGate({
+      now: new Date(),
+      enabled: prefs.enabled,
+      lastShownAt: prefs.lastShownAt,
+      liveMeeting: dailyPlanBusyNow(),
+    });
+    if (gate === 'disabled' || gate === 'already-shown') return;
+    if (gate === 'defer') {
+      log('info', 'daily-plan', 'Meeting in progress — deferring until it ends');
+      dailyPlanTimer = setTimeout(() => tryShowDailyPlan(), DAILY_PLAN_RECHECK_MS);
+      return;
+    }
+  }
+  createDailyPlanWindow();
+  markDailyPlanShown();
+}
+
+/**
+ * First-run default: register the app to start at OS login (hidden, tray only).
+ * Runs once — after that the Settings toggle owns the login item. Skipped in
+ * dev so `electron .` runs never register electron.exe as a login item.
+ */
+function applyAutostartDefault(): void {
+  if (wasAutostartConfigured() || !app.isPackaged) return;
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      ...(process.platform === 'darwin' ? { openAsHidden: true } : { args: ['--hidden'] }),
+    });
+    log('info', 'login-item', 'Autostart enabled by default (first run)');
+  } catch (err) {
+    log('error', 'login-item', `Default autostart failed: ${String(err)}`);
+  }
+  markAutostartConfigured();
 }
 
 // Transcriptions of finished recordings run as background jobs; the pill shows
@@ -1999,13 +2117,102 @@ ipcMain.handle('welcomeBack:liveMeeting', () => {
 
 ipcMain.handle('app:setLoginItemOpenAtLogin', (_e, enabled: boolean) => {
   try {
-    app.setLoginItemSettings({ openAtLogin: !!enabled });
+    app.setLoginItemSettings({
+      openAtLogin: !!enabled,
+      ...(process.platform === 'darwin' ? { openAsHidden: true } : { args: ['--hidden'] }),
+    });
+    markAutostartConfigured();
     log('info', 'login-item', `openAtLogin=${!!enabled}`);
     return { ok: true };
   } catch (err) {
     log('error', 'login-item', `setLoginItemSettings failed: ${String(err)}`);
     return { ok: false, error: String(err) };
   }
+});
+
+ipcMain.handle('app:getLoginItemSettings', () => {
+  try {
+    return { openAtLogin: app.getLoginItemSettings().openAtLogin };
+  } catch {
+    return { openAtLogin: false };
+  }
+});
+
+// ── Daily plan IPC ───────────────────────────────────────────────────────────
+
+ipcMain.handle('dailyPlan:get', async () => {
+  const config = getConfig();
+  const now = new Date();
+  try {
+    const events = selectTodaysMeetings(calendarWatcher.getUpcomingEvents(), now);
+    const [tasks, meetings, people] = await Promise.all([getTasks(), getMeetings(), getPeople()]);
+
+    // Agendas are only drafted when local history gives the model something
+    // real to draw on (shared attendee or recurring title) — max 3 AI calls.
+    const agendaTargets = config.apiKey
+      ? events.filter((ev) => ev.attendees.length > 0 && hasAgendaHistory(meetings, ev)).slice(0, 3)
+      : [];
+    const agendaById = new Map<string, string[]>();
+    await Promise.all(agendaTargets.map(async (ev) => {
+      try {
+        const context = await getMeetingAgendaContext(ev.title, ev.attendees);
+        agendaById.set(ev.id, await generateAgenda(context));
+      } catch {
+        agendaById.set(ev.id, []);
+      }
+    }));
+
+    const scored = scoreTasks(tasks, meetings, people);
+    const taskMap = new Map(tasks.map((t: any) => [t._id, t]));
+    const topTasks = scored
+      .filter((s) => {
+        const t: any = taskMap.get(s._id);
+        return t && t.status !== 'completed';
+      })
+      .slice(0, 5)
+      .map((s) => {
+        const t: any = taskMap.get(s._id);
+        return {
+          id: s._id,
+          title: t.title,
+          priority: t.priority || 'medium',
+          dueDate: t.dueDate || null,
+          reasoning: s.reasoning,
+        };
+      });
+
+    return {
+      greeting: buildGreeting(now, config.userName?.trim() || ''),
+      meetings: events.map((ev) => ({
+        id: ev.id,
+        title: ev.title,
+        startTime: ev.startTime.getTime(),
+        endTime: ev.endTime.getTime(),
+        attendees: ev.attendees,
+        agenda: (agendaById.get(ev.id) || []).slice(0, 4),
+      })),
+      tasks: topTasks,
+      hasApiKey: !!config.apiKey,
+    };
+  } catch (e: any) {
+    log('error', 'dailyPlan:get', e.message);
+    return {
+      greeting: buildGreeting(now, config.userName?.trim() || ''),
+      meetings: [],
+      tasks: [],
+      hasApiKey: !!config.apiKey,
+    };
+  }
+});
+
+ipcMain.on('dailyPlan:dismiss', () => {
+  if (dailyPlanWindow && !dailyPlanWindow.isDestroyed()) dailyPlanWindow.close();
+});
+
+ipcMain.on('dailyPlan:open-inwise', () => {
+  mainWindow?.show();
+  mainWindow?.focus();
+  if (dailyPlanWindow && !dailyPlanWindow.isDestroyed()) dailyPlanWindow.close();
 });
 
 ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; message?: string; stack?: string; source?: string }) => {
@@ -2374,8 +2581,16 @@ app.whenReady().then(() => {
     log('info', 'config:migrate-calendars', `Seeded calendars[] from legacy fields â€” added=${migration.added}`);
   }
   createMainWindow();
-  createTray(mainWindow!);
+  createTray(mainWindow!, () => tryShowDailyPlan(true));
   calendarWatcher.start();
+
+  // Autostart (first run defaults to on) + once-a-day plan ~10 min after the
+  // machine opens. 'unlock-screen'/'resume' re-arm the timer; the gate keeps
+  // it at most once per day.
+  applyAutostartDefault();
+  scheduleDailyPlan(DAILY_PLAN_DELAY_MS);
+  powerMonitor.on('unlock-screen', () => scheduleDailyPlan(DAILY_PLAN_DELAY_MS));
+  powerMonitor.on('resume', () => scheduleDailyPlan(DAILY_PLAN_DELAY_MS));
 
   // Register Slack pipeline: normalize thread → create meeting → extract insights → save
   registerSlackPipeline(async (channelId, channelName, messages) => {

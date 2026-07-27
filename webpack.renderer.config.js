@@ -41,4 +41,9 @@ module.exports = [
     entry: './src/renderer/badge-entry.tsx',
     output: { ...common.output, filename: 'badge.bundle.js' },
   },
+  {
+    ...common,
+    entry: './src/renderer/dailyplan-entry.tsx',
+    output: { ...common.output, filename: 'dailyplan.bundle.js' },
+  },
 ];

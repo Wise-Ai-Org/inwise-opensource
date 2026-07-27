@@ -60,6 +60,11 @@ interface Config {
   /** Last dragged position of the recorder pill; null = default top-left. */
   pillX: number | null;
   pillY: number | null;
+  /** Once-a-day "Wiser planned your day" popup after startup/unlock. */
+  dailyPlanEnabled: boolean;
+  dailyPlanLastShownAt: string | null;
+  /** True once autostart has been set — either the first-run default or an explicit user toggle. */
+  autostartConfigured: boolean;
 }
 
 const store = new Store<Config>({
@@ -92,6 +97,9 @@ const store = new Store<Config>({
     mcpPort: 43117,
     pillX: null,
     pillY: null,
+    dailyPlanEnabled: true,
+    dailyPlanLastShownAt: null,
+    autostartConfigured: false,
     sor: {
       dismissedReceiptIds: [],
       jira: { approvalGateEnabled: false, approvalThreshold: 0.6 },
@@ -211,6 +219,31 @@ export function getWelcomeBackLastSeenAt(): string | null {
 
 export function markWelcomeBackSeen(): void {
   store.set('welcomeBackLastSeenAt', new Date().toISOString());
+}
+
+/**
+ * Safe accessor for daily-plan prefs. Stores created before these keys existed
+ * fall back to the shipped defaults (enabled, never shown).
+ */
+export function getDailyPlanPrefs(): { enabled: boolean; lastShownAt: string | null } {
+  const enabled = store.get('dailyPlanEnabled') as boolean | undefined;
+  const lastShownAt = store.get('dailyPlanLastShownAt') as string | null | undefined;
+  return {
+    enabled: typeof enabled === 'boolean' ? enabled : true,
+    lastShownAt: typeof lastShownAt === 'string' ? lastShownAt : null,
+  };
+}
+
+export function markDailyPlanShown(): void {
+  store.set('dailyPlanLastShownAt', new Date().toISOString());
+}
+
+export function wasAutostartConfigured(): boolean {
+  return store.get('autostartConfigured') === true;
+}
+
+export function markAutostartConfigured(): void {
+  store.set('autostartConfigured', true);
 }
 
 /**

@@ -127,6 +127,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   welcomeBackLiveMeeting: () => ipcRenderer.invoke('welcomeBack:liveMeeting'),
   setLoginItemOpenAtLogin: (enabled: boolean) =>
     ipcRenderer.invoke('app:setLoginItemOpenAtLogin', enabled),
+  getLoginItemSettings: () => ipcRenderer.invoke('app:getLoginItemSettings'),
 
   // Renderer error reporting
   reportUnhandledRejection: (payload: { name?: string; message?: string; stack?: string; source?: string }) =>
