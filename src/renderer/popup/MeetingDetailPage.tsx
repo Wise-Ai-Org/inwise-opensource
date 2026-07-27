@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
 import JiraMappingModal from '../views/communications/JiraMappingModal';
-import TranscriptUploadModal from '../views/communications/TranscriptUploadModal';
+import UploadTranscriptSheet from './UploadTranscriptSheet';
 
 interface Insights {
   summary?: string;
@@ -152,9 +152,10 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               </button>
             )}
 
-            <TranscriptUploadModal
-              isOpen={uploadOpen}
+            <UploadTranscriptSheet
+              open={uploadOpen}
               onClose={() => setUploadOpen(false)}
+              attachTo={meeting.title}
               onUpload={async ({ content }) => {
                 const updated = await api().attachTranscriptToMeeting?.(meetingId, content);
                 if (updated) setMeeting(updated);

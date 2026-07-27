@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, fmtTime, sameDay, useNav, OPEN_RECORD_SHEET_EVENT, recordSheetRequest } from './nav';
 import { useReview } from './PopupShell';
-import TranscriptUploadModal from '../views/communications/TranscriptUploadModal';
+import UploadTranscriptSheet from './UploadTranscriptSheet';
 import { MicGlyph } from './VoiceMemo';
 
 interface MeetingRow {
@@ -570,7 +570,7 @@ export default function MeetingsTab() {
         />
       )}
 
-      <TranscriptUploadModal isOpen={uploadOpen} onClose={() => setUploadOpen(false)} onUpload={handleUpload} />
+      <UploadTranscriptSheet open={uploadOpen} onClose={() => setUploadOpen(false)} onUpload={handleUpload} />
     </div>
   );
 }
