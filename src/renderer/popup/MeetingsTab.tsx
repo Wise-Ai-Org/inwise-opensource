@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, fmtTime, sameDay, useNav } from './nav';
+import { api, fmtTime, sameDay, useNav, OPEN_RECORD_SHEET_EVENT, recordSheetRequest } from './nav';
 import { useReview } from './PopupShell';
 import TranscriptUploadModal from '../views/communications/TranscriptUploadModal';
 import { MicGlyph } from './VoiceMemo';
@@ -214,6 +214,22 @@ export default function MeetingsTab() {
     finally { setLoaded(true); }
   }, []);
 
+  // The header capture chooser hands "Record a meeting" off to this tab's
+  // record sheet — via event when mounted, via the pending flag when the
+  // chooser had to switch tabs first.
+  useEffect(() => {
+    if (recordSheetRequest.pending) {
+      recordSheetRequest.pending = false;
+      setSheetOpen(true);
+    }
+    const onOpen = () => {
+      recordSheetRequest.pending = false;
+      setSheetOpen(true);
+    };
+    window.addEventListener(OPEN_RECORD_SHEET_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_RECORD_SHEET_EVENT, onOpen);
+  }, []);
+
   useEffect(() => {
     reload();
     const a = api();
@@ -398,13 +414,9 @@ export default function MeetingsTab() {
         </span>
         <span className="pp-row" style={{ gap: 8 }}>
           <button className="pp-btn pp-ghost" style={{ padding: '6px 12px' }} onClick={() => setUploadOpen(true)}>Upload</button>
-          {recording ? (
+          {recording && (
             <button className="pp-btn pp-solid" style={{ padding: '6px 12px', background: 'var(--red)' }} onClick={() => api().stopRecording?.()}>
               ■ Stop
-            </button>
-          ) : (
-            <button className="pp-btn pp-solid record-btn" style={{ padding: '6px 12px' }} onClick={() => setSheetOpen(true)}>
-              ● Record
             </button>
           )}
         </span>

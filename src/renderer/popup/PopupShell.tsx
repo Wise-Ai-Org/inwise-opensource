@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { NavProvider, useNav, api, Page, POPUP_NAV_EVENT, LegacyView } from './nav';
+import { NavProvider, useNav, api, Page, POPUP_NAV_EVENT, LegacyView, requestRecordSheet } from './nav';
 import { ReviewItems, useReviewItems } from './useReviewItems';
 import MeetingsTab from './MeetingsTab';
 import TasksTab from './TasksTab';
@@ -70,6 +70,42 @@ function MenuDropdown({ onClose }: { onClose: () => void }) {
   );
 }
 
+// One capture entry, two destinations: dictating your own thoughts vs
+// recording the conversation in the room.
+function CaptureChooser({ onClose }: { onClose: () => void }) {
+  const { setTab, openPage } = useNav();
+  return (
+    <>
+      <div className="pp-sheet-backdrop" onClick={onClose} />
+      <div className="pp-sheet" role="dialog" aria-label="Capture">
+        <div className="pp-sheet-handle" />
+        <button
+          className="pp-setrow"
+          onClick={() => { onClose(); openPage({ kind: 'voice-capture' }); }}
+        >
+          <span className="pp-seticon"><MicGlyph /></span>
+          <span className="pp-grow">
+            <span className="pp-rowlabel" style={{ display: 'block' }}>Voice note</span>
+            <span className="pp-rowsub" style={{ display: 'block' }}>Tasks, agenda points, or thoughts — Wiser sorts them for you</span>
+          </span>
+          <span className="pp-chevron">›</span>
+        </button>
+        <button
+          className="pp-setrow"
+          onClick={() => { onClose(); setTab('meetings'); requestRecordSheet(); }}
+        >
+          <span className="pp-seticon" style={{ color: 'var(--red)', fontSize: 11 }}>●</span>
+          <span className="pp-grow">
+            <span className="pp-rowlabel" style={{ display: 'block' }}>Record a meeting</span>
+            <span className="pp-rowsub" style={{ display: 'block' }}>Mic + system audio, linked to your calendar</span>
+          </span>
+          <span className="pp-chevron">›</span>
+        </button>
+      </div>
+    </>
+  );
+}
+
 function PageView({ page }: { page: Page }) {
   switch (page.kind) {
     case 'settings-root': return <SettingsRootPage />;
@@ -89,6 +125,7 @@ function ShellInner() {
   const { tab, stack, setTab, openPage } = useNav();
   const review = useReviewItems();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [captureOpen, setCaptureOpen] = useState(false);
   const [pipelineError, setPipelineError] = useState<string | null>(null);
 
   // Extraction/pipeline failures were toasted in the old app; surface them as a
@@ -163,6 +200,7 @@ function ShellInner() {
         </div>
 
         {menuOpen && <MenuDropdown onClose={() => setMenuOpen(false)} />}
+        {captureOpen && <CaptureChooser onClose={() => setCaptureOpen(false)} />}
 
         {pipelineError && (
           <div style={{ margin: '4px 14px 0', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: '10px 12px', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
@@ -179,9 +217,9 @@ function ShellInner() {
               <span className="pp-grow">{dateLabel}</span>
               <button
                 className="vm-micbtn"
-                aria-label="New voice note"
-                title="New voice note"
-                onClick={() => openPage({ kind: 'voice-capture' })}
+                aria-label="Capture — voice note or meeting recording"
+                title="Voice note or record a meeting"
+                onClick={() => setCaptureOpen(true)}
               >
                 <MicGlyph />
               </button>

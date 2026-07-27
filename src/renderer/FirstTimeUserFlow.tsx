@@ -11,9 +11,9 @@ interface Step {
 
 const STEPS: Step[] = [
   {
-    targetSelector: '.record-btn',
-    title: 'Record a Meeting',
-    description: 'Click here to start recording. Inwise captures your mic and system audio — so both sides of the call are transcribed.',
+    targetSelector: '.vm-micbtn',
+    title: 'Capture Anything',
+    description: 'One button for your voice: record a meeting (mic + system audio, both sides transcribed) or dictate a quick note — Wiser sorts it into tasks, agenda points, and thoughts for you to approve.',
     navigateTo: 'communications',
   },
   {

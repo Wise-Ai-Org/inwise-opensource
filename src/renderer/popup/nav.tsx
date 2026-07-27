@@ -68,6 +68,17 @@ export function requestPopupNav(detail: { view?: LegacyView; meetingId?: string 
   window.dispatchEvent(new CustomEvent(POPUP_NAV_EVENT, { detail }));
 }
 
+// ── Capture chooser → record sheet bridge ────────────────────────────────────
+// The header mic is the single capture entry; "Record a meeting" hands off to
+// MeetingsTab's record sheet. The flag covers the tab-not-mounted-yet case
+// (event fires before MeetingsTab's listener exists after a tab switch).
+export const OPEN_RECORD_SHEET_EVENT = 'pp-open-record-sheet';
+export const recordSheetRequest = { pending: false };
+export function requestRecordSheet() {
+  recordSheetRequest.pending = true;
+  window.dispatchEvent(new CustomEvent(OPEN_RECORD_SHEET_EVENT));
+}
+
 // ── Small shared helpers ─────────────────────────────────────────────────────
 
 export function initials(name: string | null | undefined): string {
