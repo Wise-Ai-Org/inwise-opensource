@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 let tray: Tray | null = null;
+let showDailyPlan: (() => void) | null = null;
 
 const IDLE_ICON_REL = '../../assets/favicon.png';
 const RECORDING_ICON_REL = '../../assets/favicon-recording.png';
@@ -15,9 +16,10 @@ function loadTrayIcon(isRecording: boolean) {
   return nativeImage.createFromPath(target).resize({ width: 16, height: 16 });
 }
 
-export function createTray(mainWindow: BrowserWindow, onToggle?: () => void): void {
+export function createTray(mainWindow: BrowserWindow, onToggle?: () => void, onShowDailyPlan?: () => void): void {
   tray = new Tray(loadTrayIcon(false));
   tray.setToolTip('Inwise');
+  showDailyPlan = onShowDailyPlan ?? null;
 
   updateTrayMenu(mainWindow, false);
 
@@ -64,6 +66,9 @@ export function updateTrayMenu(mainWindow: BrowserWindow, isRecording: boolean):
       label: 'Open Inwise',
       click: () => { mainWindow.show(); mainWindow.focus(); },
     },
+    ...(showDailyPlan
+      ? [{ label: "Show today's plan", click: () => showDailyPlan?.() }]
+      : []),
     { type: 'separator' },
     {
       label: 'Quit',

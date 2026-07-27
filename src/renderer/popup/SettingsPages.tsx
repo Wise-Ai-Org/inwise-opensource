@@ -4,6 +4,7 @@ import Settings from '../Settings';
 
 const SECTIONS: Array<{ key: SettingsSectionKey; icon: string; label: string }> = [
   { key: 'ai', icon: '✦', label: 'AI provider' },
+  { key: 'startup', icon: '▸', label: 'Startup & daily plan' },
   { key: 'transcription', icon: '◉', label: 'Transcription & recording' },
   { key: 'calendar', icon: '▦', label: 'Calendar' },
   { key: 'jira', icon: '⇄', label: 'Jira' },
