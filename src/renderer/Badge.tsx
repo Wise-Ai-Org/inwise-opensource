@@ -26,7 +26,7 @@ type JobState = 'transcribing' | 'processing' | 'done' | 'error';
 interface Job { jobId: string; title: string; state: JobState; message?: string }
 
 const INWISE_TEAL = '#0F738C';
-const PILL_H = 64; // window height (44px pill + glow margin)
+const PILL_H = 72; // window height (44px pill + halo margin)
 const W_COLLAPSED = 240;
 const W_EXPANDED = 470;
 const W_MEDIUM = 340;
@@ -69,6 +69,22 @@ async function checkSystemAudio(): Promise<{ ok: boolean; error?: string }> {
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e?.message || 'System audio check failed' };
+  }
+}
+
+// Silent speaker probe for the context menu: routes an AudioContext to the saved
+// output and checks it runs. No tick — the audible test stays on left-click.
+async function checkSpeakerQuiet(): Promise<boolean> {
+  try {
+    const cfg = await (window as any).inwiseAPI?.getConfig?.();
+    const dev = cfg?.speakerDeviceId && cfg.speakerDeviceId !== 'default' ? cfg.speakerDeviceId : undefined;
+    const ctx: AudioContext = new (window as any).AudioContext(dev ? { sinkId: dev } : {});
+    await ctx.resume();
+    const ok = ctx.state === 'running';
+    await ctx.close();
+    return ok;
+  } catch {
+    return false;
   }
 }
 
@@ -116,7 +132,7 @@ const styles: Record<string, any> = {
     alignItems: 'center',
     justifyContent: 'flex-start',
     background: 'transparent',
-    padding: 10,
+    padding: 14,
   },
   pill: {
     background: 'rgba(15, 23, 42, 0.97)',
@@ -129,6 +145,7 @@ const styles: Record<string, any> = {
     boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
     userSelect: 'none',
     maxWidth: '100%',
+    cursor: 'pointer',
   },
   grip: {
     WebkitAppRegion: 'drag',
@@ -238,11 +255,13 @@ export default function Badge() {
       if (!msg?.jobId) return;
       setJobs(prev => ({ ...prev, [msg.jobId]: msg }));
       if (msg.state === 'done') {
+        // Long enough to read the "open Inwise" invite; main closes the pill on
+        // a matching delay once the queue drains.
         setTimeout(() => setJobs(prev => {
           const next = { ...prev };
           delete next[msg.jobId];
           return next;
-        }), 2500);
+        }), 6000);
       }
     });
 
@@ -689,25 +708,39 @@ export default function Badge() {
   const onPillClick = () => {
     if (state.status === 'countdown' || state.status === 'preflight') { cancelCountdown(); return; }
     if (state.status === 'reminder') { window.close(); return; }
+    if (state.status === 'saving') { (window as any).inwiseAPI.openInwise?.(); return; }
     void runDeviceTest();
   };
 
   const onContextMenu = async (e: React.MouseEvent) => {
     e.preventDefault();
+    // Mid-recording the live mic stream is the truth; otherwise a quick
+    // acquire-and-release probe. Both run alongside device enumeration.
+    const micOkPromise: Promise<boolean> = (async () => {
+      if (statusRef.current === 'recording') {
+        const track = micStreamRef.current?.getAudioTracks()[0];
+        return !!track && track.readyState === 'live' && !track.muted;
+      }
+      return (await checkMic()).ok;
+    })();
     let mics: { id: string; label: string }[] = [];
     let speakers: { id: string; label: string }[] = [];
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      mics = devices
-        .filter(d => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'communications')
-        .map((d, i) => ({ id: d.deviceId, label: d.label || `Microphone ${i + 1}` }));
-      speakers = devices
-        .filter(d => d.kind === 'audiooutput' && d.deviceId && d.deviceId !== 'communications')
-        .map((d, i) => ({ id: d.deviceId, label: d.label || `Speaker ${i + 1}` }));
-    } catch { /* menu still opens without device submenus */ }
+    const [devices, micOk, spkOk] = await Promise.all([
+      navigator.mediaDevices.enumerateDevices().catch(() => [] as MediaDeviceInfo[]),
+      micOkPromise,
+      checkSpeakerQuiet(),
+    ]);
+    mics = devices
+      .filter(d => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'communications')
+      .map((d, i) => ({ id: d.deviceId, label: d.label || `Microphone ${i + 1}` }));
+    speakers = devices
+      .filter(d => d.kind === 'audiooutput' && d.deviceId && d.deviceId !== 'communications')
+      .map((d, i) => ({ id: d.deviceId, label: d.label || `Speaker ${i + 1}` }));
     (window as any).inwiseAPI.showPillMenu?.({
       mics,
       speakers,
+      micOk,
+      spkOk,
       recording: statusRef.current === 'recording',
       title: titleRef.current,
     });
@@ -726,7 +759,7 @@ export default function Badge() {
     if (state.status === 'countdown' || state.status === 'preflight') return W_MEDIUM;
     if (state.status === 'reminder') return W_MEDIUM;
     if (state.status === 'recording') return hover ? W_EXPANDED : W_COLLAPSED;
-    if (state.status === 'saving') return hover ? W_EXPANDED : W_COLLAPSED;
+    if (state.status === 'saving') return doneFlash ? W_MEDIUM : hover ? W_EXPANDED : W_COLLAPSED;
     return W_COLLAPSED;
   })();
 
@@ -836,13 +869,13 @@ export default function Badge() {
       : busyJob
         ? `${busyJob.state === 'processing' ? 'Analyzing' : 'Transcribing'} — ${truncate(busyJob.title, 22)}`
         : doneFlash
-          ? 'Saved'
+          ? 'Saved — open Inwise to see insights'
           : 'Saving…';
     body = (
       <>
         {grip}
         {errorJob ? <StatusDot tone="fail" /> : doneFlash ? <StatusDot tone="ok" /> : <span className="pill-spinner" />}
-        <span style={{ ...styles.label, color: errorJob ? '#fca5a5' : doneFlash ? TEAL : '#94a3b8', maxWidth: hover ? 300 : 140 }} title={errorJob?.message || label}>
+        <span style={{ ...styles.label, color: errorJob ? '#fca5a5' : doneFlash ? TEAL : '#94a3b8', maxWidth: doneFlash ? 280 : hover ? 300 : 140 }} title={errorJob?.message || label}>
           {label}
         </span>
       </>
@@ -880,8 +913,12 @@ export default function Badge() {
     );
   }
 
+  // Recording: steady thick teal ring + halo — no pulsing fade, easy to spot at a glance.
   const pillStyle = state.status === 'recording'
-    ? { ...styles.pill, animation: 'inwise-glow 4.5s ease-in-out infinite' }
+    ? {
+        ...styles.pill,
+        boxShadow: '0 0 0 2.5px rgba(20,184,166,0.95), 0 0 14px 5px rgba(20,184,166,0.38), 0 0 26px 10px rgba(15,115,140,0.18), 0 6px 24px rgba(0,0,0,0.4)',
+      }
     : state.status === 'error'
       ? { ...styles.pill, boxShadow: '0 0 0 1px rgba(239,68,68,0.6), 0 6px 24px rgba(0,0,0,0.4)' }
       : styles.pill;
@@ -889,10 +926,6 @@ export default function Badge() {
   return (
     <div style={styles.wrap}>
       <style>{`
-        @keyframes inwise-glow {
-          0%, 100% { box-shadow: 0 0 0 1px rgba(15,115,140,0.45), 0 0 10px 2px rgba(15,115,140,0.30), 0 6px 24px rgba(0,0,0,0.4); }
-          50%      { box-shadow: 0 0 0 1px rgba(15,115,140,0.60), 0 0 16px 4px rgba(15,115,140,0.42), 0 6px 24px rgba(0,0,0,0.4); }
-        }
         @keyframes pill-spin { to { transform: rotate(360deg); } }
         .pill-spinner {
           width: 9px; height: 9px; flex-shrink: 0;
