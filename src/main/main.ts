@@ -2889,8 +2889,17 @@ app.whenReady().then(() => {
   // it at most once per day.
   applyAutostartDefault();
   scheduleDailyPlan(DAILY_PLAN_DELAY_MS);
-  powerMonitor.on('unlock-screen', () => scheduleDailyPlan(DAILY_PLAN_DELAY_MS));
-  powerMonitor.on('resume', () => scheduleDailyPlan(DAILY_PLAN_DELAY_MS));
+  // On wake/unlock, re-poll the calendar immediately so a meeting already in
+  // progress triggers the recorder within seconds instead of waiting out the
+  // 5-minute poll interval.
+  powerMonitor.on('unlock-screen', () => {
+    scheduleDailyPlan(DAILY_PLAN_DELAY_MS);
+    void calendarWatcher.refresh();
+  });
+  powerMonitor.on('resume', () => {
+    scheduleDailyPlan(DAILY_PLAN_DELAY_MS);
+    void calendarWatcher.refresh();
+  });
 
   // Register Slack pipeline: normalize thread → create meeting → extract insights → save
   registerSlackPipeline(async (channelId, channelName, messages) => {

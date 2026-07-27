@@ -157,14 +157,14 @@ export class CalendarWatcher extends EventEmitter {
     // Fire start/reminder notifications from the deduped list so we don't notify twice
     // when the same event is on two synced calendars.
     for (const event of this.cachedEvents) {
-      const msUntilStart = event.startTime.getTime() - now;
-      if (
-        msUntilStart >= 0 &&
-        msUntilStart <= START_WINDOW_MS &&
-        !this.notifiedIds.has(event.id)
-      ) {
+      const phase = meetingNotifyPhase(event, now);
+      if (phase && !this.notifiedIds.has(event.id)) {
         this.notifiedIds.add(event.id);
-        log('info', 'calendar-watcher:notify', `${event.meetingLink ? 'meeting-starting' : 'meeting-reminder'}: "${event.title}" starts in ${Math.round(msUntilStart / 60_000)}m`);
+        const msUntilStart = event.startTime.getTime() - now;
+        const when = phase === 'in-progress'
+          ? `already in progress (started ${Math.round(-msUntilStart / 60_000)}m ago)`
+          : `starts in ${Math.round(msUntilStart / 60_000)}m`;
+        log('info', 'calendar-watcher:notify', `${event.meetingLink ? 'meeting-starting' : 'meeting-reminder'}: "${event.title}" ${when}`);
         if (event.meetingLink) {
           this.emit('meeting-starting', event);
         } else {
@@ -371,4 +371,25 @@ export function isCancelledOccurrence(
 function extractLink(text: string): string | undefined {
   const matches = text.match(/https?:\/\/[^\s"<>\n]+/g);
   return matches?.find(url => MEETING_LINK_RE.test(url));
+}
+
+// ── Start-notification phase (exported for tests) ───────────────────────────
+// 'starting-soon': starts within the next START_WINDOW_MS — the normal path.
+// 'in-progress':   already started but still has meaningful time left. This is
+//   the catch-up path for a meeting that began while the app was closed or the
+//   machine was asleep — without it, opening the laptop mid-meeting never
+//   shows the recorder at all.
+
+const MIN_REMAINING_MS = 5 * 60_000;
+
+export function meetingNotifyPhase(
+  event: { startTime: Date; endTime: Date },
+  nowMs: number,
+): 'starting-soon' | 'in-progress' | null {
+  const msUntilStart = event.startTime.getTime() - nowMs;
+  if (msUntilStart >= 0) {
+    return msUntilStart <= START_WINDOW_MS ? 'starting-soon' : null;
+  }
+  const msUntilEnd = event.endTime.getTime() - nowMs;
+  return msUntilEnd > MIN_REMAINING_MS ? 'in-progress' : null;
 }
