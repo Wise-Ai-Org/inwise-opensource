@@ -15,7 +15,7 @@
     "watch:renderer": "webpack --config webpack.renderer.config.js --watch",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win",
+    "dist:win": "npm run build && electron-builder --win && node scripts/stable-installer.js",
     "dist:mac": "npm run build && electron-builder --mac"
   },
   "build": {
