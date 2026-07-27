@@ -1,6 +1,6 @@
 {
   "name": "inwise-opensource",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Open-source AI meeting recorder — local transcription, local storage, your own API key",
   "license": "MIT",
   "author": "Inwise.ai",
