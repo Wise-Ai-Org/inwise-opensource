@@ -725,9 +725,11 @@ export async function addPerson(data: {
   const email = (data.email || '').trim().toLowerCase();
   const all = await peopleDb.findAsync({});
   const existing = (all as any[]).find(p =>
-    (email && (p.email || '').trim().toLowerCase() === email) ||
-    (name && fuzzyNameScore(p.name, name) >= SAME_PERSON_THRESHOLD &&
-      !(p.notSameAs || []).some((n: string) => normalizeNameStr(n) === normalizeNameStr(name)))
+    (email && ((p.email || '').trim().toLowerCase() === email ||
+      (p.altEmails || []).some((e: string) => (e || '').trim().toLowerCase() === email))) ||
+    (name && !(p.notSameAs || []).some((n: string) => normalizeNameStr(n) === normalizeNameStr(name)) &&
+      (fuzzyNameScore(p.name, name) >= SAME_PERSON_THRESHOLD ||
+        (p.altNames || []).some((n: string) => fuzzyNameScore(n, name) >= SAME_PERSON_THRESHOLD)))
   );
   if (existing) {
     const patch: Record<string, any> = { trackedBy: true, archived: false };
@@ -757,15 +759,19 @@ export async function addPerson(data: {
 export async function addTrackedPeople(names: string[]): Promise<any[]> {
   const results = [];
   for (const name of names) {
-    // Exact match first, then fuzzy (nicknames/initials/typos) at the
-    // same-person threshold, honoring prior "keep separate" decisions.
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    let existing = await peopleDb.findOneAsync({ name: new RegExp(`^${escaped}$`, 'i') } as any);
+    // Exact match first (current name or a merged-away alias), then fuzzy
+    // (nicknames/initials/typos) at the same-person threshold, honoring
+    // prior "keep separate" decisions.
+    const target = normalizeNameStr(name);
+    const all = await peopleDb.findAsync({});
+    let existing = (all as any[]).find(p =>
+      normalizeNameStr(p.name) === target || (p.altNames || []).some((n: string) => normalizeNameStr(n) === target)
+    ) || null;
     if (!existing) {
-      const all = await peopleDb.findAsync({});
       existing = (all as any[]).find(p =>
-        fuzzyNameScore(p.name, name) >= SAME_PERSON_THRESHOLD &&
-        !(p.notSameAs || []).some((n: string) => normalizeNameStr(n) === normalizeNameStr(name))
+        !(p.notSameAs || []).some((n: string) => normalizeNameStr(n) === normalizeNameStr(name)) &&
+        (fuzzyNameScore(p.name, name) >= SAME_PERSON_THRESHOLD ||
+          (p.altNames || []).some((n: string) => fuzzyNameScore(n, name) >= SAME_PERSON_THRESHOLD))
       ) || null;
     }
     if (existing) {
@@ -938,7 +944,11 @@ export async function getSuggestedPeople(): Promise<any[]> {
 
   // Already-tracked people for exclusion
   const allPeople = await peopleDb.findAsync({ archived: { $ne: true } });
-  const trackedNames = new Set(allPeople.map((p: any) => (p.name || '').toLowerCase()));
+  const trackedNames = new Set<string>();
+  for (const p of allPeople as any[]) {
+    if (p.name) trackedNames.add(p.name.toLowerCase());
+    for (const alt of p.altNames || []) trackedNames.add((alt || '').toLowerCase());
+  }
 
   const frequency: Record<string, { name: string; count: number; meetings: any[] }> = {};
   for (const m of recentMeetings) {

@@ -6,7 +6,7 @@ import TasksTab from './TasksTab';
 import PeopleTab from './PeopleTab';
 import ReviewPage from './ReviewPage';
 import SearchPage from './SearchPage';
-import { SettingsRootPage, SettingsSectionPage } from './SettingsPages';
+import { SettingsRootPage, SettingsSectionPage, IntegrationsHubPage } from './SettingsPages';
 import MeetingDetailPage from './MeetingDetailPage';
 import TaskDetailPage from './TaskDetailPage';
 import PersonDetailPage from './PersonDetailPage';
@@ -20,9 +20,16 @@ export function useReview(): ReviewItems {
   return ctx;
 }
 
+const RELEASES_URL = 'https://github.com/Wise-Ai-Org/inwise-opensource/releases';
+
+type UpdateCheck = 'idle' | 'checking' | 'current' | 'available' | 'error';
+
 function MenuDropdown({ onClose }: { onClose: () => void }) {
   const { push } = useNav();
   const [version, setVersion] = useState('');
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheck>('idle');
+  const [latestVersion, setLatestVersion] = useState('');
 
   useEffect(() => {
     api().getAppVersion?.().then((v: string) => setVersion(v || '')).catch(() => {});
@@ -32,6 +39,51 @@ function MenuDropdown({ onClose }: { onClose: () => void }) {
     push(page);
     onClose();
   };
+
+  const checkForUpdates = async () => {
+    setUpdateCheck('checking');
+    try {
+      const result = await api().checkForUpdates?.();
+      if (!result || result.error) { setUpdateCheck('error'); return; }
+      if (result.upToDate) { setUpdateCheck('current'); return; }
+      setLatestVersion(result.latest || '');
+      setUpdateCheck('available');
+    } catch {
+      setUpdateCheck('error');
+    }
+  };
+
+  const updateLabel = () => {
+    switch (updateCheck) {
+      case 'checking': return 'Checking…';
+      case 'current': return "You're up to date";
+      case 'available': return `v${latestVersion} available`;
+      case 'error': return "Couldn't check — open releases";
+      default: return 'Check for updates';
+    }
+  };
+
+  if (aboutOpen) {
+    return (
+      <>
+        <div className="pp-menu-backdrop" onClick={onClose} />
+        <div className="pp-menu pp-about" role="dialog" aria-label="About Inwise">
+          <div className="pp-about-title">Inwise</div>
+          <div className="pp-about-version">{version ? `Version ${version}` : 'Version unknown'}</div>
+          <div className="pp-about-meta">MIT licensed · runs locally on this machine</div>
+          <button
+            className="pp-link"
+            onClick={() => api().openExternal?.('https://github.com/Wise-Ai-Org/inwise-opensource')}
+          >
+            View source on GitHub
+          </button>
+          <button className="pp-menu-item" role="menuitem" onClick={() => setAboutOpen(false)}>
+            <span className="pp-menu-icon">←</span>Back
+          </button>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -47,9 +99,12 @@ function MenuDropdown({ onClose }: { onClose: () => void }) {
         <button
           className="pp-menu-item pp-quiet"
           role="menuitem"
-          onClick={() => { api().openExternal?.('https://github.com/inwise-ai/inwise/releases'); onClose(); }}
+          onClick={() => {
+            if (updateCheck === 'available') { api().openExternal?.(RELEASES_URL); onClose(); return; }
+            if (updateCheck === 'idle' || updateCheck === 'error') checkForUpdates();
+          }}
         >
-          <span className="pp-menu-icon">↻</span>Check for updates
+          <span className="pp-menu-icon">↻</span>{updateLabel()}
         </button>
         <button
           className="pp-menu-item pp-quiet"
@@ -58,9 +113,9 @@ function MenuDropdown({ onClose }: { onClose: () => void }) {
         >
           <span className="pp-menu-icon">⟳</span>Reload UI
         </button>
-        <div className="pp-menu-item pp-quiet" style={{ cursor: 'default' }}>
+        <button className="pp-menu-item pp-quiet" role="menuitem" onClick={() => setAboutOpen(true)}>
           <span className="pp-menu-icon">i</span>About Inwise{version ? ` · v${version}` : ''}
-        </div>
+        </button>
         <hr className="pp-menu-sep" />
         <button className="pp-menu-item pp-quiet" role="menuitem" onClick={() => api().quitApp?.()}>
           <span className="pp-menu-icon">⏻</span>Quit Inwise
@@ -109,6 +164,7 @@ function CaptureChooser({ onClose }: { onClose: () => void }) {
 function PageView({ page }: { page: Page }) {
   switch (page.kind) {
     case 'settings-root': return <SettingsRootPage />;
+    case 'settings-integrations': return <IntegrationsHubPage />;
     case 'settings-section': return <SettingsSectionPage section={page.section} title={page.title} />;
     case 'review': return <ReviewPage focus={page.focus} />;
     case 'search': return <SearchPage />;

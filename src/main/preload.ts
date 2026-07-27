@@ -173,6 +173,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   hideWindow: () => ipcRenderer.invoke('window:hide'),
   quitApp: () => ipcRenderer.invoke('app:quit'),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
+  checkForUpdates: () => ipcRenderer.invoke('app:check-for-updates'),
   openReviewWindow: (meetingId: string, initialTab?: string) =>
     ipcRenderer.invoke('review-window:open', meetingId, initialTab),
   renameVoicePrint: (id: string, name: string) => ipcRenderer.invoke('voiceprint:rename', id, name),

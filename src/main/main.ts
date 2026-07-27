@@ -1903,6 +1903,29 @@ ipcMain.handle('app:quit', () => {
 
 ipcMain.handle('app:version', () => app.getVersion());
 
+const UPDATE_REPO = 'Wise-Ai-Org/inwise-opensource';
+
+ipcMain.handle('app:check-for-updates', async () => {
+  const current = app.getVersion();
+  try {
+    const res = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, {
+      headers: { Accept: 'application/vnd.github+json' },
+    });
+    if (!res.ok) return { current, error: `GitHub returned ${res.status}` };
+    const json = await res.json() as { tag_name?: string; html_url?: string };
+    const latest = (json.tag_name || '').replace(/^v/i, '');
+    if (!latest) return { current, error: 'No release tag found' };
+    return {
+      current,
+      latest,
+      upToDate: latest === current,
+      url: json.html_url || `https://github.com/${UPDATE_REPO}/releases/latest`,
+    };
+  } catch (err: any) {
+    return { current, error: err?.message || 'Could not reach GitHub' };
+  }
+});
+
 ipcMain.handle('review-window:open', (_e, meetingId: string, initialTab?: string) => {
   createReviewWindow(meetingId, initialTab);
 });

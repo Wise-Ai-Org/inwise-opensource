@@ -102,6 +102,11 @@
 .pp-menu-item.pp-quiet { color: var(--slate-500); font-size: 12.5px; }
 .pp-menu-item .pp-menu-icon { width: 18px; text-align: center; color: var(--pp-teal-deep); flex: none; }
 .pp-menu-sep { border: 0; border-top: 1px solid var(--slate-200); margin: 5px 8px; }
+.pp-about { padding: 16px 14px 8px; }
+.pp-about-title { font-size: 15px; font-weight: 700; color: var(--navy); }
+.pp-about-version { font-size: 12.5px; color: var(--slate-500); margin-top: 4px; }
+.pp-about-meta { font-size: 12px; color: var(--slate-500); margin-top: 8px; line-height: 1.5; }
+.pp-about .pp-link { display: inline-block; margin: 10px 0 12px; font-size: 12.5px; }
 
 /* ── Date header + tabs ────────────────────────────────────────────────── */
 .pp-datehead {

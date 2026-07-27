@@ -8,6 +8,7 @@ export type SettingsSectionKey =
 
 export type Page =
   | { kind: 'settings-root' }
+  | { kind: 'settings-integrations' }
   | { kind: 'settings-section'; section: SettingsSectionKey; title: string }
   | { kind: 'review'; focus?: 'approvals' | 'priorities' | 'people' | 'voices' }
   | { kind: 'search' }

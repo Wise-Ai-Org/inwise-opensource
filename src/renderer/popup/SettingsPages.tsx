@@ -2,19 +2,48 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, useNav, SettingsSectionKey } from './nav';
 import Settings from '../Settings';
 
-const SECTIONS: Array<{ key: SettingsSectionKey; icon: string; label: string }> = [
+const SECTIONS: Array<{ key: SettingsSectionKey | 'integrations-hub'; icon: string; label: string }> = [
   { key: 'ai', icon: '✦', label: 'AI provider' },
   { key: 'startup', icon: '▸', label: 'Startup & daily plan' },
   { key: 'transcription', icon: '◉', label: 'Transcription & recording' },
+  { key: 'integrations-hub', icon: '⚏', label: 'Integrations' },
+  { key: 'ai-connect', icon: '⌘', label: 'Connect to AI' },
+  { key: 'voice', icon: '☺', label: 'Voice & identity' },
+  { key: 'data', icon: '▤', label: 'Data' },
+];
+
+// Rows shown inside the "Integrations" hub — connection status for each
+// service plus the approval-gates/sync settings, all in one place instead of
+// separate top-level Settings rows.
+const INTEGRATION_ROWS: Array<{ key: SettingsSectionKey; icon: string; label: string }> = [
   { key: 'calendar', icon: '▦', label: 'Calendar' },
   { key: 'jira', icon: '⇄', label: 'Jira' },
   { key: 'slack', icon: '#', label: 'Slack' },
   { key: 'zoom', icon: '◎', label: 'Zoom' },
   { key: 'integrations', icon: '⚙', label: 'Approval gates & sync' },
-  { key: 'ai-connect', icon: '⌘', label: 'Connect to AI' },
-  { key: 'voice', icon: '☺', label: 'Voice & identity' },
-  { key: 'data', icon: '▤', label: 'Data' },
 ];
+
+async function fetchIntegrationStatuses(): Promise<Record<string, string>> {
+  const a = api();
+  const [cals, jira, slack, zoom] = await Promise.allSettled([
+    a.listCalendars?.(),
+    a.jiraStatus?.(),
+    a.slackStatus?.(),
+    a.zoomStatus?.(),
+  ]);
+  const next: Record<string, string> = {};
+  if (cals.status === 'fulfilled' && Array.isArray(cals.value)) {
+    const n = cals.value.filter((c: any) => c.enabled !== false).length;
+    next['calendar'] = n > 0 ? `${n} calendar${n === 1 ? '' : 's'} connected` : 'Not connected';
+  }
+  const connLabel = (r: PromiseSettledResult<any>) =>
+    r.status === 'fulfilled' && (r.value?.connected || r.value?.isConnected) ? 'Connected' : 'Not connected';
+  next['jira'] = connLabel(jira);
+  next['slack'] = connLabel(slack);
+  next['zoom'] = connLabel(zoom);
+  next['integrations'] = 'What syncs, and when to ask first';
+  return next;
+}
 
 export function SettingsRootPage() {
   const { pop, push } = useNav();
@@ -24,13 +53,10 @@ export function SettingsRootPage() {
     const a = api();
     Promise.allSettled([
       a.getConfig?.(),
-      a.listCalendars?.(),
-      a.jiraStatus?.(),
-      a.slackStatus?.(),
-      a.zoomStatus?.(),
       a.mcpStatus?.(),
       a.getVoicePrints?.(),
-    ]).then(([cfg, cals, jira, slack, zoom, mcp, prints]) => {
+      fetchIntegrationStatuses(),
+    ]).then(([cfg, mcp, prints, integrations]) => {
       const next: Record<string, string> = {};
       if (cfg.status === 'fulfilled' && cfg.value) {
         const c = cfg.value;
@@ -38,15 +64,6 @@ export function SettingsRootPage() {
         next['transcription'] = `Whisper ${c.whisperModel || 'base'}${c.calendarFreeRecording ? ' · auto-record on' : ''}`;
         next['voice'] = c.userName ? `Enrolled as ${c.userName}` : 'Not set up yet';
       }
-      if (cals.status === 'fulfilled' && Array.isArray(cals.value)) {
-        const n = cals.value.filter((c: any) => c.enabled !== false).length;
-        next['calendar'] = n > 0 ? `${n} calendar${n === 1 ? '' : 's'} connected` : 'Not connected';
-      }
-      const connLabel = (r: PromiseSettledResult<any>, name: string) =>
-        r.status === 'fulfilled' && (r.value?.connected || r.value?.isConnected) ? 'Connected' : 'Not connected';
-      next['jira'] = connLabel(jira, 'jira');
-      next['slack'] = connLabel(slack, 'slack');
-      next['zoom'] = connLabel(zoom, 'zoom');
       if (mcp.status === 'fulfilled' && mcp.value) {
         next['ai-connect'] = mcp.value.enabled ? `Local MCP on port ${mcp.value.port || ''}`.trim() : 'MCP server off';
       }
@@ -55,7 +72,13 @@ export function SettingsRootPage() {
         if (enrolled > 0) next['voice'] = `${next['voice'] || 'Enrolled'} · ${enrolled} voice${enrolled === 1 ? '' : 's'}`;
       }
       next['data'] = 'Local only · export or clear';
-      next['integrations'] = 'What syncs, and when to ask first';
+      if (integrations.status === 'fulfilled') {
+        const connected = ['calendar', 'jira', 'slack', 'zoom'].filter(k => {
+          const v = integrations.value[k] || '';
+          return v.includes('connected') || v === 'Connected';
+        }).length;
+        next['integrations-hub'] = `${connected} of 4 connected`;
+      }
       setSubs(next);
     });
   }, []);
@@ -70,7 +93,50 @@ export function SettingsRootPage() {
       <div className="pp-body" style={{ paddingTop: 4 }}>
         <div className="pp-listcard">
           {SECTIONS.map(s => (
-            <button key={s.key} className="pp-setrow" onClick={() => push({ kind: 'settings-section', section: s.key, title: s.label })}>
+            <button
+              key={s.key}
+              className="pp-setrow"
+              onClick={() => s.key === 'integrations-hub'
+                ? push({ kind: 'settings-integrations' })
+                : push({ kind: 'settings-section', section: s.key as SettingsSectionKey, title: s.label })}
+            >
+              <span className="pp-seticon">{s.icon}</span>
+              <div className="pp-grow">
+                <div className="pp-rowlabel">{s.label}</div>
+                {subs[s.key] && <div className="pp-rowsub">{subs[s.key]}</div>}
+              </div>
+              <span className="pp-chevron">›</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+export function IntegrationsHubPage() {
+  const { pop, push } = useNav();
+  const [subs, setSubs] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    fetchIntegrationStatuses().then(setSubs);
+  }, []);
+
+  return (
+    <>
+      <div className="pp-drillhead">
+        <button className="pp-back" aria-label="Back" onClick={pop}>←</button>
+        <div className="pp-drilltitle">Integrations</div>
+        <span />
+      </div>
+      <div className="pp-body" style={{ paddingTop: 4 }}>
+        <div className="pp-listcard">
+          {INTEGRATION_ROWS.map(s => (
+            <button
+              key={s.key}
+              className="pp-setrow"
+              onClick={() => push({ kind: 'settings-section', section: s.key, title: s.label })}
+            >
               <span className="pp-seticon">{s.icon}</span>
               <div className="pp-grow">
                 <div className="pp-rowlabel">{s.label}</div>
