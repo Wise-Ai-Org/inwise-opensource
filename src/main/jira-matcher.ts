@@ -9,6 +9,7 @@
 
 import { getConfig } from './config';
 import { log } from './logger';
+import { extractKeywords, simpleStem, jaccardSimilarity } from './text-similarity';
 
 export interface MatchCandidate {
   jiraKey: string;
@@ -27,54 +28,8 @@ export interface MatchResult {
 }
 
 // ── Text processing helpers ──────────────────────────────────────────────────
-
-const STOP_WORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-  'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
-  'should', 'may', 'might', 'shall', 'can', 'need', 'must', 'this', 'that',
-  'these', 'those', 'it', 'its', 'we', 'they', 'them', 'their', 'our',
-  'not', 'no', 'up', 'out', 'if', 'about', 'into', 'from', 'as', 'so',
-]);
-
-function extractKeywords(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .split(/\s+/)
-    .filter(w => w.length > 2 && !STOP_WORDS.has(w));
-}
-
-function simpleStem(word: string): string {
-  // Very basic stemmer — handles common suffixes
-  return word
-    .replace(/ing$/, '')
-    .replace(/tion$/, 't')
-    .replace(/sion$/, 's')
-    .replace(/ment$/, '')
-    .replace(/ness$/, '')
-    .replace(/able$/, '')
-    .replace(/ible$/, '')
-    .replace(/ful$/, '')
-    .replace(/less$/, '')
-    .replace(/ous$/, '')
-    .replace(/ive$/, '')
-    .replace(/ed$/, '')
-    .replace(/er$/, '')
-    .replace(/ly$/, '')
-    .replace(/es$/, '')
-    .replace(/s$/, '');
-}
-
-function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
-  if (setA.size === 0 && setB.size === 0) return 0;
-  let intersection = 0;
-  for (const item of setA) {
-    if (setB.has(item)) intersection++;
-  }
-  const union = setA.size + setB.size - intersection;
-  return union === 0 ? 0 : intersection / union;
-}
+// Tokenizer/stemmer/Jaccard live in text-similarity.ts, shared with the
+// task-mention dedup pipeline (US-003) — do not re-add local copies here.
 
 // ── Matching engine ──────────────────────────────────────────────────────────
 
