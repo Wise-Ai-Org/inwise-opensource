@@ -48,6 +48,15 @@ export const api = {
   confirmLikelyDone: (id: string) => inwiseAPI.confirmLikelyDone(id),
   rejectLikelyDone: (id: string) => inwiseAPI.rejectLikelyDone(id),
 
+  // ── Task-mention dedup (task-dedup PRD) ──────────────────────────────────
+  dedupResolvePending: (taskId: string, action: 'same' | 'new' | 'reopen') =>
+    inwiseAPI.dedupResolvePending(taskId, action),
+  dedupGetMentionThread: (taskId: string) => inwiseAPI.dedupGetMentionThread(taskId),
+  dedupMergeTasks: (survivorId: string, loserId: string) => inwiseAPI.dedupMergeTasks(survivorId, loserId),
+  dedupUndoSplit: (taskId: string, mentionId: string) => inwiseAPI.dedupUndoSplit(taskId, mentionId),
+  dedupBumpPriority: (taskId: string) => inwiseAPI.dedupBumpPriority(taskId),
+  dedupDismissNudge: (taskId: string) => inwiseAPI.dedupDismissNudge(taskId),
+
   // ── People ───────────────────────────────────────────────────────────────
   getPeople: (search?: string) => inwiseAPI.getPeople(search),
   getArchivedPeople: () => inwiseAPI.getArchivedPeople(),

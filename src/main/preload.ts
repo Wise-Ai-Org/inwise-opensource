@@ -46,6 +46,19 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   confirmLikelyDone: (id: string) => ipcRenderer.invoke('db:confirmLikelyDone', id),
   rejectLikelyDone: (id: string) => ipcRenderer.invoke('db:rejectLikelyDone', id),
 
+  // Task-mention dedup (task-dedup PRD)
+  dedupResolvePending: (taskId: string, action: 'same' | 'new' | 'reopen') =>
+    ipcRenderer.invoke('dedup:resolvePending', taskId, action),
+  dedupMatchVoiceItems: (items: Array<{ id: number; title: string; details?: string }>) =>
+    ipcRenderer.invoke('dedup:matchVoiceItems', items),
+  dedupGetMentionThread: (taskId: string) => ipcRenderer.invoke('dedup:getMentionThread', taskId),
+  dedupMergeTasks: (survivorId: string, loserId: string) => ipcRenderer.invoke('dedup:mergeTasks', survivorId, loserId),
+  dedupUndoSplit: (taskId: string, mentionId: string) => ipcRenderer.invoke('dedup:undoSplit', taskId, mentionId),
+  dedupBumpPriority: (taskId: string) => ipcRenderer.invoke('dedup:bumpPriority', taskId),
+  dedupDismissNudge: (taskId: string) => ipcRenderer.invoke('dedup:dismissNudge', taskId),
+  dedupListDecisions: (limit?: number) => ipcRenderer.invoke('dedup:listDecisions', limit),
+  dedupDecisionStats: () => ipcRenderer.invoke('dedup:decisionStats'),
+
   // People
   getPeople: (search?: string) => ipcRenderer.invoke('db:getPeople', search),
   getArchivedPeople: () => ipcRenderer.invoke('db:getArchivedPeople'),
@@ -180,7 +193,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 
   // Events from main → renderer
   on: (channel: string, cb: (...args: any[]) => void) => {
-    const allowed = ['recording:status', 'meeting:new', 'meeting:open-details', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'tasks:likely-done-updated', 'jira:auto-synced', 'sor:write-completed', 'pipeline:error', 'audio:health', 'app:navigate'];
+    const allowed = ['recording:status', 'meeting:new', 'meeting:open-details', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'tasks:likely-done-updated', 'tasks:mentions-updated', 'jira:auto-synced', 'sor:write-completed', 'pipeline:error', 'audio:health', 'app:navigate'];
     if (allowed.includes(channel)) {
       ipcRenderer.on(channel, (_event, ...args) => cb(...args));
     }
