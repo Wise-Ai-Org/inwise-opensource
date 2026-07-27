@@ -26,6 +26,12 @@ export function matchesSelf(
   const name = (userName || '').trim().toLowerCase();
   if (name && lower.includes(name)) return true;
 
+  // "Shravani Vatti" never substring-matches "shravani.vatti@gmail.com"
+  // (space vs dot) — if every name token appears in the attendee string,
+  // treat it as the user.
+  const tokens = name.split(/\s+/).filter(t => t.length >= 2);
+  if (tokens.length >= 2 && tokens.every(t => lower.includes(t))) return true;
+
   return false;
 }
 

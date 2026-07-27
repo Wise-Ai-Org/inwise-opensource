@@ -5,24 +5,29 @@ import * as os from 'os';
 
 import { getConfig, setConfig, getSorJiraPrefs, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, getDailyPlanPrefs, markDailyPlanShown, wasAutostartConfigured, markAutostartConfigured, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
+import { fuzzyNameScore, SAME_PERSON_THRESHOLD } from './fuzzy-name';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
 import { transcribeAudio, setupWhisper } from './transcriber';
-import { extractInsights, searchMeetings, detectContradictions, generateAgenda, suggestTaskFields } from './extractor';
+import { extractInsights, searchMeetings, detectContradictions, generateAgenda, suggestTaskFields, classifyVoiceMemo, VoiceMemoItem } from './extractor';
 import {
   initDatabase,
   createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus,
   findRecentRecordingMeeting, appendMeetingTranscript,
   getMeetings, getMeeting, deleteMeeting, getAllPastDecisions, getOverdueCommitments,
   createMeetingFromTranscript,
+  createVoiceMemo, createVoiceMemoTask,
   getTasks, createTask, updateTask, deleteTask,
   getSnoozedTasks, snoozeTask, bringBackTask,
   markLikelyDone, confirmLikelyDone, rejectLikelyDone,
   getPeople, getArchivedPeople, getPerson, addPerson, addTrackedPeople,
   archivePerson, unarchivePerson, getSuggestedPeople, updatePersonProfile,
+  dedupePeopleByName, dedupeCalendarSyncMeetings,
+  getPersonMergeCandidates, mergePeople, markNotSamePerson,
   getPersonAgendaContext, getMeetingAgendaContext,
   saveVoicePrint, getVoicePrints, getVoicePrint, deleteVoicePrint,
   getUserVoicePrint, getVoicePrintByName, getVoicePrintsWithEmbeddings,
+  renameVoicePrint,
   syncCalendarEventsToDb,
 } from './database';
 import { extractChannel, trimWav, wavBufferToSamples, stitchWavBuffers } from '@inwise/desktop-shared';
@@ -54,7 +59,7 @@ import {
 import { matchAllItems, semanticMatch } from './jira-matcher';
 import { scoreTasks } from './task-scorer';
 import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from '@inwise/desktop-shared';
-import { createTray, updateTrayMenu, destroyTray } from './tray';
+import { createTray, updateTrayMenu, destroyTray, getTrayBounds } from './tray';
 import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
 import { computeWelcomeBack } from './welcome-back';
 import {
@@ -105,12 +110,55 @@ let pendingConflict:
 
 // â”€â”€ Windows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// Tray-popup dimensions — the main window is a slim taskbar popup, not a desktop window.
+const POPUP_WIDTH = 380;
+const POPUP_HEIGHT = 680;
+
+// While an external auth flow (Zoom/Google/MS OAuth in the system browser) is in
+// progress the popup must not hide on blur — the browser stealing focus IS a blur.
+// Renderer sets this via popup:pin around auth flows.
+let popupPinned = false;
+
+function positionPopupWindow(win: BrowserWindow): void {
+  try {
+    const trayBounds = getTrayBounds();
+    const display = trayBounds
+      ? screen.getDisplayMatching(trayBounds)
+      : screen.getPrimaryDisplay();
+    const wa = display.workArea;
+    // Anchor to the work-area corner nearest the taskbar. On Windows the work
+    // area already excludes the taskbar, so bottom-right of workArea sits just
+    // above a bottom taskbar and left of a right taskbar.
+    const x = Math.round(wa.x + wa.width - POPUP_WIDTH - 12);
+    const y = Math.round(wa.y + wa.height - POPUP_HEIGHT - 12);
+    win.setBounds({ x, y, width: POPUP_WIDTH, height: POPUP_HEIGHT });
+  } catch { /* positioning is best-effort; default placement is acceptable */ }
+}
+
+// Clicking the tray icon blurs the popup, which hides it — then the click event
+// would immediately re-show it. Treat a tray click right after a blur-hide as
+// "the user clicked to close".
+let lastBlurHideAt = 0;
+
+export function togglePopupWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (Date.now() - lastBlurHideAt < 350) return;
+  if (mainWindow.isVisible() && mainWindow.isFocused()) {
+    mainWindow.hide();
+  } else {
+    positionPopupWindow(mainWindow);
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
+    width: POPUP_WIDTH,
+    height: POPUP_HEIGHT,
+    frame: false,
+    resizable: false,
+    skipTaskbar: true,
     backgroundColor: '#f8fafc',
     icon: path.join(__dirname, process.platform === 'win32' ? '../../assets/icon.ico' : '../../assets/icon.png'),
     webPreferences: {
@@ -134,8 +182,16 @@ function createMainWindow(): void {
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
   }
+  // Electron persists per-origin zoom; a stray Ctrl+= at any point would leave
+  // the 380px popup permanently rendering oversized, clipped content. Pin it.
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow?.webContents.setZoomFactor(1);
+    mainWindow?.webContents.setVisualZoomLevelLimits(1, 1);
+  });
+
   mainWindow.once('ready-to-show', () => {
     markAppOpened();
+    if (mainWindow) positionPopupWindow(mainWindow);
     let openedAsHidden = startHidden;
     if (process.platform === 'darwin') {
       try { openedAsHidden = openedAsHidden || app.getLoginItemSettings().wasOpenedAsHidden; } catch { /* keep flag */ }
@@ -147,10 +203,51 @@ function createMainWindow(): void {
     markAppOpened();
   });
 
+  // Tray-popup behavior: clicking anywhere else hides the popup — unless an
+  // auth flow pinned it open, or we're in development (devtools focus would
+  // otherwise hide the window on every inspection).
+  mainWindow.on('blur', () => {
+    if (popupPinned) return;
+    if (process.env.NODE_ENV === 'development') return;
+    if (mainWindow?.webContents.isDevToolsFocused()) return;
+    lastBlurHideAt = Date.now();
+    mainWindow?.hide();
+  });
+
   mainWindow.on('close', (e) => {
     e.preventDefault();
     mainWindow?.hide();
   });
+}
+
+// ── Transcript review window ─────────────────────────────────────────────────
+// The full transcript review flow is unusable at popup width, so it opens in a
+// normal resizable window — the one place the app steps outside the popup.
+let reviewWindow: BrowserWindow | null = null;
+
+function createReviewWindow(meetingId: string, initialTab?: string): void {
+  if (reviewWindow && !reviewWindow.isDestroyed()) {
+    reviewWindow.close();
+  }
+  reviewWindow = new BrowserWindow({
+    width: 980,
+    height: 720,
+    minWidth: 720,
+    minHeight: 560,
+    backgroundColor: '#f8fafc',
+    icon: path.join(__dirname, process.platform === 'win32' ? '../../assets/icon.ico' : '../../assets/icon.png'),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+    title: 'Inwise — Transcript review',
+    show: false,
+  });
+  const tab = initialTab ? `&tab=${encodeURIComponent(initialTab)}` : '';
+  reviewWindow.loadURL(`app://bundle/index.html?review=${encodeURIComponent(meetingId)}${tab}`);
+  reviewWindow.once('ready-to-show', () => reviewWindow?.show());
+  reviewWindow.on('closed', () => { reviewWindow = null; });
 }
 
 // Recorder pill window: collapsed capsule that the renderer resizes on hover
@@ -447,11 +544,14 @@ async function autoEnrollVoices(audioPath: string, attendees: string[]): Promise
   // Compute embedding for this clip
   const clipEmbedding = computeEmbeddingFromWav(rightChannelClip);
 
-  // Check which attendees already have voice prints
+  // Check which attendees already have voice prints — fuzzy name match so
+  // "Zee" and "Zeeshan Khan" resolve to the same enrolled voice.
+  const allPrints = await getVoicePrints();
   const enrolled: string[] = [];
   const unenrolled: string[] = [];
   for (const name of otherAttendees) {
-    const existing = await getVoicePrintByName(name);
+    const existing = await getVoicePrintByName(name)
+      || (allPrints as any[]).find(p => !p.isUser && fuzzyNameScore(p.name, name) >= SAME_PERSON_THRESHOLD);
     if (existing) enrolled.push(name);
     else unenrolled.push(name);
   }
@@ -901,6 +1001,138 @@ ipcMain.handle('mic:test', async (_e, buffer: Buffer) => {
   }
 });
 
+// ── Voice memos (header mic → capture → review → apply) ─────────────────────
+
+ipcMain.handle('voice:transcribe', async (_e, buffer: Buffer, durationSec: number) => {
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+  if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
+  const audioPath = path.join(recordingsDir, `inwise-memo-${Date.now()}.wav`);
+  try {
+    fs.writeFileSync(audioPath, buffer);
+    const transcript = (await transcribeAudio(audioPath)).trim();
+    if (!transcript) {
+      fs.unlink(audioPath, () => {});
+      return { ok: false, error: 'no_speech' };
+    }
+    log('info', 'voice:transcribe', `memo transcribed (${durationSec}s, ${transcript.length} chars)`);
+    return { ok: true, transcript, audioPath };
+  } catch (e: any) {
+    fs.unlink(audioPath, () => {});
+    log('error', 'voice:transcribe', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+const VOICE_MEMO_PRIORITIES = ['low', 'medium', 'high'];
+
+ipcMain.handle('voice:classify', async (_e, transcript: string, ctx: {
+  userName?: string;
+  peopleNames?: string[];
+  meetings?: Array<{ id: string; title: string; when: string }>;
+}) => {
+  const meetings = (ctx?.meetings || []).slice(0, 20);
+  const meetingIds = new Set(meetings.map(m => m.id));
+  const now = new Date();
+  const contextText = [
+    `NOW: ${now.toISOString()} (${now.toLocaleDateString([], { weekday: 'long' })})`,
+    ctx?.userName ? `USER: ${ctx.userName}` : null,
+    ctx?.peopleNames?.length ? `KNOWN PEOPLE: ${ctx.peopleNames.slice(0, 30).join(', ')}` : null,
+    meetings.length
+      ? `UPCOMING MEETINGS:\n${meetings.map(m => `- id: ${m.id} | ${m.title} | ${m.when}`).join('\n')}`
+      : 'UPCOMING MEETINGS: none',
+  ].filter(Boolean).join('\n');
+
+  try {
+    const raw = await classifyVoiceMemo(transcript, contextText);
+    // Same posture as the cloud sanitizer: clamp enums, drop fabricated ids.
+    const items: VoiceMemoItem[] = [];
+    for (const item of raw) {
+      if (item?.kind === 'task' && item.title) {
+        const prio = String((item as any).suggestedPriority || '').toLowerCase();
+        items.push({
+          kind: 'task',
+          title: String(item.title),
+          details: item.details ? String(item.details) : '',
+          owner: item.owner ? String(item.owner) : null,
+          dueDate: item.dueDate && !Number.isNaN(Date.parse(item.dueDate)) ? item.dueDate : null,
+          suggestedPriority: (VOICE_MEMO_PRIORITIES.includes(prio) ? prio : 'medium') as 'low' | 'medium' | 'high',
+          priorityReason: (item as any).priorityReason ? String((item as any).priorityReason) : null,
+        });
+      } else if (item?.kind === 'agenda' && item.text) {
+        items.push({
+          kind: 'agenda',
+          text: String(item.text),
+          targetMeetingId: item.targetMeetingId && meetingIds.has(String(item.targetMeetingId)) ? String(item.targetMeetingId) : null,
+        });
+      } else if (item?.kind === 'note' && item.text) {
+        items.push({ kind: 'note', text: String(item.text) });
+      }
+    }
+    return { ok: true, items };
+  } catch (e: any) {
+    const noKey = /api key not configured/i.test(e.message || '');
+    log(noKey ? 'info' : 'error', 'voice:classify', e.message);
+    return { ok: false, error: noKey ? 'no_api_key' : e.message };
+  }
+});
+
+ipcMain.handle('voice:applyMemo', async (_e, payload: {
+  transcript: string;
+  audioPath: string | null;
+  durationSec: number;
+  items: any[];
+}) => {
+  try {
+    const applied: any[] = [];
+    for (const item of payload?.items || []) {
+      if (item?.kind === 'task' && item.title) {
+        const prio = String(item.priority || '').toLowerCase();
+        applied.push({
+          kind: 'task',
+          title: String(item.title),
+          details: item.details ? String(item.details) : '',
+          owner: item.owner ? String(item.owner) : null,
+          dueDate: item.dueDate && !Number.isNaN(Date.parse(item.dueDate)) ? item.dueDate : null,
+          priority: VOICE_MEMO_PRIORITIES.includes(prio) ? prio : 'medium',
+        });
+      } else if (item?.kind === 'agenda' && item.text) {
+        // An agenda point with no meeting to land on degrades to a note rather
+        // than being dropped — same posture as the cloud apply path.
+        if (item.targetMeetingId) {
+          applied.push({
+            kind: 'agenda',
+            text: String(item.text),
+            targetMeetingId: String(item.targetMeetingId),
+            targetTitle: item.targetTitle ? String(item.targetTitle) : null,
+          });
+        } else {
+          applied.push({ kind: 'note', text: String(item.text) });
+        }
+      } else if (item?.kind === 'note' && item.text) {
+        applied.push({ kind: 'note', text: String(item.text) });
+      }
+    }
+    if (!applied.length) return { ok: false, error: 'nothing_to_apply' };
+
+    const memo = await createVoiceMemo({
+      transcript: String(payload.transcript || ''),
+      durationSec: Number(payload.durationSec) || 0,
+      audioPath: payload.audioPath || null,
+      items: applied,
+    });
+    const memoId = (memo as any)._id;
+    for (const item of applied) {
+      if (item.kind === 'task') await createVoiceMemoTask(memoId, item);
+    }
+    log('info', 'voice:applyMemo', `memo ${memoId}: ${applied.length} item(s) applied`);
+    mainWindow?.webContents.send('meeting:new', memo);
+    return { ok: true, memoId };
+  } catch (e: any) {
+    log('error', 'voice:applyMemo', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url));
 
 ipcMain.handle('desktop:getSourceId', async () => {
@@ -1241,6 +1473,32 @@ ipcMain.handle('db:createMeetingFromTranscript', async (_e, data) => {
   } catch {
     return meeting;
   }
+});
+
+// Attach a transcript to an EXISTING meeting (e.g. a calendar-synced meeting
+// that was never recorded) and run insight extraction on it.
+ipcMain.handle('db:attachTranscriptToMeeting', async (_e, meetingId: string, content: string) => {
+  const existing = await getMeeting(meetingId);
+  await updateMeetingTranscript(meetingId, content, existing?.duration || 0);
+  try {
+    const insights = await extractInsights(content);
+    await saveInsights(meetingId, insights);
+  } catch (err: any) {
+    await updateMeetingStatus(meetingId, 'transcribed');
+    log('error', 'attach-transcript:extract-failed', err?.message || String(err));
+  }
+  return getMeeting(meetingId);
+});
+
+// ── Person identity (fuzzy merge triage) ─────────────────────────────────────
+ipcMain.handle('people:mergeCandidates', async () => getPersonMergeCandidates());
+ipcMain.handle('people:merge', async (_e, keepId: string, dropId: string) => {
+  await mergePeople(keepId, dropId);
+  return { success: true };
+});
+ipcMain.handle('people:notSame', async (_e, idA: string, idB: string) => {
+  await markNotSamePerson(idA, idB);
+  return { success: true };
 });
 
 // Tasks
@@ -1624,6 +1882,31 @@ ipcMain.handle('voiceprint:get-audio', async (_e, id: string) => {
   return { audioClip: clip, name: vp.name };
 });
 
+ipcMain.handle('voiceprint:rename', async (_e, id: string, name: string) => {
+  await renameVoicePrint(id, name);
+  return { success: true };
+});
+
+// ── Popup window controls ────────────────────────────────────────────────────
+ipcMain.handle('popup:pin', (_e, pinned: boolean) => {
+  popupPinned = !!pinned;
+  log('info', 'popup:pin', `pinned=${popupPinned}`);
+});
+
+ipcMain.handle('window:hide', () => {
+  mainWindow?.hide();
+});
+
+ipcMain.handle('app:quit', () => {
+  app.quit();
+});
+
+ipcMain.handle('app:version', () => app.getVersion());
+
+ipcMain.handle('review-window:open', (_e, meetingId: string, initialTab?: string) => {
+  createReviewWindow(meetingId, initialTab);
+});
+
 ipcMain.handle('voiceprint:get-user', async () => {
   const vp = await getUserVoicePrint();
   if (!vp) return null;
@@ -1925,7 +2208,14 @@ ipcMain.handle('sor:reject', async (_e, id: string): Promise<{ ok: boolean; erro
 });
 
 // Recording
-ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string) => {
+// People the user tagged on the pre-record sheet for an ad-hoc recording (no
+// calendar event). Consumed by flushPendingAudio so the created meeting carries
+// them as attendees — which routes insights to their person pages and feeds the
+// voice-enrollment cascade.
+let adHocAttendees: string[] = [];
+
+ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string, attendees?: string[]) => {
+  adHocAttendees = Array.isArray(attendees) ? attendees.filter(Boolean) : [];
   createOverlayWindow(title, calendarEventId);
   updateTrayMenu(mainWindow!, true);
   isRecordingActive = true;
@@ -2262,10 +2552,14 @@ async function flushPendingAudio(key: string): Promise<void> {
     const tmpPath = path.join(recordingsDir, `inwise-rec-${Date.now()}.wav`);
     fs.writeFileSync(tmpPath, wav);
     updateTrayMenu(mainWindow!, false);
-    // Look up attendees from the calendar event if available
-    const attendees = entry.calendarEventId
+    // Attendees: calendar event first; for ad-hoc recordings, the people the
+    // user tagged on the pre-record sheet. Merged so a linked event plus extra
+    // tagged people keeps both.
+    const calendarAttendees = entry.calendarEventId
       ? calendarWatcher.getUpcomingEvents().find((e: any) => e.id === entry.calendarEventId)?.attendees || []
       : [];
+    const attendees = [...new Set([...calendarAttendees, ...adHocAttendees])];
+    adHocAttendees = [];
 
     const jobId = path.basename(tmpPath);
     activePipelineJobs++;
@@ -2571,6 +2865,12 @@ app.whenReady().then(() => {
     }
   });
   initDatabase();
+  void dedupePeopleByName().then(n => {
+    if (n > 0) log('info', 'people:dedupe', `merged ${n} duplicate person record(s)`);
+  }).catch(() => { /* repair pass is best-effort */ });
+  void dedupeCalendarSyncMeetings().then(n => {
+    if (n > 0) log('info', 'meetings:dedupe', `removed ${n} duplicate calendar-sync meeting row(s)`);
+  }).catch(() => { /* repair pass is best-effort */ });
   initSorWriteLog();
   initPendingApprovals();
   onWriteCompleted((entry) => {
@@ -2581,7 +2881,7 @@ app.whenReady().then(() => {
     log('info', 'config:migrate-calendars', `Seeded calendars[] from legacy fields â€” added=${migration.added}`);
   }
   createMainWindow();
-  createTray(mainWindow!, () => tryShowDailyPlan(true));
+  createTray(mainWindow!, togglePopupWindow, () => tryShowDailyPlan(true));
   calendarWatcher.start();
 
   // Autostart (first run defaults to on) + once-a-day plan ~10 min after the
@@ -2589,8 +2889,17 @@ app.whenReady().then(() => {
   // it at most once per day.
   applyAutostartDefault();
   scheduleDailyPlan(DAILY_PLAN_DELAY_MS);
-  powerMonitor.on('unlock-screen', () => scheduleDailyPlan(DAILY_PLAN_DELAY_MS));
-  powerMonitor.on('resume', () => scheduleDailyPlan(DAILY_PLAN_DELAY_MS));
+  // On wake/unlock, re-poll the calendar immediately so a meeting already in
+  // progress triggers the recorder within seconds instead of waiting out the
+  // 5-minute poll interval.
+  powerMonitor.on('unlock-screen', () => {
+    scheduleDailyPlan(DAILY_PLAN_DELAY_MS);
+    void calendarWatcher.refresh();
+  });
+  powerMonitor.on('resume', () => {
+    scheduleDailyPlan(DAILY_PLAN_DELAY_MS);
+    void calendarWatcher.refresh();
+  });
 
   // Register Slack pipeline: normalize thread → create meeting → extract insights → save
   registerSlackPipeline(async (channelId, channelName, messages) => {

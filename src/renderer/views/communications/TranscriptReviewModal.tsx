@@ -598,7 +598,21 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
       setSorWrites(Array.isArray(writes) ? (writes as SorWriteEntry[]) : []);
       setMeetingTitle(meeting?.title || 'Meeting Review');
       setTranscript(meeting?.transcript || '');
-      setPeople(Array.isArray(peopleList) ? peopleList : []);
+      // Owner dropdown: this meeting's attendees first, everyone else after,
+      // both groups alphabetical.
+      const attendees: string[] = (meeting?.attendees || []).map((a: string) => (a || '').toLowerCase());
+      const isAttendee = (p: any) =>
+        attendees.some(a =>
+          (p.name && (a.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(a))) ||
+          (p.email && a.includes(p.email.toLowerCase()))
+        );
+      const sorted = (Array.isArray(peopleList) ? [...peopleList] : []).sort((x: any, y: any) => {
+        const ax = isAttendee(x) ? 0 : 1;
+        const ay = isAttendee(y) ? 0 : 1;
+        if (ax !== ay) return ax - ay;
+        return (x.name || '').localeCompare(y.name || '');
+      });
+      setPeople(sorted);
 
       const insights = meeting?.insights || {};
       const rawSuggestions = {

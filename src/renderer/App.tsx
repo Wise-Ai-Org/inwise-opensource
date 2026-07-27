@@ -1,17 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Onboarding from './Onboarding';
-import Sidebar from './Sidebar';
-import Communications from './Communications';
-import People from './People';
-import MyTasks from './MyTasks';
-import Settings from './Settings';
+import PopupShell from './popup/PopupShell';
+import { requestPopupNav, LegacyView } from './popup/nav';
 import FirstTimeUserFlow from './FirstTimeUserFlow';
 import WelcomeBack from './WelcomeBack';
-import LiveMeetingBanner, { LiveMeetingInfo } from './LiveMeetingBanner';
+import { LiveMeetingInfo } from './LiveMeetingBanner';
 import MeetingConflictModal, { ConflictMeeting } from './components/modal/MeetingConflictModal';
 import { startAudioCapture, stopAudioCapture, on as onAudioCapture, SILENCE_STOP_MS } from './audio-capture';
 
-type View = 'communications' | 'tasks' | 'people' | 'settings';
+type View = LegacyView;
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -42,20 +39,13 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [onboarded, setOnboarded] = useState(false);
   const [showFirstTimeFlow, setShowFirstTimeFlow] = useState(false);
-  const [view, setView] = useState<View>('communications');
   const [conflict, setConflict] = useState<
     | { active: ConflictMeeting; incoming: ConflictMeeting; autoSelectMs: number }
     | null
   >(null);
   const [welcomeBackVisible, setWelcomeBackVisible] = useState(true);
   const [liveMeetingChecked, setLiveMeetingChecked] = useState(false);
-  const [liveMeeting, setLiveMeeting] = useState<LiveMeetingInfo | null>(null);
   const [liveMeetingSuppressesWelcomeBack, setLiveMeetingSuppressesWelcomeBack] = useState(false);
-  const dismissedLiveMeetingIds = useRef<Set<string>>(new Set());
-  const [pendingMeetingOpen, setPendingMeetingOpen] = useState<
-    | { meetingId: string; focusTab?: string }
-    | null
-  >(null);
 
   useEffect(() => {
     const api = (window as any).inwiseAPI;
@@ -65,12 +55,9 @@ export default function App() {
     }
     api.welcomeBackLiveMeeting()
       .then((m: LiveMeetingInfo | null) => {
-        if (m) {
-          setLiveMeetingSuppressesWelcomeBack(true);
-          if (!dismissedLiveMeetingIds.current.has(m.id)) {
-            setLiveMeeting(m);
-          }
-        }
+        // The live-meeting banner itself renders inside MeetingsTab; here it
+        // only suppresses the welcome-back overlay.
+        if (m) setLiveMeetingSuppressesWelcomeBack(true);
       })
       .catch(() => { /* fail open — welcome-back renders normally */ })
       .finally(() => setLiveMeetingChecked(true));
@@ -160,12 +147,11 @@ export default function App() {
     const onResolved = () => setConflict(null);
     const onOpenDetails = (payload: { meetingId: string; focusTab?: string }) => {
       if (!payload?.meetingId) return;
-      setView('communications');
-      setPendingMeetingOpen({ meetingId: payload.meetingId, focusTab: payload.focusTab });
+      requestPopupNav({ meetingId: payload.meetingId });
     };
     // Pill context menu's "Settings" (and future deep links) land here.
     const onNavigate = (target: string) => {
-      if (target) setView(target as View);
+      if (target) requestPopupNav({ view: target as LegacyView });
     };
     api.on('meeting:conflict', onConflict);
     api.on('meeting:conflict:resolved', onResolved);
@@ -185,62 +171,25 @@ export default function App() {
     setConflict(null);
   };
 
-  const handleStartLiveMeetingRecording = async () => {
-    if (!liveMeeting) return;
-    try {
-      await (window as any).inwiseAPI?.startRecording?.(liveMeeting.title, liveMeeting.id);
-    } catch {
-      // If start fails, still close the banner — the user can retry from the sidebar.
-    }
-    dismissedLiveMeetingIds.current.add(liveMeeting.id);
-    setLiveMeeting(null);
-  };
-
-  const handleDismissLiveMeeting = () => {
-    if (!liveMeeting) return;
-    dismissedLiveMeetingIds.current.add(liveMeeting.id);
-    setLiveMeeting(null);
-  };
-
-  const handleFirstTimeFlowComplete = () => {
-    setShowFirstTimeFlow(false);
-  };
+  const navigate = (view: View) => requestPopupNav({ view });
 
   if (!ready) return null;
   if (!onboarded) return <Onboarding onComplete={() => { setOnboarded(true); setShowFirstTimeFlow(true); }} />;
 
   return (
-    <div className="app-layout">
-      <Sidebar activeView={view} onNavigate={setView} />
-      <div className="main-content">
-        {liveMeeting && (
-          <LiveMeetingBanner
-            meeting={liveMeeting}
-            onStartRecording={handleStartLiveMeetingRecording}
-            onDismiss={handleDismissLiveMeeting}
-          />
-        )}
-        <ErrorBoundary>
-          {view === 'communications' && (
-            <Communications
-              pendingOpen={pendingMeetingOpen}
-              onPendingOpenConsumed={() => setPendingMeetingOpen(null)}
-            />
-          )}
-          {view === 'tasks'          && <MyTasks onNavigate={(v: string) => setView(v as View)} />}
-          {view === 'people'         && <People />}
-          {view === 'settings'       && <Settings />}
-        </ErrorBoundary>
-      </div>
+    <>
+      <ErrorBoundary>
+        <PopupShell />
+      </ErrorBoundary>
       {showFirstTimeFlow && (
         <FirstTimeUserFlow
-          onNavigate={setView}
-          onComplete={handleFirstTimeFlowComplete}
+          onNavigate={navigate}
+          onComplete={() => setShowFirstTimeFlow(false)}
         />
       )}
       {welcomeBackVisible && !showFirstTimeFlow && liveMeetingChecked && !liveMeetingSuppressesWelcomeBack && (
         <WelcomeBack
-          onNavigate={setView}
+          onNavigate={navigate}
           onDismiss={() => setWelcomeBackVisible(false)}
         />
       )}
@@ -251,6 +200,6 @@ export default function App() {
         autoSelectMs={conflict?.autoSelectMs ?? 30000}
         onPick={handlePickConflict}
       />
-    </div>
+    </>
   );
 }

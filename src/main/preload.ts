@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   getMeeting: (id: string) => ipcRenderer.invoke('db:getMeeting', id),
   deleteMeeting: (id: string) => ipcRenderer.invoke('db:deleteMeeting', id),
   createMeetingFromTranscript: (data: any) => ipcRenderer.invoke('db:createMeetingFromTranscript', data),
+  attachTranscriptToMeeting: (meetingId: string, content: string) =>
+    ipcRenderer.invoke('db:attachTranscriptToMeeting', meetingId, content),
   reviewMeeting: (id: string) => ipcRenderer.invoke('db:reviewMeeting', id),
 
   // Tasks
@@ -53,6 +55,9 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   archivePerson: (id: string) => ipcRenderer.invoke('db:archivePerson', id),
   unarchivePerson: (id: string) => ipcRenderer.invoke('db:unarchivePerson', id),
   getSuggestedPeople: () => ipcRenderer.invoke('db:getSuggestedPeople'),
+  getPersonMergeCandidates: () => ipcRenderer.invoke('people:mergeCandidates'),
+  mergePeople: (keepId: string, dropId: string) => ipcRenderer.invoke('people:merge', keepId, dropId),
+  markNotSamePerson: (idA: string, idB: string) => ipcRenderer.invoke('people:notSame', idA, idB),
 
   // Briefing + Task Scoring
   getBriefing: () => ipcRenderer.invoke('briefing:get'),
@@ -143,8 +148,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
     ipcRenderer.invoke('ai:suggestTaskFields', data),
 
   // Recording (manual)
-  startRecording: (title: string, calendarEventId?: string) =>
-    ipcRenderer.invoke('recording:start', title, calendarEventId),
+  startRecording: (title: string, calendarEventId?: string, attendees?: string[]) =>
+    ipcRenderer.invoke('recording:start', title, calendarEventId, attendees),
   stopRecording: () => ipcRenderer.invoke('recording:stop'),
 
   // Whisper setup
@@ -153,8 +158,24 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   // Mic test
   testMic: (buffer: Buffer) => ipcRenderer.invoke('mic:test', buffer),
 
+  // Voice memos
+  transcribeVoiceMemo: (buffer: Uint8Array, durationSec: number) =>
+    ipcRenderer.invoke('voice:transcribe', buffer, durationSec),
+  classifyVoiceMemo: (transcript: string, ctx: any) =>
+    ipcRenderer.invoke('voice:classify', transcript, ctx),
+  applyVoiceMemo: (payload: any) => ipcRenderer.invoke('voice:applyMemo', payload),
+
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+
+  // Popup window controls
+  pinPopup: (pinned: boolean) => ipcRenderer.invoke('popup:pin', pinned),
+  hideWindow: () => ipcRenderer.invoke('window:hide'),
+  quitApp: () => ipcRenderer.invoke('app:quit'),
+  getAppVersion: () => ipcRenderer.invoke('app:version'),
+  openReviewWindow: (meetingId: string, initialTab?: string) =>
+    ipcRenderer.invoke('review-window:open', meetingId, initialTab),
+  renameVoicePrint: (id: string, name: string) => ipcRenderer.invoke('voiceprint:rename', id, name),
 
   // Events from main → renderer
   on: (channel: string, cb: (...args: any[]) => void) => {

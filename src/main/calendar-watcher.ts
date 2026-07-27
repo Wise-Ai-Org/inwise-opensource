@@ -157,14 +157,14 @@ export class CalendarWatcher extends EventEmitter {
     // Fire start/reminder notifications from the deduped list so we don't notify twice
     // when the same event is on two synced calendars.
     for (const event of this.cachedEvents) {
-      const msUntilStart = event.startTime.getTime() - now;
-      if (
-        msUntilStart >= 0 &&
-        msUntilStart <= START_WINDOW_MS &&
-        !this.notifiedIds.has(event.id)
-      ) {
+      const phase = meetingNotifyPhase(event, now);
+      if (phase && !this.notifiedIds.has(event.id)) {
         this.notifiedIds.add(event.id);
-        log('info', 'calendar-watcher:notify', `${event.meetingLink ? 'meeting-starting' : 'meeting-reminder'}: "${event.title}" starts in ${Math.round(msUntilStart / 60_000)}m`);
+        const msUntilStart = event.startTime.getTime() - now;
+        const when = phase === 'in-progress'
+          ? `already in progress (started ${Math.round(-msUntilStart / 60_000)}m ago)`
+          : `starts in ${Math.round(msUntilStart / 60_000)}m`;
+        log('info', 'calendar-watcher:notify', `${event.meetingLink ? 'meeting-starting' : 'meeting-reminder'}: "${event.title}" ${when}`);
         if (event.meetingLink) {
           this.emit('meeting-starting', event);
         } else {
@@ -234,11 +234,19 @@ async function fetchIcsEvents(url: string, calendarId: string): Promise<Calendar
   let totalVevents = 0;
   let skippedNoAttendees = 0;
   let skippedOutOfRange = 0;
+  let skippedCancelled = 0;
 
   for (const key of Object.keys(data)) {
     const item = data[key] as any;
     if (item.type !== 'VEVENT') continue;
     totalVevents++;
+
+    // A cancelled event (or fully cancelled series) must never surface in
+    // reminders, the daily plan, or the live-meeting banner.
+    if (isCancelledEvent(item)) {
+      skippedCancelled++;
+      continue;
+    }
 
     const description = item.description || '';
     const location = item.location || '';
@@ -275,6 +283,11 @@ async function fetchIcsEvents(url: string, calendarId: string): Promise<Calendar
     if (item.rrule) {
       const occurrences: Date[] = item.rrule.between(todayStart, lookahead, true);
       for (const occ of occurrences) {
+        // EXDATE-removed or individually cancelled instances of the series.
+        if (isCancelledOccurrence(item, occ)) {
+          skippedCancelled++;
+          continue;
+        }
         events.push({
           id: `${item.uid || key}_${occ.getTime()}`,
           title: summary,
@@ -305,12 +318,78 @@ async function fetchIcsEvents(url: string, calendarId: string): Promise<Calendar
     });
   }
 
-  log('info', 'calendar-watcher:parse', `${totalVevents} VEVENTs in feed, ${events.length} kept, ${skippedNoAttendees} skipped (no attendees), ${skippedOutOfRange} skipped (out of range)`);
+  log('info', 'calendar-watcher:parse', `${totalVevents} VEVENTs in feed, ${events.length} kept, ${skippedNoAttendees} skipped (no attendees), ${skippedOutOfRange} skipped (out of range), ${skippedCancelled} skipped (cancelled)`);
 
   return events;
+}
+
+// ── Cancellation handling (exported for tests) ──────────────────────────────
+// ICS expresses cancellations three ways; the watcher must honor all of them:
+//   1. STATUS:CANCELLED on a single event or a whole series
+//   2. EXDATE entries removing instances from a recurring series
+//   3. A RECURRENCE-ID override instance carrying STATUS:CANCELLED
+
+const OCCURRENCE_MATCH_TOLERANCE_MS = 60_000;
+
+export function isCancelledEvent(item: { status?: unknown }): boolean {
+  return String(item?.status ?? '').toUpperCase() === 'CANCELLED';
+}
+
+export function isCancelledOccurrence(
+  item: { exdate?: Record<string, unknown>; recurrences?: Record<string, any> },
+  occ: Date,
+): boolean {
+  const occMs = occ.getTime();
+
+  if (item.exdate) {
+    for (const k of Object.keys(item.exdate)) {
+      const ex = new Date(item.exdate[k] as any);
+      if (!Number.isNaN(ex.getTime()) && Math.abs(ex.getTime() - occMs) < OCCURRENCE_MATCH_TOLERANCE_MS) {
+        return true;
+      }
+    }
+  }
+
+  if (item.recurrences) {
+    for (const k of Object.keys(item.recurrences)) {
+      const override = item.recurrences[k];
+      const rid = override?.recurrenceid ? new Date(override.recurrenceid) : null;
+      if (
+        rid &&
+        !Number.isNaN(rid.getTime()) &&
+        Math.abs(rid.getTime() - occMs) < OCCURRENCE_MATCH_TOLERANCE_MS &&
+        isCancelledEvent(override)
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function extractLink(text: string): string | undefined {
   const matches = text.match(/https?:\/\/[^\s"<>\n]+/g);
   return matches?.find(url => MEETING_LINK_RE.test(url));
+}
+
+// ── Start-notification phase (exported for tests) ───────────────────────────
+// 'starting-soon': starts within the next START_WINDOW_MS — the normal path.
+// 'in-progress':   already started but still has meaningful time left. This is
+//   the catch-up path for a meeting that began while the app was closed or the
+//   machine was asleep — without it, opening the laptop mid-meeting never
+//   shows the recorder at all.
+
+const MIN_REMAINING_MS = 5 * 60_000;
+
+export function meetingNotifyPhase(
+  event: { startTime: Date; endTime: Date },
+  nowMs: number,
+): 'starting-soon' | 'in-progress' | null {
+  const msUntilStart = event.startTime.getTime() - nowMs;
+  if (msUntilStart >= 0) {
+    return msUntilStart <= START_WINDOW_MS ? 'starting-soon' : null;
+  }
+  const msUntilEnd = event.endTime.getTime() - nowMs;
+  return msUntilEnd > MIN_REMAINING_MS ? 'in-progress' : null;
 }

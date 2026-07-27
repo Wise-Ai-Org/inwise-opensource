@@ -37,6 +37,10 @@ function fmtTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+function fmtDue(iso: string): string {
+  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
 const PRIORITY_COLOR: Record<string, string> = {
   critical: '#dc2626',
   high: '#ea580c',
@@ -44,18 +48,46 @@ const PRIORITY_COLOR: Record<string, string> = {
   low: SLATE_500,
 };
 
+const PRIORITY_STEPS: Array<{ value: string; label: string }> = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Med' },
+  { value: 'high', label: 'High' },
+  { value: 'critical', label: 'Crit' },
+];
+
 export default function DailyPlan(): JSX.Element {
   const [plan, setPlan] = useState<Plan | null>(null);
+  const [tasks, setTasks] = useState<PlanTask[]>([]);
   const [failed, setFailed] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
 
   useEffect(() => {
     (window as any).inwiseDailyPlan
       .getPlan()
-      .then((p: Plan) => setPlan(p))
+      .then((p: Plan) => { setPlan(p); setTasks(p.tasks); })
       .catch(() => setFailed(true));
   }, []);
 
   const api = (window as any).inwiseDailyPlan;
+
+  const saveTitle = (id: string) => {
+    const title = draft.trim();
+    setEditingId(null);
+    if (!title) return;
+    setTasks(ts => ts.map(t => (t.id === id ? { ...t, title } : t)));
+    api.updateTask(id, { title });
+  };
+
+  const setPriority = (id: string, priority: string) => {
+    setTasks(ts => ts.map(t => (t.id === id ? { ...t, priority } : t)));
+    api.updateTask(id, { priority });
+  };
+
+  const removeTask = (id: string) => {
+    setTasks(ts => ts.filter(t => t.id !== id));
+    api.snoozeTask(id, 'Snoozed from the daily plan');
+  };
 
   return (
     <div
@@ -160,14 +192,15 @@ export default function DailyPlan(): JSX.Element {
             ))}
 
             <SectionTitle style={{ marginTop: 18 }}>Top priorities</SectionTitle>
-            {plan.tasks.length === 0 && (
+            {tasks.length === 0 && (
               <div style={{ fontSize: 13, color: SLATE_500 }}>
                 No open tasks — Wiser is as surprised as you are.
               </div>
             )}
-            {plan.tasks.map((t, i) => (
-              <div key={t.id} style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+            {tasks.map((t, i) => (
+              <div key={t.id} style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'flex-start' }}>
                 <div
+                  title={t.reasoning || undefined}
                   style={{
                     width: 20,
                     height: 20,
@@ -186,26 +219,97 @@ export default function DailyPlan(): JSX.Element {
                 >
                   {i + 1}
                 </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 600, color: SLATE_900 }}>
-                    {t.title}
-                    <span
-                      style={{
-                        marginLeft: 8,
-                        fontSize: 10.5,
-                        fontWeight: 700,
-                        color: PRIORITY_COLOR[t.priority] || SLATE_500,
-                        textTransform: 'uppercase',
-                        letterSpacing: 0.4,
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {editingId === t.id ? (
+                    <input
+                      autoFocus
+                      value={draft}
+                      onChange={e => setDraft(e.target.value)}
+                      onBlur={() => saveTitle(t.id)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') saveTitle(t.id);
+                        if (e.key === 'Escape') setEditingId(null);
                       }}
+                      style={{
+                        width: '100%',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: SLATE_900,
+                        padding: '5px 8px',
+                        border: `1.5px solid ${TEAL}`,
+                        borderRadius: 6,
+                        outline: 'none',
+                        fontFamily: 'inherit',
+                      }}
+                    />
+                  ) : (
+                    <div
+                      title="Click to edit"
+                      onClick={() => { setEditingId(t.id); setDraft(t.title); }}
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: SLATE_900,
+                        lineHeight: 1.35,
+                        cursor: 'text',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      } as React.CSSProperties}
                     >
-                      {t.priority}
-                    </span>
-                  </div>
-                  {t.reasoning && (
-                    <div style={{ fontSize: 12, color: SLATE_500, marginTop: 1 }}>{t.reasoning}</div>
+                      {t.title}
+                    </div>
                   )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
+                    <div style={{ display: 'flex', border: `1px solid ${SLATE_200}`, borderRadius: 6, overflow: 'hidden' }}>
+                      {PRIORITY_STEPS.map(p => {
+                        const active = t.priority === p.value;
+                        return (
+                          <button
+                            key={p.value}
+                            onClick={() => setPriority(t.id, p.value)}
+                            style={{
+                              padding: '2px 7px',
+                              fontSize: 10,
+                              fontWeight: 700,
+                              border: 'none',
+                              cursor: 'pointer',
+                              background: active ? PRIORITY_COLOR[p.value] : '#fff',
+                              color: active ? '#fff' : SLATE_500,
+                            }}
+                          >
+                            {p.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {t.dueDate && (
+                      <span style={{ fontSize: 11, fontWeight: 600, color: new Date(t.dueDate).getTime() < Date.now() ? '#dc2626' : SLATE_500 }}>
+                        {fmtDue(t.dueDate)}
+                      </span>
+                    )}
+                  </div>
                 </div>
+                <button
+                  onClick={() => removeTask(t.id)}
+                  title="Snooze — remove from today's plan"
+                  style={{
+                    width: 20,
+                    height: 20,
+                    flexShrink: 0,
+                    border: 'none',
+                    background: 'transparent',
+                    color: SLATE_500,
+                    fontSize: 14,
+                    lineHeight: '20px',
+                    cursor: 'pointer',
+                    borderRadius: 5,
+                    marginTop: 1,
+                  }}
+                >
+                  ×
+                </button>
               </div>
             ))}
           </>

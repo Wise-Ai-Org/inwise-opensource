@@ -512,7 +512,7 @@ function PendingApprovalsSection() {
 const RECEIPTS_LIMIT = 25;
 const RECEIPTS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
-function RecentSyncActivity() {
+export function RecentSyncActivity() {
   const [entries, setEntries] = useState<SorWriteEntry[]>([]);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const [expandedId, setExpandedId] = useState<string | null>(null);
