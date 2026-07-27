@@ -43,6 +43,16 @@ export interface PendingTaskItem {
   dueDate?: string | null;
   aiConfidence?: number;
   source?: { type: string };
+  /** Ask-band match riding along with the extracted item (task-dedup US-007). */
+  dedupSuggestion?: {
+    candidateTaskId: string;
+    candidateTitle: string;
+    wasDone: boolean;
+    confidence: number;
+    retrievalScore: number;
+    model: string;
+  };
+  taskMentions?: Array<{ excerpt: string }>;
 }
 
 export interface MergeCandidateItem {
@@ -132,11 +142,13 @@ export function useReviewItems(): ReviewItems {
     const onChanged = () => reload();
     a.on?.('sor:write-completed', onChanged);
     a.on?.('tasks:reprioritized', onChanged);
+    a.on?.('tasks:mentions-updated', onChanged);
     a.on?.('meeting:new', onChanged);
     const timer = setInterval(reload, 60_000);
     return () => {
       a.off?.('sor:write-completed', onChanged);
       a.off?.('tasks:reprioritized', onChanged);
+      a.off?.('tasks:mentions-updated', onChanged);
       a.off?.('meeting:new', onChanged);
       clearInterval(timer);
     };

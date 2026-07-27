@@ -402,6 +402,8 @@ interface Task {
   blockerId?: string | null;
   actualHours?: number | null;
   likelyDone?: boolean;
+  /** Computed by getTasks — "Raised N× this week" (task-dedup US-014). */
+  repetitionNudge?: { show: boolean; count: number };
 }
 
 const priorityColors: Record<string, string> = {
@@ -429,6 +431,7 @@ function TaskCard({
   onDelete,
   onConfirmLikelyDone,
   onRejectLikelyDone,
+  onTasksChanged,
   isOverlay = false
 }: {
   task: Task;
@@ -440,6 +443,7 @@ function TaskCard({
   onDelete?: (taskId: string) => void;
   onConfirmLikelyDone?: (taskId: string) => void;
   onRejectLikelyDone?: (taskId: string) => void;
+  onTasksChanged?: () => void;
   isOverlay?: boolean;
 }) {
   const cardBg = useColorModeValue('white', 'gray.700');
@@ -581,6 +585,45 @@ function TaskCard({
               onClick={(e) => { e.stopPropagation(); onRejectLikelyDone?.(task._id); }}
             >
               No
+            </Button>
+          </HStack>
+        )}
+
+        {task.repetitionNudge?.show && (
+          <HStack
+            spacing={2}
+            p={2}
+            bg="orange.50"
+            borderRadius="md"
+            borderLeftWidth="3px"
+            borderLeftColor="orange.400"
+            data-testid="repetition-nudge"
+          >
+            <Badge colorScheme="orange" fontSize="xs">
+              Raised {task.repetitionNudge.count}× this week
+            </Badge>
+            <Box flex={1} />
+            <Button
+              size="xs"
+              colorScheme="orange"
+              onClick={async (e) => {
+                e.stopPropagation();
+                await api.dedupBumpPriority(task._id);
+                onTasksChanged?.();
+              }}
+            >
+              Bump priority
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={async (e) => {
+                e.stopPropagation();
+                await api.dedupDismissNudge(task._id);
+                onTasksChanged?.();
+              }}
+            >
+              Dismiss
             </Button>
           </HStack>
         )}
@@ -736,7 +779,8 @@ function TaskColumn({
   onArchive,
   onDelete,
   onConfirmLikelyDone,
-  onRejectLikelyDone
+  onRejectLikelyDone,
+  onTasksChanged
 }: {
   title: string;
   tasks: Task[];
@@ -751,6 +795,7 @@ function TaskColumn({
   onDelete?: (taskId: string) => void;
   onConfirmLikelyDone?: (taskId: string) => void;
   onRejectLikelyDone?: (taskId: string) => void;
+  onTasksChanged?: () => void;
 }) {
   const columnBg = useColorModeValue('gray.50', 'gray.800');
   const overBg = useColorModeValue('blue.50', 'blue.900');
@@ -806,6 +851,7 @@ function TaskColumn({
             onDelete={onDelete}
             onConfirmLikelyDone={onConfirmLikelyDone}
             onRejectLikelyDone={onRejectLikelyDone}
+            onTasksChanged={onTasksChanged}
           />
         ))}
         {tasks.length === 0 && (
@@ -1369,6 +1415,7 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
             onDelete={handleDeleteRequest}
             onConfirmLikelyDone={handleConfirmLikelyDone}
             onRejectLikelyDone={handleRejectLikelyDone}
+            onTasksChanged={fetchTasks}
           />
           <TaskColumn
             title="In Progress"
@@ -1384,6 +1431,7 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
             onDelete={handleDeleteRequest}
             onConfirmLikelyDone={handleConfirmLikelyDone}
             onRejectLikelyDone={handleRejectLikelyDone}
+            onTasksChanged={fetchTasks}
           />
           <TaskColumn
             title="Completed"
@@ -1399,6 +1447,7 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
             onDelete={handleDeleteRequest}
             onConfirmLikelyDone={handleConfirmLikelyDone}
             onRejectLikelyDone={handleRejectLikelyDone}
+            onTasksChanged={fetchTasks}
           />
         </SimpleGrid>
 
