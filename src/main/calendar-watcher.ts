@@ -11,6 +11,13 @@ interface CalendarEvent {
   meetingLink?: string;
   attendees: string[];
   sourceCalendarId: string;
+  /**
+   * Bare recurring-series UID, split off the composite `<uid>_<epochMs>` id at
+   * parse time and persisted by syncCalendarEventsToDb (task-dedup OQ4). null
+   * for one-off events. Read-time splitting remains a fallback for rows written
+   * before this field existed.
+   */
+  seriesUid: string | null;
 }
 
 export interface CalendarHealth {
@@ -296,6 +303,7 @@ async function fetchIcsEvents(url: string, calendarId: string): Promise<Calendar
           meetingLink,
           attendees: attendeeNames,
           sourceCalendarId: calendarId,
+          seriesUid: String(item.uid || key),
         });
       }
       continue;
@@ -315,6 +323,7 @@ async function fetchIcsEvents(url: string, calendarId: string): Promise<Calendar
       meetingLink,
       attendees: attendeeNames,
       sourceCalendarId: calendarId,
+      seriesUid: null, // one-off event — no series
     });
   }
 

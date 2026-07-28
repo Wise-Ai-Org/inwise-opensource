@@ -29,6 +29,15 @@ function candidateLabel(c: MeetingCandidate): string {
 
 // ── Review item state ────────────────────────────────────────────────────────
 
+interface DedupMatch {
+  candidateTaskId: string;
+  candidateTitle: string;
+  wasDone: boolean;
+  confidence: number;
+  retrievalScore: number;
+  model: string;
+}
+
 interface ReviewItem {
   id: number;
   kind: 'task' | 'agenda' | 'note';
@@ -41,6 +50,10 @@ interface ReviewItem {
   suggestedPriority: 'low' | 'medium' | 'high';
   priorityReason: string | null;
   targetMeetingId: string; // '' = none
+  /** Ask-band match found for this spoken task, awaiting a yes/no here. */
+  match?: DedupMatch | null;
+  /** null = unanswered, 'same'/'reopen' = merge on apply, 'new' = keep separate. */
+  matchChoice?: 'same' | 'reopen' | 'new' | null;
 }
 
 function toReviewItems(raw: any[]): ReviewItem[] {
@@ -56,6 +69,8 @@ function toReviewItems(raw: any[]): ReviewItem[] {
     suggestedPriority: it.suggestedPriority || 'medium',
     priorityReason: it.priorityReason || null,
     targetMeetingId: it.targetMeetingId || '',
+    match: null,
+    matchChoice: null,
   }));
 }
 
@@ -224,8 +239,23 @@ export function VoiceCapturePage() {
         meetings: cands,
       });
       if (sorted?.ok && sorted.items?.length) {
-        setItems(toReviewItems(sorted.items));
+        const reviewed = toReviewItems(sorted.items);
+        setItems(reviewed);
         setSortNotice(null);
+        // Ask-band matches ride back with the extracted items so the confirm
+        // renders right here rather than as a separate pending record.
+        const taskItems = reviewed
+          .filter(i => i.kind === 'task')
+          .map(i => ({ id: i.id, title: i.text, details: i.details }));
+        if (taskItems.length) {
+          a.dedupMatchVoiceItems?.(taskItems)
+            .then((res: any) => {
+              if (!res?.ok || !res.matches?.length) return;
+              const byId = new Map<number, DedupMatch>(res.matches.map((m: any) => [m.itemId, m]));
+              setItems(list => list.map(i => (byId.has(i.id) ? { ...i, match: byId.get(i.id)! } : i)));
+            })
+            .catch(() => { /* dedup is best-effort here; apply-time still runs */ });
+        }
       } else {
         setItems(toReviewItems([{ kind: 'note', text: res.transcript }]));
         setSortNotice(sorted?.error === 'no_api_key'
@@ -257,9 +287,13 @@ export function VoiceCapturePage() {
     try {
       const payload = items.filter(i => i.checked).map(i => {
         if (i.kind === 'task') {
+          const merging = i.match && (i.matchChoice === 'same' || i.matchChoice === 'reopen');
           return {
             kind: 'task', title: i.text.trim(), details: i.details,
             owner: i.owner || null, dueDate: i.dueDate || null, priority: i.priority,
+            mergeIntoTaskId: merging ? i.match!.candidateTaskId : null,
+            reopen: i.matchChoice === 'reopen',
+            matchConfidence: i.match?.confidence ?? null,
           };
         }
         if (i.kind === 'agenda') {
@@ -401,7 +435,49 @@ export function VoiceCapturePage() {
                       </button>
                     ))}
                   </div>
-                  <div className="vm-fate">{reason}Goes to your Tasks tab.</div>
+                  {item.match && (
+                    <div
+                      className="pp-card"
+                      style={{ marginTop: 8, padding: '9px 11px' }}
+                      data-testid="vm-dedup-confirm"
+                    >
+                      <div className="pp-row" style={{ gap: 6 }}>
+                        <span className={`pp-chip ${item.match.wasDone ? 'pp-amber' : 'pp-teal'}`}>
+                          {item.match.wasDone ? 'This looks done' : 'Might be the same task'}
+                        </span>
+                        <span className="pp-grow" />
+                        <span className="pp-meta">{Math.round(item.match.confidence)}% sure</span>
+                      </div>
+                      <div className="pp-title-sm" style={{ fontSize: 12.5, marginTop: 5 }}>
+                        {item.match.candidateTitle}
+                      </div>
+                      <div className="pp-row" style={{ marginTop: 8, gap: 8 }}>
+                        <button
+                          className={`pp-btn ${item.matchChoice === 'same' || item.matchChoice === 'reopen' ? 'pp-solid' : 'pp-ghost'}`}
+                          style={{ flex: 1, padding: '5px 0' }}
+                          onClick={() => patch(item.id, { matchChoice: item.match!.wasDone ? 'reopen' : 'same' })}
+                        >
+                          {item.match.wasDone ? 'Reopen and merge' : 'Same task'}
+                        </button>
+                        <button
+                          className={`pp-btn ${item.matchChoice === 'new' ? 'pp-solid' : 'pp-ghost'}`}
+                          style={{ flex: 1, padding: '5px 0' }}
+                          onClick={() => patch(item.id, { matchChoice: 'new' })}
+                        >
+                          {item.match.wasDone ? 'Start a new task' : 'New task'}
+                        </button>
+                      </div>
+                      <div className="pp-meta" style={{ marginTop: 7, fontSize: 11 }}>
+                        Matched using your key · {item.match.model}
+                      </div>
+                    </div>
+                  )}
+                  <div className="vm-fate">
+                    {reason}
+                    {item.match && (item.matchChoice === 'same' || item.matchChoice === 'reopen')
+                      ? `Joins “${item.match.candidateTitle}” instead of making a second card.`
+                      : 'Goes to your Tasks tab.'}
+                  </div>
                 </>
               )}
               {item.kind === 'agenda' && (

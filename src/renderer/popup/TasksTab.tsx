@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtDueDate, useNav } from './nav';
+import { RepetitionNudge } from './DedupBits';
 
 type Status = 'todo' | 'inProgress' | 'completed';
 
@@ -15,6 +16,8 @@ interface TaskRow {
   approval?: { status: string };
   jiraKey?: string;
   jiraUrl?: string;
+  /** Computed server-side by getTasks (task-dedup US-014). */
+  repetitionNudge?: { show: boolean; count: number };
 }
 
 const STATUS_LABEL: Record<Status, string> = { todo: 'To Do', inProgress: 'In Progress', completed: 'Done' };
@@ -237,10 +240,12 @@ export default function TasksTab() {
     const onChanged = () => reload();
     a.on?.('tasks:reprioritized', onChanged);
     a.on?.('tasks:likely-done-updated', onChanged);
+    a.on?.('tasks:mentions-updated', onChanged);
     a.on?.('jira:auto-synced', onChanged);
     return () => {
       a.off?.('tasks:reprioritized', onChanged);
       a.off?.('tasks:likely-done-updated', onChanged);
+      a.off?.('tasks:mentions-updated', onChanged);
       a.off?.('jira:auto-synced', onChanged);
     };
   }, [reload]);
@@ -309,6 +314,11 @@ export default function TasksTab() {
                 onClick={() => push({ kind: 'task', id: t._id })}
               >
                 <div className="pp-title-sm">{t.title}</div>
+                {t.repetitionNudge?.show && (
+                  <div className="pp-row" style={{ marginTop: 7 }}>
+                    <RepetitionNudge taskId={t._id} count={t.repetitionNudge.count} onChanged={reload} />
+                  </div>
+                )}
                 <div className="pp-row" style={{ marginTop: 7, flexWrap: 'wrap', gap: 6 }}>
                   {due && <span className={`pp-chip ${due.overdue ? 'pp-amber' : ''}`}>{due.label}</span>}
                   {t.owner && <span className="pp-chip">{t.owner}</span>}

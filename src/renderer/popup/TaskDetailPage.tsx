@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
 import { OwnerPicker } from './TasksTab';
+import { MentionThread, RepetitionNudge } from './DedupBits';
 
 type Status = 'todo' | 'inProgress' | 'completed';
 const STATUS_LABEL: Record<Status, string> = { todo: 'To Do', inProgress: 'In Progress', completed: 'Done' };
@@ -15,15 +16,20 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
   const [people, setPeople] = useState<string[]>([]);
   const [userName, setUserName] = useState('');
   const [savedAt, setSavedAt] = useState(0);
+  const [allTasks, setAllTasks] = useState<any[]>([]);
+  const [mergePicking, setMergePicking] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     api().getTasks?.().then((rows: any[]) => {
+      setAllTasks(rows || []);
       setTask((rows || []).find(t => t._id === taskId) || null);
     }).catch(() => {}).finally(() => setLoaded(true));
     api().getPeople?.().then((rows: any[]) =>
       setPeople((rows || []).map(p => p.name).filter(Boolean))).catch(() => {});
     api().getConfig?.().then((c: any) => setUserName(c?.userName || '')).catch(() => {});
-  }, [taskId]);
+  }, [taskId, reloadKey]);
 
   // Show a transient confirmation after every silent auto-save — edits here
   // persist immediately and the user should see that.
@@ -49,6 +55,19 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
   const doSnooze = async (reason: string) => {
     await api().snoozeTask?.(taskId, reason);
     pop();
+  };
+
+  // Manual merge (US-010): this task absorbs the other one's mentions; the
+  // other is archived, never deleted, so nothing is lost.
+  const doMerge = async (loserId: string) => {
+    setMerging(true);
+    try {
+      await api().dedupMergeTasks?.(taskId, loserId);
+      setMergePicking(false);
+      setReloadKey(k => k + 1);
+    } finally {
+      setMerging(false);
+    }
   };
 
   const dueValue = task?.dueDate ? new Date(task.dueDate) : null;
@@ -80,7 +99,18 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
                 {task.aiExtracted && <span className="pp-chip pp-teal">Wiser caught this</span>}
                 {task.likelyDone && <span className="pp-chip pp-amber">Looks done — confirm?</span>}
               </div>
+              {task.repetitionNudge?.show && (
+                <div className="pp-row" style={{ marginTop: 8 }}>
+                  <RepetitionNudge
+                    taskId={taskId}
+                    count={task.repetitionNudge.count}
+                    onChanged={() => setReloadKey(k => k + 1)}
+                  />
+                </div>
+              )}
             </div>
+
+            <MentionThread taskId={taskId} onChanged={() => setReloadKey(k => k + 1)} />
 
             {task.likelyDone && (
               <div className="pp-row" style={{ gap: 8 }}>
@@ -161,6 +191,35 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
                 </button>
               </>
             )}
+
+            {mergePicking && (
+              <>
+                <div className="pp-seclabel">Which task is the same as this one?</div>
+                <div className="pp-listcard">
+                  {allTasks.filter(t => t._id !== taskId).slice(0, 30).map((t, i) => (
+                    <button
+                      key={t._id}
+                      className="pp-setrow"
+                      style={{ width: '100%', textAlign: 'left', fontFamily: 'inherit', background: 'transparent', border: 'none', borderTop: i === 0 ? 'none' : '1px solid var(--slate-100)' }}
+                      disabled={merging}
+                      onClick={() => doMerge(t._id)}
+                    >
+                      <div className="pp-grow pp-rowlabel" style={{ fontWeight: 500 }}>{t.title}</div>
+                      <span className="pp-chevron">›</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="pp-meta" style={{ padding: '0 4px' }}>
+                  Its mentions move onto this task. The other card is archived, not deleted.
+                </div>
+              </>
+            )}
+
+            <div className="pp-row" style={{ justifyContent: 'flex-start', padding: '4px 4px 0' }}>
+              <button className="pp-quiet-action" onClick={() => setMergePicking(v => !v)}>
+                {mergePicking ? 'Cancel merge' : 'Same as another task…'}
+              </button>
+            </div>
 
             <div className="pp-row" style={{ justifyContent: 'space-between', padding: '4px 4px 0' }}>
               {snoozing ? (

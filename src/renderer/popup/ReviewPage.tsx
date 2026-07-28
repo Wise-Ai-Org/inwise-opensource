@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, useNav } from './nav';
 import { useReview } from './PopupShell';
-import type { ApprovalItem, UnknownVoiceItem, MergeCandidateItem } from './useReviewItems';
+import type { ApprovalItem, UnknownVoiceItem, MergeCandidateItem, PendingTaskItem } from './useReviewItems';
 import { RecentSyncActivity } from '../Communications';
+import { DedupConfirmCard } from './DedupBits';
 
 const DISMISSED_SUGGESTIONS_KEY = 'pp-dismissed-suggested-people';
 
@@ -272,7 +273,7 @@ function MergeCandidateCard({ pair, onDone }: { pair: MergeCandidateItem; onDone
 
 // ── Pending AI-task card ─────────────────────────────────────────────────────
 
-function PendingTaskCard({ task, onDone }: { task: { _id: string; title: string; description?: string; dueDate?: string | null; aiConfidence?: number }; onDone: () => void }) {
+function PendingTaskCard({ task, onDone }: { task: PendingTaskItem; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const act = async (status: 'approved' | 'rejected') => {
     setBusy(true);
@@ -283,6 +284,34 @@ function PendingTaskCard({ task, onDone }: { task: { _id: string; title: string;
       setBusy(false);
     }
   };
+
+  // Ask-band match: answer the yes/no first. Saying "same task" merges this
+  // item into the existing card and there is nothing left to approve; saying
+  // "new task" drops back to the normal approve/reject card below.
+  const resolve = async (action: 'same' | 'new' | 'reopen') => {
+    setBusy(true);
+    try {
+      await api().dedupResolvePending?.(task._id, action);
+      onDone();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (task.dedupSuggestion) {
+    const s = task.dedupSuggestion;
+    return (
+      <DedupConfirmCard
+        suggestion={s}
+        newTitle={task.title}
+        excerpt={task.taskMentions?.[0]?.excerpt}
+        busy={busy}
+        onSame={() => resolve(s.wasDone ? 'reopen' : 'same')}
+        onNew={() => resolve('new')}
+      />
+    );
+  }
+
   return (
     <div className="pp-card">
       <div className="pp-row" style={{ marginBottom: 6 }}>
@@ -354,7 +383,9 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
   };
 
   const approveAllTasks = async () => {
-    for (const t of review.pendingTasks) {
+    // Items with an open "is this the same task?" question need an answer
+    // first — bulk approve leaves them alone.
+    for (const t of review.pendingTasks.filter(t => !t.dedupSuggestion)) {
       try { await api().updateTask?.(t._id, { approval: { status: 'approved' } }); } catch { /* keep going */ }
     }
     review.reload();

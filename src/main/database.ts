@@ -5,6 +5,12 @@ import Datastore from '@seald-io/nedb';
 import { getConfig } from './config';
 import { isSelf } from './self-identity';
 import { fuzzyNameScore, normalizeNameStr, SAME_PERSON_THRESHOLD, REVIEW_THRESHOLD } from './fuzzy-name';
+import { log } from './logger';
+import {
+  decideMention, computeRepetitionNudge, providerModelLabel,
+  TaskMention, MentionSourceType,
+} from './task-dedup';
+import { initMatchDecisionLog, logMatchDecision } from './match-decision-log';
 
 let meetingsDb: Datastore;
 let tasksDb: Datastore;
@@ -19,6 +25,7 @@ export function initDatabase(): void {
   peopleDb = new Datastore({ filename: path.join(userDataPath, 'people.db'), autoload: true });
   voicePrintsDb = new Datastore({ filename: path.join(userDataPath, 'voiceprints.db'), autoload: true });
   credentialsDb = new Datastore({ filename: path.join(userDataPath, 'credentials.db'), autoload: true });
+  initMatchDecisionLog();
 }
 
 // ── Meetings ──────────────────────────────────────────────────────────────────
@@ -113,27 +120,122 @@ export async function saveInsights(meetingId: string, insights: {
     { 'source.id': meetingId, aiExtracted: true, 'approval.status': 'pending' },
     { multi: true }
   );
+
+  // Dedup context for this meeting's mentions (task-dedup PRD US-013): the
+  // source meeting (attendee overlap + recurring-series signals) plus all
+  // candidate tasks and their source meetings.
+  const sourceMeeting: any = await meetingsDb.findOneAsync({ _id: meetingId });
+  const dedupTasks = await getAllTasksForDedup();
+  const meetingsById = await getMeetingsById();
+
   for (const item of insights.actionItems) {
-    await tasksDb.insertAsync({
+    const now = new Date().toISOString();
+    const mention: TaskMention = {
+      id: uuidv4(),
+      sourceType: 'meeting',
+      sourceId: meetingId,
+      sourceTitle: sourceMeeting?.title || 'Meeting',
+      excerpt: item.text,
+      occurredAt: sourceMeeting?.date || now,
+    };
+
+    // Decide whether this action item is a repeat mention of an existing task.
+    // Any failure here degrades to plain creation — never blocks the task.
+    let decision: Awaited<ReturnType<typeof decideMention>> = { kind: 'none' };
+    try {
+      decision = await decideMention(
+        { title: item.text, description: '' },
+        dedupTasks,
+        { sourceMeeting, meetingsById },
+      );
+    } catch (e: any) {
+      log('error', 'task-dedup:decide-failed', e?.message || String(e));
+    }
+
+    if (decision.kind === 'auto_merge') {
+      await appendTaskMention(decision.taskId, {
+        ...mention,
+        mergedItem: {
+          title: item.text,
+          description: '',
+          owner: item.owner || null,
+          deadline: item.dueDate || null,
+        },
+      });
+      await logMatchDecision({
+        decisionType: 'auto_merge',
+        confidence: decision.confidence,
+        retrievalScore: decision.retrievalScore,
+        candidateTaskId: decision.taskId,
+        taskId: decision.taskId,
+        newItemText: item.text,
+        decidedBy: 'system',
+        surface: 'oss',
+      });
+      continue; // no new task
+    }
+
+    const doc: Record<string, any> = {
       _id: uuidv4(),
       title: item.text,
       description: '',
       status: 'todo',
       priority: item.priority || 'medium',
       dueDate: item.dueDate || null,
+      owner: item.owner || null,
       source: { type: 'meeting', id: meetingId },
       aiExtracted: true,
       approval: { status: 'pending' },
       provenance: {
         meetingId,
         extractionMethod: 'transcript_analysis',
-        extractedAt: new Date().toISOString(),
+        extractedAt: now,
       },
+      taskMentions: [mention],
+      mentionCount: 1,
       archivedAt: null,
-      createdAt: new Date().toISOString(),
-    });
+      createdAt: now,
+    };
+
+    if (decision.kind === 'ask') {
+      // Ask-band: the extracted task is already headed for the review surface,
+      // so the classifier result rides along on the pending task instead of a
+      // separate pending-match record (US-007/US-013 binding decision).
+      doc.dedupSuggestion = {
+        candidateTaskId: decision.taskId,
+        candidateTitle: decision.taskTitle,
+        wasDone: decision.wasDone,
+        confidence: decision.confidence,
+        retrievalScore: decision.retrievalScore,
+        model: providerModelLabel(),
+      };
+    } else if (decision.kind === 'new') {
+      await logMatchDecision({
+        decisionType: 'below_ask_new',
+        confidence: decision.confidence,
+        retrievalScore: decision.retrievalScore,
+        candidateTaskId: decision.candidateTaskId,
+        taskId: doc._id,
+        newItemText: item.text,
+        decidedBy: 'system',
+        surface: 'oss',
+      });
+    }
+
+    await tasksDb.insertAsync(doc);
   }
 
+}
+
+/** All non-archived tasks (open + done) — dedup retrieval scope input. */
+export async function getAllTasksForDedup(): Promise<any[]> {
+  return tasksDb.findAsync({ archivedAt: null });
+}
+
+/** All meetings keyed by _id — dedup context-signal input. */
+export async function getMeetingsById(): Promise<Map<string, any>> {
+  const all: any[] = await meetingsDb.findAsync({});
+  return new Map(all.map(m => [m._id, m]));
 }
 
 export async function getMeetings(): Promise<any[]> {
@@ -303,6 +405,15 @@ export async function createVoiceMemoTask(memoId: string, item: {
     aiExtracted: true,
     approval: { status: 'approved', approvedAt: now },
     provenance: { meetingId: memoId, extractionMethod: 'voice_memo', extractedAt: now },
+    taskMentions: [{
+      id: uuidv4(),
+      sourceType: 'voice_note',
+      sourceId: memoId,
+      sourceTitle: 'Voice note',
+      excerpt: item.title,
+      occurredAt: now,
+    } as TaskMention],
+    mentionCount: 1,
     archivedAt: null,
     snoozedAt: null,
     snoozedReason: null,
@@ -321,6 +432,8 @@ export async function syncCalendarEventsToDb(events: {
   startTime: Date;
   endTime: Date;
   attendees: string[];
+  /** Bare recurring-series UID (OQ4) — null for one-off events. */
+  seriesUid?: string | null;
 }[]): Promise<{ created: number; updated: number }> {
   let created = 0;
   let updated = 0;
@@ -340,7 +453,7 @@ export async function syncCalendarEventsToDb(events: {
     if (existing) {
       await meetingsDb.updateAsync(
         { _id: (existing as any)._id },
-        { $set: { title: event.title, attendees: event.attendees, date, duration } },
+        { $set: { title: event.title, attendees: event.attendees, date, duration, seriesUid: event.seriesUid ?? null } },
         {}
       );
       updated++;
@@ -355,6 +468,7 @@ export async function syncCalendarEventsToDb(events: {
         status: 'calendar_sync',
         source: 'calendar',
         calendarEventId: event.id,
+        seriesUid: event.seriesUid ?? null,
         insights: null,
         createdAt: new Date().toISOString(),
       });
@@ -387,7 +501,9 @@ export async function getTasks(opts?: { includeSnoozed?: boolean }): Promise<any
     query.snoozedAt = null;
   }
   const tasks = await tasksDb.findAsync(query);
-  return sortTasks(tasks);
+  // Computed, never persisted: "Raised N× this week" chip data (US-014).
+  const annotated = tasks.map((t: any) => ({ ...t, repetitionNudge: computeRepetitionNudge(t) }));
+  return sortTasks(annotated);
 }
 
 export async function getSnoozedTasks(): Promise<any[]> {
@@ -415,6 +531,8 @@ export async function createTask(data: {
     source: { type: 'manual' },
     aiExtracted: false,
     approval: { status: 'auto_approved' },
+    taskMentions: [],
+    mentionCount: 0,
     archivedAt: null,
     snoozedAt: null,
     snoozedReason: null,
@@ -486,6 +604,274 @@ export async function touchLastMentioned(taskId: string, when: string): Promise<
     { $set: { lastMentionedAt: when, updatedAt: new Date().toISOString() } },
     {},
   );
+}
+
+// ── Task mentions / dedup merge machinery (task-dedup PRD) ───────────────────
+
+/**
+ * Pre-feature tasks have no taskMentions array. Before appending a second
+ * mention, synthesize the originating mention from the task's singular source
+ * so the thread shows the full history.
+ */
+function synthesizeOriginatingMention(task: any): TaskMention | null {
+  const type = task?.source?.type;
+  if (type !== 'meeting' && type !== 'voice_memo') return null;
+  return {
+    id: uuidv4(),
+    sourceType: (type === 'voice_memo' ? 'voice_note' : 'meeting') as MentionSourceType,
+    sourceId: task.source?.id || null,
+    sourceTitle: type === 'voice_memo' ? 'Voice note' : null,
+    excerpt: task.title || '',
+    occurredAt: task.createdAt || new Date().toISOString(),
+  };
+}
+
+/**
+ * Append a mention to an existing task (auto-merge / confirmed merge). Bumps
+ * mentionCount + lastMentionedAt; `reopen: true` also flips a done task back
+ * to todo (only ever on the user's explicit "Reopen and merge", US-008).
+ * Idempotent per (sourceId, excerpt) so re-processed meetings don't double-append.
+ */
+export async function appendTaskMention(
+  taskId: string,
+  mention: TaskMention,
+  opts?: { reopen?: boolean },
+): Promise<any> {
+  const task: any = await tasksDb.findOneAsync({ _id: taskId });
+  if (!task) return null;
+
+  let mentions: TaskMention[] = Array.isArray(task.taskMentions) ? [...task.taskMentions] : [];
+  if (mentions.length === 0) {
+    const origin = synthesizeOriginatingMention(task);
+    if (origin) mentions.push(origin);
+  }
+  const duplicate = mentions.some(m => m.sourceId === mention.sourceId && m.excerpt === mention.excerpt);
+  if (!duplicate) {
+    mentions.push({ ...mention, id: mention.id || uuidv4() });
+  }
+
+  const now = new Date().toISOString();
+  const updates: Record<string, any> = {
+    taskMentions: mentions,
+    mentionCount: mentions.length,
+    lastMentionedAt: mention.occurredAt || now,
+    updatedAt: now,
+  };
+  if (opts?.reopen && (task.status === 'done' || task.status === 'completed')) {
+    updates.status = 'todo';
+    updates.likelyDone = false;
+  }
+  await tasksDb.updateAsync({ _id: taskId }, { $set: updates }, {});
+  return tasksDb.findOneAsync({ _id: taskId });
+}
+
+/**
+ * Manual merge (US-010): the losing task's mentions move into the survivor's
+ * thread; the loser is archived (never deleted) with a pointer back.
+ */
+export async function mergeTasksManual(survivorId: string, loserId: string): Promise<any> {
+  const survivor: any = await tasksDb.findOneAsync({ _id: survivorId });
+  const loser: any = await tasksDb.findOneAsync({ _id: loserId });
+  if (!survivor || !loser || survivorId === loserId) return null;
+
+  const survivorMentions: TaskMention[] = Array.isArray(survivor.taskMentions) ? [...survivor.taskMentions] : [];
+  if (survivorMentions.length === 0) {
+    const origin = synthesizeOriginatingMention(survivor);
+    if (origin) survivorMentions.push(origin);
+  }
+
+  let loserMentions: TaskMention[] = Array.isArray(loser.taskMentions) ? [...loser.taskMentions] : [];
+  if (loserMentions.length === 0) {
+    const origin = synthesizeOriginatingMention(loser);
+    loserMentions = origin ? [origin] : [{
+      id: uuidv4(),
+      sourceType: 'meeting',
+      sourceId: null,
+      sourceTitle: null,
+      excerpt: loser.title || '',
+      occurredAt: loser.createdAt || new Date().toISOString(),
+    }];
+  }
+  // Every absorbed mention carries a snapshot so undo/split can resurrect it.
+  for (const m of loserMentions) {
+    if (!m.mergedItem) {
+      m.mergedItem = {
+        title: loser.title || m.excerpt || '',
+        description: loser.description || '',
+        owner: loser.owner || null,
+        deadline: loser.dueDate || null,
+      };
+    }
+    if (!survivorMentions.some(sm => sm.id === m.id)) survivorMentions.push(m);
+  }
+
+  const now = new Date().toISOString();
+  const lastMentioned = survivorMentions
+    .map(m => m.occurredAt)
+    .filter(Boolean)
+    .sort()
+    .pop() || now;
+  await tasksDb.updateAsync(
+    { _id: survivorId },
+    { $set: { taskMentions: survivorMentions, mentionCount: survivorMentions.length, lastMentionedAt: lastMentioned, updatedAt: now } },
+    {},
+  );
+  await tasksDb.updateAsync(
+    { _id: loserId },
+    { $set: { archivedAt: now, mergedInto: survivorId, updatedAt: now } },
+    {},
+  );
+
+  await logMatchDecision({
+    decisionType: 'manual_merge',
+    candidateTaskId: survivorId,
+    taskId: loserId,
+    newItemText: loser.title || '',
+    decidedBy: 'user',
+    surface: 'oss',
+  });
+
+  return tasksDb.findOneAsync({ _id: survivorId });
+}
+
+/**
+ * Undo/split (US-010): extract a merged mention back into a standalone task
+ * built from its mergedItem snapshot (or excerpt). Logged as a strong negative
+ * signal when the mention arrived via auto-merge.
+ */
+export async function undoSplitMention(taskId: string, mentionId: string): Promise<any> {
+  const task: any = await tasksDb.findOneAsync({ _id: taskId });
+  if (!task) return null;
+  const mentions: TaskMention[] = Array.isArray(task.taskMentions) ? [...task.taskMentions] : [];
+  const idx = mentions.findIndex(m => m.id === mentionId);
+  if (idx === -1) return null;
+  const [mention] = mentions.splice(idx, 1);
+
+  const now = new Date().toISOString();
+  const snapshot = mention.mergedItem;
+  const newDoc = await tasksDb.insertAsync({
+    _id: uuidv4(),
+    title: snapshot?.title || mention.excerpt || task.title,
+    description: snapshot?.description || '',
+    status: 'todo',
+    priority: task.priority || 'medium',
+    dueDate: snapshot?.deadline || null,
+    owner: snapshot?.owner || null,
+    source: {
+      type: mention.sourceType === 'voice_note' ? 'voice_memo' : 'meeting',
+      ...(mention.sourceId ? { id: mention.sourceId } : {}),
+    },
+    aiExtracted: true,
+    approval: { status: 'approved', approvedAt: now },
+    provenance: mention.sourceId
+      ? { meetingId: mention.sourceId, extractionMethod: 'undo_split', extractedAt: now }
+      : { extractionMethod: 'undo_split', extractedAt: now },
+    taskMentions: [{ ...mention, mergedItem: undefined }],
+    mentionCount: 1,
+    archivedAt: null,
+    snoozedAt: null,
+    snoozedReason: null,
+    lastMentionedAt: mention.occurredAt || null,
+    likelyDone: false,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await tasksDb.updateAsync(
+    { _id: taskId },
+    { $set: { taskMentions: mentions, mentionCount: mentions.length, updatedAt: now } },
+    {},
+  );
+
+  await logMatchDecision({
+    decisionType: 'undo_split',
+    candidateTaskId: taskId,
+    taskId: (newDoc as any)._id,
+    newItemText: (newDoc as any).title,
+    decidedBy: 'user',
+    surface: 'oss',
+  });
+
+  return newDoc;
+}
+
+/**
+ * Resolve an ask-band suggestion riding on a pending extracted task (US-007).
+ * - 'same'  → merge the pending task into the candidate as a mention, drop the pending task
+ * - 'reopen'→ same, but also reopens the recently-done candidate (US-008 / OQ5)
+ * - 'new'   → keep the pending task, clear the suggestion (negative example)
+ */
+export async function resolvePendingDedup(taskId: string, action: 'same' | 'new' | 'reopen'): Promise<{ ok: boolean; mergedInto?: string }> {
+  const task: any = await tasksDb.findOneAsync({ _id: taskId });
+  if (!task || !task.dedupSuggestion) return { ok: false };
+  const sug = task.dedupSuggestion;
+
+  if (action === 'new') {
+    await tasksDb.updateAsync({ _id: taskId }, { $unset: { dedupSuggestion: true }, $set: { updatedAt: new Date().toISOString() } }, {});
+    await logMatchDecision({
+      decisionType: 'confirm_new',
+      confidence: sug.confidence ?? null,
+      retrievalScore: sug.retrievalScore ?? null,
+      candidateTaskId: sug.candidateTaskId ?? null,
+      taskId,
+      newItemText: task.title || '',
+      decidedBy: 'user',
+      surface: 'oss',
+    });
+    return { ok: true };
+  }
+
+  const mention: TaskMention = (task.taskMentions && task.taskMentions[0])
+    ? { ...task.taskMentions[0] }
+    : {
+        id: uuidv4(),
+        sourceType: (task.source?.type === 'voice_memo' ? 'voice_note' : 'meeting') as MentionSourceType,
+        sourceId: task.source?.id || null,
+        excerpt: task.title || '',
+        occurredAt: task.createdAt || new Date().toISOString(),
+      };
+  mention.mergedItem = {
+    title: task.title || '',
+    description: task.description || '',
+    owner: task.owner || null,
+    deadline: task.dueDate || null,
+  };
+
+  const merged = await appendTaskMention(sug.candidateTaskId, mention, { reopen: action === 'reopen' });
+  if (!merged) return { ok: false };
+  await tasksDb.removeAsync({ _id: taskId }, {});
+
+  await logMatchDecision({
+    decisionType: action === 'reopen' ? 'reopen_merge' : 'confirm_same',
+    confidence: sug.confidence ?? null,
+    retrievalScore: sug.retrievalScore ?? null,
+    candidateTaskId: sug.candidateTaskId,
+    taskId: sug.candidateTaskId,
+    newItemText: task.title || '',
+    decidedBy: 'user',
+    surface: 'oss',
+  });
+
+  return { ok: true, mergedInto: sug.candidateTaskId };
+}
+
+/** One-step priority bump from the repetition nudge (US-014). Explicit tap only. */
+export async function bumpTaskPriority(taskId: string): Promise<any> {
+  const order = ['low', 'medium', 'high', 'critical'];
+  const task: any = await tasksDb.findOneAsync({ _id: taskId });
+  if (!task) return null;
+  const idx = order.indexOf(task.priority || 'medium');
+  const next = order[Math.min(order.length - 1, Math.max(0, idx) + 1)];
+  await tasksDb.updateAsync({ _id: taskId }, { $set: { priority: next, updatedAt: new Date().toISOString() } }, {});
+  return tasksDb.findOneAsync({ _id: taskId });
+}
+
+/** Dismiss the repetition chip until the mention count grows again (US-014). */
+export async function dismissTaskNudge(taskId: string): Promise<void> {
+  const task: any = await tasksDb.findOneAsync({ _id: taskId });
+  if (!task) return;
+  const count = Array.isArray(task.taskMentions) ? task.taskMentions.length : (task.mentionCount || 0);
+  await tasksDb.updateAsync({ _id: taskId }, { $set: { nudgeDismissedAtCount: count, updatedAt: new Date().toISOString() } }, {});
 }
 
 // Test-only: inject an in-memory Datastore so helpers can be exercised without

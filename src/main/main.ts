@@ -29,7 +29,14 @@ import {
   getUserVoicePrint, getVoicePrintByName, getVoicePrintsWithEmbeddings,
   renameVoicePrint,
   syncCalendarEventsToDb,
+  getAllTasksForDedup, getMeetingsById, appendTaskMention,
+  mergeTasksManual, undoSplitMention, resolvePendingDedup,
+  bumpTaskPriority, dismissTaskNudge,
 } from './database';
+import { decideMention, retrieveCandidates, classifyCandidates, buildMentionThread, providerModelLabel } from './task-dedup';
+import { ASK_THRESHOLD, AUTO_MERGE_THRESHOLD } from './dedup-constants';
+import { logMatchDecision, listMatchDecisions, getMatchDecisionStats } from './match-decision-log';
+import { randomUUID } from 'crypto';
 import { extractChannel, trimWav, wavBufferToSamples, stitchWavBuffers } from '@inwise/desktop-shared';
 import {
   connectJira, disconnectJira, isJiraConnected, getJiraInfo,
@@ -1094,6 +1101,10 @@ ipcMain.handle('voice:applyMemo', async (_e, payload: {
           owner: item.owner ? String(item.owner) : null,
           dueDate: item.dueDate && !Number.isNaN(Date.parse(item.dueDate)) ? item.dueDate : null,
           priority: VOICE_MEMO_PRIORITIES.includes(prio) ? prio : 'medium',
+          // Ask-band confirm resolved in the review pane (US-007/US-013).
+          mergeIntoTaskId: item.mergeIntoTaskId ? String(item.mergeIntoTaskId) : null,
+          reopen: !!item.reopen,
+          matchConfidence: typeof item.matchConfidence === 'number' ? item.matchConfidence : null,
         });
       } else if (item?.kind === 'agenda' && item.text) {
         // An agenda point with no meeting to land on degrades to a note rather
@@ -1122,7 +1133,95 @@ ipcMain.handle('voice:applyMemo', async (_e, payload: {
     });
     const memoId = (memo as any)._id;
     for (const item of applied) {
-      if (item.kind === 'task') await createVoiceMemoTask(memoId, item);
+      if (item.kind !== 'task') continue;
+
+      // The review pane already showed any ask-band match and the user chose;
+      // `mergeIntoTaskId` is that choice riding back with the item. Anything
+      // else goes through the same dedup decision the meeting pipeline uses,
+      // so a spoken paraphrase of an open task is never an unconditional
+      // insert (US-013).
+      if (item.mergeIntoTaskId) {
+        const merged = await appendTaskMention(String(item.mergeIntoTaskId), {
+          id: randomUUID(),
+          sourceType: 'voice_note',
+          sourceId: memoId,
+          sourceTitle: 'Voice note',
+          excerpt: item.title,
+          occurredAt: new Date().toISOString(),
+          mergedItem: {
+            title: item.title,
+            description: item.details || '',
+            owner: item.owner || null,
+            deadline: item.dueDate || null,
+          },
+        }, { reopen: !!item.reopen });
+        if (merged) {
+          await logMatchDecision({
+            decisionType: item.reopen ? 'reopen_merge' : 'confirm_same',
+            confidence: typeof item.matchConfidence === 'number' ? item.matchConfidence : null,
+            candidateTaskId: String(item.mergeIntoTaskId),
+            taskId: String(item.mergeIntoTaskId),
+            newItemText: item.title,
+            decidedBy: 'user',
+            surface: 'oss',
+          });
+          continue;
+        }
+        // Candidate vanished between review and apply — fall through and create.
+      }
+
+      let decision: any = { kind: 'none' };
+      try {
+        decision = await decideMention(
+          { title: item.title, description: item.details || '' },
+          await getAllTasksForDedup(),
+          {}, // voice memos have no source meeting — text-only classification
+        );
+      } catch (e: any) {
+        log('error', 'voice:applyMemo:dedup-failed', e?.message || String(e));
+      }
+
+      if (decision.kind === 'auto_merge') {
+        await appendTaskMention(decision.taskId, {
+          id: randomUUID(),
+          sourceType: 'voice_note',
+          sourceId: memoId,
+          sourceTitle: 'Voice note',
+          excerpt: item.title,
+          occurredAt: new Date().toISOString(),
+          mergedItem: {
+            title: item.title,
+            description: item.details || '',
+            owner: item.owner || null,
+            deadline: item.dueDate || null,
+          },
+        });
+        await logMatchDecision({
+          decisionType: 'auto_merge',
+          confidence: decision.confidence,
+          retrievalScore: decision.retrievalScore,
+          candidateTaskId: decision.taskId,
+          taskId: decision.taskId,
+          newItemText: item.title,
+          decidedBy: 'system',
+          surface: 'oss',
+        });
+        continue;
+      }
+
+      const created = await createVoiceMemoTask(memoId, item);
+      if (decision.kind === 'new') {
+        await logMatchDecision({
+          decisionType: 'below_ask_new',
+          confidence: decision.confidence,
+          retrievalScore: decision.retrievalScore,
+          candidateTaskId: decision.candidateTaskId,
+          taskId: (created as any)?._id || null,
+          newItemText: item.title,
+          decidedBy: 'system',
+          surface: 'oss',
+        });
+      }
     }
     log('info', 'voice:applyMemo', `memo ${memoId}: ${applied.length} item(s) applied`);
     mainWindow?.webContents.send('meeting:new', memo);
@@ -1571,6 +1670,96 @@ ipcMain.handle('db:rejectLikelyDone', async (_e, id: string) => {
   await rejectLikelyDone(id);
   return true;
 });
+
+// ── Task-mention dedup (task-dedup PRD) ─────────────────────────────────────
+
+/**
+ * Ask-band confirm for a pending extracted task: 'same' merges it into the
+ * candidate, 'reopen' does that and reopens a recently-done candidate, 'new'
+ * keeps it standalone. Every outcome is logged locally.
+ */
+ipcMain.handle('dedup:resolvePending', async (_e, taskId: string, action: 'same' | 'new' | 'reopen') => {
+  try {
+    const res = await resolvePendingDedup(taskId, action);
+    mainWindow?.webContents.send('tasks:mentions-updated');
+    return res;
+  } catch (e: any) {
+    log('error', 'dedup:resolvePending', e?.message || String(e));
+    return { ok: false, error: e?.message };
+  }
+});
+
+/**
+ * Live match lookup for the voice-memo review pane — the classifier result
+ * rides back to the renderer with the extracted item so the confirm can render
+ * inline instead of persisting a pending-match record.
+ */
+ipcMain.handle('dedup:matchVoiceItems', async (_e, items: Array<{ id: number; title: string; details?: string }>) => {
+  try {
+    const tasks = await getAllTasksForDedup();
+    const model = providerModelLabel();
+    const out: any[] = [];
+    for (const item of items || []) {
+      if (!item?.title) continue;
+      const candidates = retrieveCandidates({ title: item.title, description: item.details || '' }, tasks, {});
+      if (candidates.length === 0) continue;
+      let results;
+      try {
+        results = await classifyCandidates({ title: item.title, description: item.details || '' }, candidates);
+      } catch {
+        continue; // degrade silently — apply-time dedup still runs
+      }
+      const best = results
+        .filter(r => r.verdict === 'same_task')
+        .sort((a, b) => b.confidence - a.confidence)[0];
+      if (!best) continue;
+      const cand = candidates[best.index];
+      // Only the ask band needs the user; auto-merge and below-ask are decided
+      // at apply time without a prompt.
+      const askable = cand.wasDone
+        ? best.confidence >= ASK_THRESHOLD
+        : best.confidence >= ASK_THRESHOLD && best.confidence < AUTO_MERGE_THRESHOLD;
+      if (!askable) continue;
+      out.push({
+        itemId: item.id,
+        candidateTaskId: cand.taskId,
+        candidateTitle: cand.title,
+        wasDone: cand.wasDone,
+        confidence: best.confidence,
+        retrievalScore: cand.retrievalScore,
+        model,
+      });
+    }
+    return { ok: true, matches: out };
+  } catch (e: any) {
+    log('error', 'dedup:matchVoiceItems', e?.message || String(e));
+    return { ok: false, matches: [] };
+  }
+});
+
+/** Mention thread for task detail — empty for single-mention tasks (US-009). */
+ipcMain.handle('dedup:getMentionThread', async (_e, taskId: string) => {
+  const tasks = await getAllTasksForDedup();
+  const task = tasks.find((t: any) => t._id === taskId);
+  return task ? buildMentionThread(task) : [];
+});
+
+ipcMain.handle('dedup:mergeTasks', async (_e, survivorId: string, loserId: string) => {
+  const res = await mergeTasksManual(survivorId, loserId);
+  mainWindow?.webContents.send('tasks:mentions-updated');
+  return res ? { ok: true } : { ok: false };
+});
+
+ipcMain.handle('dedup:undoSplit', async (_e, taskId: string, mentionId: string) => {
+  const res = await undoSplitMention(taskId, mentionId);
+  mainWindow?.webContents.send('tasks:mentions-updated');
+  return res ? { ok: true, taskId: (res as any)._id } : { ok: false };
+});
+
+ipcMain.handle('dedup:bumpPriority', async (_e, taskId: string) => bumpTaskPriority(taskId));
+ipcMain.handle('dedup:dismissNudge', async (_e, taskId: string) => { await dismissTaskNudge(taskId); return true; });
+ipcMain.handle('dedup:listDecisions', async (_e, limit?: number) => listMatchDecisions(limit));
+ipcMain.handle('dedup:decisionStats', async () => getMatchDecisionStats());
 
 // People
 ipcMain.handle('db:getPeople', async (_e, search) => getPeople(search));
