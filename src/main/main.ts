@@ -85,7 +85,7 @@ import { ingestNormalizedTranscript } from './zoom-transcript-ingestion';
 import { validateToken, isSlackConnected, listChannels as slackListChannels } from './slack-client';
 import { normalizeSlackThread } from './slack-normalizer';
 import { startSlackPoller, stopSlackPoller, registerSlackPipeline } from './slack-poller';
-import { startMcpServer, stopMcpServer, getMcpStatus } from './mcp-server';
+import { startMcpServer, stopMcpServer, getMcpStatus, setUpcomingEventsProvider } from './mcp-server';
 
 Menu.setApplicationMenu(null);
 
@@ -3145,6 +3145,9 @@ app.whenReady().then(() => {
   setTimeout(() => startSlackPoller(), 10_000);
 
   // Local MCP server ("Connect to AI") — loopback-only, read-only.
+  // The watcher's event cache is handed over as a getter so mcp-server.ts stays
+  // free of Electron/network imports; with no calendar connected it returns [].
+  setUpcomingEventsProvider(() => calendarWatcher.getUpcomingEvents());
   const mcpPrefs = getMcpPrefs();
   if (mcpPrefs.enabled) {
     startMcpServer(mcpPrefs.port).then((r) => {

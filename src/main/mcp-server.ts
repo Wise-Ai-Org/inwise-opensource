@@ -3,7 +3,15 @@ import { app } from 'electron';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { getMeetings, getMeeting, getTasks } from './database';
+import {
+  getMeetings,
+  getMeeting,
+  getTasks,
+  getPeople,
+  getPerson,
+  getPersonAgendaContext,
+  getMeetingAgendaContext,
+} from './database';
 import { log } from './logger';
 
 /**
@@ -149,6 +157,177 @@ export async function listActionItemsHandler(args: { status?: string; meetingId?
   };
 }
 
+export async function getTaskHandler(args: { taskId: string }): Promise<any> {
+  const tasks = await getTasks({ includeSnoozed: true });
+  const t = tasks.find((x: any) => x._id === args.taskId);
+  if (!t) return { error: `No task found with id "${args.taskId}"` };
+  return {
+    taskId: t._id,
+    title: t.title,
+    // Full text here — list_action_items truncates, this tool is the detail view.
+    description: t.description || null,
+    status: t.status,
+    priority: t.priority,
+    dueDate: t.dueDate || null,
+    owner: t.owner || null,
+    source: t.source || null,
+    sourceMeetingId: t.source?.type === 'meeting' ? t.source.id : null,
+    aiExtracted: !!t.aiExtracted,
+    likelyDone: !!t.likelyDone,
+    snoozed: t.snoozedAt != null,
+    snoozedAt: t.snoozedAt || null,
+    snoozeReason: t.snoozeReason || null,
+    lastMentionedAt: t.lastMentionedAt || null,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt || null,
+  };
+}
+
+export async function listPeopleHandler(args: { search?: string; limit?: number }): Promise<any> {
+  const limit = Math.min(Math.max(1, Math.floor(args.limit ?? 50)), 200);
+  // Nameless rows exist in the store (partial imports). They can never match a
+  // meeting attendee, so they'd only be noise in an agent's list.
+  const people = (await getPeople(args.search?.trim() || undefined)).filter((p: any) =>
+    ((p.name || '').trim().length > 0)
+  );
+  return {
+    total: people.length,
+    people: people.slice(0, limit).map((p: any) => ({
+      personId: p._id,
+      name: p.name,
+      email: p.email || null,
+      role: p.role || null,
+      company: p.company || null,
+      meetingCount: p.meetingCount,
+      lastMeeting: p.lastMeeting,
+      daysSinceLastContact: p.daysSinceLastContact,
+      actionItemCount: p.actionItemCount,
+    })),
+  };
+}
+
+export async function getPersonHandler(args: { personId: string }): Promise<any> {
+  const p = await getPerson(args.personId);
+  if (!p) return { error: `No person found with id "${args.personId}"` };
+  return {
+    personId: p._id,
+    name: p.name,
+    email: p.email || null,
+    role: p.role || null,
+    company: p.company || null,
+    bio: p.bio || null,
+    relationshipInsights: p.relationshipInsights || [],
+    summary: p.summary,
+    nudges: p.nudges || [],
+    pendingActionItems: p.pendingActionItems || [],
+    commitments: p.commitments || [],
+    // Meeting bodies stay out — call get_meeting with a meetingId for those.
+    recentMeetings: (p.communications || []).slice(0, 10).map((c: any) => ({
+      meetingId: c._id,
+      title: c.title,
+      date: c.date,
+      summary: c.summary,
+      keyDecisions: c.keyDecisions || [],
+    })),
+  };
+}
+
+export async function getPersonAgendaHandler(args: { personId: string }): Promise<any> {
+  const agenda = await getPersonAgendaContext(args.personId);
+  if (agenda == null) return { error: `No person found with id "${args.personId}"` };
+  return { personId: args.personId, agenda };
+}
+
+// ── Upcoming calendar events ─────────────────────────────────────────────────
+//
+// The calendar watcher holds its polled events in memory in the main process.
+// It is injected rather than imported so this module keeps its no-Electron,
+// no-network import graph and stays unit-testable (see mcp-server.test.ts).
+
+export interface UpcomingEventLike {
+  id: string;
+  title: string;
+  startTime: Date | string;
+  endTime?: Date | string;
+  attendees?: string[];
+  meetingLink?: string;
+}
+
+let upcomingEventsProvider: (() => UpcomingEventLike[]) | null = null;
+
+export function setUpcomingEventsProvider(fn: (() => UpcomingEventLike[]) | null): void {
+  upcomingEventsProvider = fn;
+}
+
+const UPCOMING_DEFAULT_HOURS = 24;
+const UPCOMING_MAX_HOURS = 24 * 14;
+
+function upcomingWithin(hours: number, now: number): UpcomingEventLike[] {
+  const events = upcomingEventsProvider ? upcomingEventsProvider() : [];
+  const until = now + hours * 3600_000;
+  return events
+    .filter((e) => {
+      const start = new Date(e.startTime).getTime();
+      return Number.isFinite(start) && start >= now && start <= until;
+    })
+    .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+}
+
+export async function listUpcomingMeetingsHandler(args: { withinHours?: number; limit?: number }): Promise<any> {
+  if (!upcomingEventsProvider) {
+    return {
+      error:
+        'No calendar is connected in the Inwise app. Add one in Settings → Calendars, ' +
+        'or use search_meetings for meetings already recorded.',
+    };
+  }
+  const hours = Math.min(Math.max(1, Math.floor(args.withinHours ?? UPCOMING_DEFAULT_HOURS)), UPCOMING_MAX_HOURS);
+  const limit = Math.min(Math.max(1, Math.floor(args.limit ?? 20)), 100);
+  const events = upcomingWithin(hours, Date.now());
+  // An empty cache and an empty window look the same from here; say so rather
+  // than letting a caller read "no meetings" as "calendar checked, nothing due".
+  const cacheEmpty = (upcomingEventsProvider?.() ?? []).length === 0;
+  return {
+    withinHours: hours,
+    total: events.length,
+    ...(cacheEmpty
+      ? { note: 'No calendar events are cached — either no calendar is connected in Settings → Calendars, or none has synced yet.' }
+      : {}),
+    meetings: events.slice(0, limit).map((e) => ({
+      eventId: e.id,
+      title: e.title,
+      startTime: new Date(e.startTime).toISOString(),
+      endTime: e.endTime ? new Date(e.endTime).toISOString() : null,
+      attendees: e.attendees || [],
+      hasMeetingLink: !!e.meetingLink,
+    })),
+  };
+}
+
+export async function getMeetingAgendaHandler(args: {
+  eventId?: string;
+  title?: string;
+  attendees?: string[];
+}): Promise<any> {
+  let title = (args.title || '').trim();
+  let attendees = args.attendees || [];
+
+  if (args.eventId) {
+    const events = upcomingEventsProvider ? upcomingEventsProvider() : [];
+    const match = events.find((e) => e.id === args.eventId);
+    if (!match) {
+      return { error: `No upcoming meeting found with eventId "${args.eventId}". Call list_upcoming_meetings first.` };
+    }
+    title = match.title;
+    attendees = match.attendees || [];
+  }
+
+  if (!title) return { error: 'Pass either eventId (from list_upcoming_meetings) or title plus attendees.' };
+
+  const agenda = await getMeetingAgendaContext(title, attendees);
+  return { title, attendees, agenda };
+}
+
 function getAppVersion(): string {
   try {
     const v = (app as any)?.getVersion?.();
@@ -270,6 +449,100 @@ function buildMcpServer(): McpServer {
       },
     },
     listActionItemsHandler
+  );
+
+  registerReadOnlyTool(
+    server,
+    'get_task',
+    {
+      title: 'Get task',
+      description:
+        'Full detail for one task or action item: untruncated description, owner, due date, priority, snooze state, and the meeting it came from.',
+      inputSchema: {
+        taskId: z.string().describe('Task id from list_action_items'),
+      },
+    },
+    getTaskHandler
+  );
+
+  registerReadOnlyTool(
+    server,
+    'list_people',
+    {
+      title: 'List people',
+      description:
+        'List the people tracked on this machine, with how often you meet them and how long since the last contact. Returns person ids to pass to get_person and get_person_agenda.',
+      inputSchema: {
+        search: z.string().optional().describe('Filter by name, email, or company'),
+        limit: z.number().int().min(1).max(200).optional().describe('Max results (default 50)'),
+      },
+    },
+    listPeopleHandler
+  );
+
+  registerReadOnlyTool(
+    server,
+    'get_person',
+    {
+      title: 'Get person',
+      description:
+        'One person in depth: role, bio, relationship insights, open action items and commitments involving them, nudges (overdue commitments, stale tasks), and recent meetings together.',
+      inputSchema: {
+        personId: z.string().describe('Person id from list_people'),
+      },
+    },
+    getPersonHandler
+  );
+
+  registerReadOnlyTool(
+    server,
+    'get_person_agenda',
+    {
+      title: 'Get agenda for a person',
+      description:
+        'A prepared agenda for your next conversation with someone: what you last discussed, decisions made, open items owed in each direction, and what is worth raising. Use before a 1:1.',
+      inputSchema: {
+        personId: z.string().describe('Person id from list_people'),
+      },
+    },
+    getPersonAgendaHandler
+  );
+
+  registerReadOnlyTool(
+    server,
+    'list_upcoming_meetings',
+    {
+      title: 'List upcoming meetings',
+      description:
+        'Meetings coming up on the calendars connected in the Inwise app, soonest first, with attendees. Returns event ids to pass to get_meeting_agenda. Use for day-ahead or pre-meeting prep.',
+      inputSchema: {
+        withinHours: z
+          .number()
+          .int()
+          .min(1)
+          .max(UPCOMING_MAX_HOURS)
+          .optional()
+          .describe(`Look-ahead window in hours (default ${UPCOMING_DEFAULT_HOURS})`),
+        limit: z.number().int().min(1).max(100).optional().describe('Max results (default 20)'),
+      },
+    },
+    listUpcomingMeetingsHandler
+  );
+
+  registerReadOnlyTool(
+    server,
+    'get_meeting_agenda',
+    {
+      title: 'Get agenda for an upcoming meeting',
+      description:
+        'A prepared agenda for an upcoming meeting: per-attendee history, what was last discussed with each, and open items. Pass eventId from list_upcoming_meetings, or a title plus attendee names.',
+      inputSchema: {
+        eventId: z.string().optional().describe('Event id from list_upcoming_meetings'),
+        title: z.string().optional().describe('Meeting title, if not passing eventId'),
+        attendees: z.array(z.string()).optional().describe('Attendee names, if not passing eventId'),
+      },
+    },
+    getMeetingAgendaHandler
   );
 
   registerReadOnlyTool(

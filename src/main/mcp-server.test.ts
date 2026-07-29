@@ -1,17 +1,24 @@
 import * as assert from 'node:assert/strict';
 import * as http from 'node:http';
 import Datastore from '@seald-io/nedb';
-import { __setMeetingsDbForTests, __setTasksDbForTests } from './database';
+import { __setMeetingsDbForTests, __setPeopleDbForTests, __setTasksDbForTests } from './database';
 import {
   MCP_PATH,
   TRANSCRIPT_CHUNK_CHARS,
   extractSnippet,
   getMcpStatus,
+  getMeetingAgendaHandler,
   getMeetingHandler,
+  getPersonAgendaHandler,
+  getPersonHandler,
+  getTaskHandler,
   isAllowedHostHeader,
   isLoopbackAddress,
   listActionItemsHandler,
+  listPeopleHandler,
+  listUpcomingMeetingsHandler,
   searchMeetingsHandler,
+  setUpcomingEventsProvider,
   startMcpServer,
   stopMcpServer,
   whoamiHandler,
@@ -112,10 +119,13 @@ async function run(): Promise<void> {
   // ── Fixture store (in-memory NeDB, same shape database.ts writes) ───────────
   const meetingsDb = new Datastore<any>();
   const tasksDb = new Datastore<any>();
+  const peopleDb = new Datastore<any>();
   await meetingsDb.loadDatabaseAsync();
   await tasksDb.loadDatabaseAsync();
+  await peopleDb.loadDatabaseAsync();
   __setMeetingsDbForTests(meetingsDb);
   __setTasksDbForTests(tasksDb);
+  __setPeopleDbForTests(peopleDb);
 
   const longTranscript = 'line of discussion. '.repeat(4000); // 80,000 chars > one chunk
 
@@ -224,6 +234,61 @@ async function run(): Promise<void> {
     },
   ]);
 
+  await peopleDb.insertAsync([
+    {
+      _id: 'p-alex',
+      name: 'Alex Chen',
+      email: 'alex@example.com',
+      company: 'Acme',
+      role: 'Engineering Lead',
+      bio: 'Owns the billing platform.',
+      notes: null,
+      relationshipInsights: ['Prefers written context before a decision'],
+      archived: false,
+      trackedBy: true,
+      createdAt: '2026-06-01T00:00:00.000Z',
+    },
+    {
+      _id: 'p-priya',
+      name: 'Priya Patel',
+      email: 'priya@example.com',
+      company: 'Acme',
+      role: 'Design',
+      bio: null,
+      notes: null,
+      relationshipInsights: [],
+      archived: false,
+      trackedBy: true,
+      createdAt: '2026-06-01T00:00:00.000Z',
+    },
+    {
+      _id: 'p-nameless',
+      name: '',
+      email: null,
+      company: null,
+      role: null,
+      bio: null,
+      notes: null,
+      relationshipInsights: [],
+      archived: false,
+      trackedBy: true,
+      createdAt: '2026-06-15T00:00:00.000Z',
+    },
+    {
+      _id: 'p-archived',
+      name: 'Former Colleague',
+      email: null,
+      company: null,
+      role: null,
+      bio: null,
+      notes: null,
+      relationshipInsights: [],
+      archived: true,
+      trackedBy: false,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    },
+  ]);
+
   // ── search_meetings ─────────────────────────────────────────────────────────
   {
     // Title match
@@ -312,6 +377,178 @@ async function run(): Promise<void> {
     assert.equal(limited.total, 3, 'total reflects all matches even when page is capped');
   }
 
+  // ── get_task ────────────────────────────────────────────────────────────────
+  {
+    const t = await getTaskHandler({ taskId: 't-2' });
+    assert.equal(t.title, 'Send all-hands notes');
+    assert.equal(t.description, 'Recap for the team', 'detail view is untruncated');
+    assert.equal(t.status, 'done');
+    assert.equal(t.sourceMeetingId, 'm-long');
+    assert.equal(t.aiExtracted, true);
+
+    // Snoozed tasks are reachable by id, with the snooze surfaced
+    const snoozed = await getTaskHandler({ taskId: 't-3' });
+    assert.equal(snoozed.snoozed, true);
+    assert.equal(snoozed.snoozedAt, '2026-07-22T00:00:00.000Z');
+    assert.equal(snoozed.sourceMeetingId, null, 'manual tasks have no source meeting');
+
+    // Archived tasks stay invisible, same as list_action_items
+    const archived = await getTaskHandler({ taskId: 't-archived' });
+    assert.ok(archived.error);
+
+    const missing = await getTaskHandler({ taskId: 'nope' });
+    assert.ok(missing.error);
+  }
+
+  // ── list_people ─────────────────────────────────────────────────────────────
+  {
+    const all = await listPeopleHandler({});
+    assert.equal(all.total, 2, 'archived and nameless people excluded');
+    assert.ok(
+      !all.people.some((p: any) => p.personId === 'p-nameless'),
+      'nameless rows never reach an agent — they cannot match a meeting attendee'
+    );
+    const alex = all.people.find((p: any) => p.personId === 'p-alex');
+    assert.equal(alex.name, 'Alex Chen');
+    assert.equal(alex.role, 'Engineering Lead');
+    assert.equal(alex.meetingCount, 2, 'attendee match across roadmap + all-hands');
+    assert.ok(typeof alex.daysSinceLastContact === 'number');
+
+    const search = await listPeopleHandler({ search: 'priya' });
+    assert.equal(search.total, 1);
+    assert.equal(search.people[0].personId, 'p-priya');
+
+    const limited = await listPeopleHandler({ limit: 1 });
+    assert.equal(limited.people.length, 1);
+    assert.equal(limited.total, 2, 'total reflects all matches even when page is capped');
+  }
+
+  // ── get_person ──────────────────────────────────────────────────────────────
+  {
+    const p = await getPersonHandler({ personId: 'p-alex' });
+    assert.equal(p.name, 'Alex Chen');
+    assert.equal(p.bio, 'Owns the billing platform.');
+    assert.deepEqual(p.relationshipInsights, ['Prefers written context before a decision']);
+    assert.equal(p.summary.totalMeetings, 2);
+    assert.ok(Array.isArray(p.nudges));
+    assert.ok(p.recentMeetings.some((m: any) => m.meetingId === 'm-roadmap'));
+    assert.ok(
+      p.recentMeetings.every((m: any) => !('transcript' in m)),
+      'transcripts are not inlined — get_meeting serves those'
+    );
+
+    const missing = await getPersonHandler({ personId: 'nope' });
+    assert.ok(missing.error);
+  }
+
+  // ── get_person_agenda ───────────────────────────────────────────────────────
+  {
+    const a = await getPersonAgendaHandler({ personId: 'p-alex' });
+    assert.equal(a.personId, 'p-alex');
+    assert.ok(a.agenda.includes('Alex Chen'));
+    assert.ok(a.agenda.includes('Q3 Roadmap Review'), 'agenda cites the meetings it drew on');
+    assert.ok(a.agenda.includes('Engineering Lead'));
+
+    const missing = await getPersonAgendaHandler({ personId: 'nope' });
+    assert.ok(missing.error);
+  }
+
+  // ── list_upcoming_meetings ──────────────────────────────────────────────────
+  {
+    // No provider wired (app started without a calendar watcher) → explicit error,
+    // never a silent empty list that reads as "nothing scheduled".
+    setUpcomingEventsProvider(null);
+    const unwired = await listUpcomingMeetingsHandler({});
+    assert.ok(unwired.error && unwired.error.includes('calendar'));
+
+    const now = Date.now();
+    const soon = new Date(now + 60 * 60_000);        // in 1 hour
+    const tomorrow = new Date(now + 30 * 3600_000);  // in 30 hours
+    const past = new Date(now - 3600_000);           // an hour ago
+    setUpcomingEventsProvider(() => [
+      {
+        id: 'e-past',
+        title: 'Already happened',
+        startTime: past,
+        endTime: new Date(past.getTime() + 1800_000),
+        attendees: ['Alex Chen'],
+      },
+      {
+        id: 'e-tomorrow',
+        title: 'Design review',
+        startTime: tomorrow,
+        endTime: new Date(tomorrow.getTime() + 1800_000),
+        attendees: ['Priya Patel'],
+      },
+      {
+        id: 'e-soon',
+        title: 'Billing sync',
+        startTime: soon,
+        endTime: new Date(soon.getTime() + 1800_000),
+        attendees: ['Alex Chen', 'Priya Patel'],
+        meetingLink: 'https://zoom.us/j/123',
+      },
+    ]);
+
+    const next24 = await listUpcomingMeetingsHandler({});
+    assert.equal(next24.total, 1, 'past events and events past the window are excluded');
+    assert.equal(next24.meetings[0].eventId, 'e-soon');
+    assert.equal(next24.meetings[0].hasMeetingLink, true);
+    assert.deepEqual(next24.meetings[0].attendees, ['Alex Chen', 'Priya Patel']);
+    assert.ok(!next24.note, 'no advisory note when the cache has events');
+
+    const next48 = await listUpcomingMeetingsHandler({ withinHours: 48 });
+    assert.equal(next48.total, 2);
+    assert.deepEqual(
+      next48.meetings.map((m: any) => m.eventId),
+      ['e-soon', 'e-tomorrow'],
+      'soonest first'
+    );
+
+    const limited = await listUpcomingMeetingsHandler({ withinHours: 48, limit: 1 });
+    assert.equal(limited.meetings.length, 1);
+    assert.equal(limited.total, 2);
+
+    // Wired but empty cache: distinguishable from "checked, nothing due"
+    setUpcomingEventsProvider(() => []);
+    const empty = await listUpcomingMeetingsHandler({});
+    assert.equal(empty.total, 0);
+    assert.ok(empty.note && empty.note.includes('No calendar events are cached'));
+  }
+
+  // ── get_meeting_agenda ──────────────────────────────────────────────────────
+  {
+    const now = Date.now();
+    setUpcomingEventsProvider(() => [
+      {
+        id: 'e-soon',
+        title: 'Billing sync',
+        startTime: new Date(now + 3600_000),
+        endTime: new Date(now + 5400_000),
+        attendees: ['Alex Chen', 'Priya Patel'],
+      },
+    ]);
+
+    const byEvent = await getMeetingAgendaHandler({ eventId: 'e-soon' });
+    assert.equal(byEvent.title, 'Billing sync');
+    assert.deepEqual(byEvent.attendees, ['Alex Chen', 'Priya Patel']);
+    assert.ok(byEvent.agenda.includes('Alex Chen'));
+    assert.ok(byEvent.agenda.includes('Priya Patel'));
+    assert.ok(byEvent.agenda.includes('Q3 Roadmap Review'), 'pulls history for the attendees');
+
+    // Explicit title + attendees works without a calendar
+    const byTitle = await getMeetingAgendaHandler({ title: 'Ad hoc chat', attendees: ['Alex Chen'] });
+    assert.ok(byTitle.agenda.includes('Alex Chen'));
+
+    const badEvent = await getMeetingAgendaHandler({ eventId: 'nope' });
+    assert.ok(badEvent.error);
+
+    const noArgs = await getMeetingAgendaHandler({});
+    assert.ok(noArgs.error);
+
+    setUpcomingEventsProvider(null);
+  }
+
   // ── whoami ──────────────────────────────────────────────────────────────────
   {
     const who = whoamiHandler();
@@ -339,12 +576,23 @@ async function run(): Promise<void> {
     assert.equal(init.status, 200, init.body.slice(0, 300));
     assert.equal(JSON.parse(init.body).result.serverInfo.name, 'inwise-local');
 
-    // tools/list exposes the four read-only tools
+    // tools/list exposes the full read-only surface
     const list = await mcpPost(port, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     assert.equal(list.status, 200, list.body.slice(0, 300));
     const tools = JSON.parse(list.body).result.tools;
     const names = tools.map((t: any) => t.name).sort();
-    assert.deepEqual(names, ['get_meeting', 'list_action_items', 'search_meetings', 'whoami']);
+    assert.deepEqual(names, [
+      'get_meeting',
+      'get_meeting_agenda',
+      'get_person',
+      'get_person_agenda',
+      'get_task',
+      'list_action_items',
+      'list_people',
+      'list_upcoming_meetings',
+      'search_meetings',
+      'whoami',
+    ]);
     for (const t of tools) {
       assert.equal(t.annotations?.readOnlyHint, true, `${t.name} is annotated read-only`);
     }
