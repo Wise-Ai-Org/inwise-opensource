@@ -1,5 +1,24 @@
 # Release Notes
 
+## 1.4.0 — Local MCP meeting intelligence
+
+Inwise can now serve your meeting history to OpenWorker and other local MCP clients from
+**Settings → Connect to AI**. The server listens only on `127.0.0.1` and exposes ten
+read-only tools for meetings, action items, people, upcoming calendar events, and meeting
+prep.
+
+- Search meeting titles, summaries, and transcript text, then open a meeting for its
+  summary, decisions, blockers, commitments, and a short transcript excerpt.
+- Fetch full transcripts only through a separate paginated tool, so routine requests do
+  not pull a whole conversation into model context.
+- Inspect open action items, owners, due dates, and snooze state.
+- Review people, relationship history, outstanding work, commitments, and overdue nudges.
+- Prepare a source-linked agenda from prior discussions and obligations, or list the next
+  day of connected-calendar meetings.
+- Check the local connection and Inwise version without exposing meeting data.
+
+OpenWorker setup and privacy details are in [`docs/openworker.md`](./docs/openworker.md).
+
 ## 1.3.0 — Task mention deduplication
 
 The same task, said three different ways in three different meetings, used to become

@@ -1,6 +1,6 @@
 {
   "name": "inwise-opensource",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Open-source AI meeting recorder — local transcription, local storage, your own API key",
   "license": "MIT",
   "author": "Inwise.ai",
@@ -8,7 +8,8 @@
   "scripts": {
     "start": "npm run build && electron .",
     "dev": "concurrently \"npm run watch:main\" \"npm run watch:renderer\" \"wait-on dist/main/main.js dist/renderer/bundle.js && electron .\"",
-    "build": "npm run build:main && npm run build:renderer",
+    "build": "npm run build:shared && npm run build:main && npm run build:renderer",
+    "build:shared": "tsc -p src/shared/tsconfig.json",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "webpack --config webpack.renderer.config.js && node scripts/copy-static.js",
     "watch:main": "tsc -p tsconfig.main.json --watch",
