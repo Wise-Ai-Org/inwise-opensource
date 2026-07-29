@@ -1601,7 +1601,14 @@ export async function getMeetingAgendaContext(meetingTitle: string, attendeeName
 
   // For each attendee, gather their recent context
   for (const name of attendeeNames) {
-    const person = (allPeople as any[]).find(p => name.toLowerCase().includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(name.toLowerCase()));
+    // Guard the name: partial imports leave rows with a null/blank name, and an
+    // unguarded toLowerCase() there took the whole agenda down.
+    const person = (allPeople as any[]).find(p => {
+      const pname = (p?.name || '').toLowerCase();
+      if (!pname) return false;
+      const needle = name.toLowerCase();
+      return needle.includes(pname) || pname.includes(needle);
+    });
 
     const personMeetings = allMeetings
       .filter((m: any) =>

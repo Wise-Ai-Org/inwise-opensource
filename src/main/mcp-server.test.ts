@@ -7,21 +7,23 @@ import {
   TRANSCRIPT_CHUNK_CHARS,
   extractSnippet,
   getMcpStatus,
-  getMeetingAgendaHandler,
+  getActionItemHandler,
+  getConnectionStatusHandler,
   getMeetingHandler,
-  getPersonAgendaHandler,
   getPersonHandler,
-  getTaskHandler,
+  getTranscriptHandler,
   isAllowedHostHeader,
   isLoopbackAddress,
   listActionItemsHandler,
   listPeopleHandler,
   listUpcomingMeetingsHandler,
+  prepareMeetingHandler,
   searchMeetingsHandler,
   setUpcomingEventsProvider,
   startMcpServer,
   stopMcpServer,
-  whoamiHandler,
+  TOOL_NAMES,
+  TRANSCRIPT_EXCERPT_CHARS,
 } from './mcp-server';
 
 // ── HTTP helper (raw http.request so we control Host and Accept headers) ─────
@@ -128,6 +130,8 @@ async function run(): Promise<void> {
   __setPeopleDbForTests(peopleDb);
 
   const longTranscript = 'line of discussion. '.repeat(4000); // 80,000 chars > one chunk
+  const shortTranscript =
+    'Alex: We agreed to ship the billing revamp first. Priya: Yes, billing before analytics.';
 
   await meetingsDb.insertAsync([
     {
@@ -136,7 +140,7 @@ async function run(): Promise<void> {
       date: '2026-07-21T10:00:00.000Z',
       duration: 1800,
       attendees: ['Alex Chen', 'Priya Patel'],
-      transcript: 'Alex: We agreed to ship the billing revamp first. Priya: Yes, billing before analytics.',
+      transcript: shortTranscript,
       status: 'processed',
       source: 'desktop_recording',
       insights: {
@@ -219,6 +223,21 @@ async function run(): Promise<void> {
       createdAt: '2026-07-18T12:00:00.000Z',
     },
     {
+      _id: 't-owned',
+      title: 'Own the analytics spec',
+      description: '',
+      status: 'todo',
+      priority: 'medium',
+      dueDate: null,
+      owner: 'Priya Patel',
+      source: { type: 'manual' },
+      aiExtracted: false,
+      approval: { status: 'auto_approved' },
+      archivedAt: null,
+      snoozedAt: null,
+      createdAt: '2026-07-19T12:00:00.000Z',
+    },
+    {
       _id: 't-archived',
       title: 'Old archived task',
       description: '',
@@ -263,7 +282,7 @@ async function run(): Promise<void> {
     },
     {
       _id: 'p-nameless',
-      name: '',
+      name: null,
       email: null,
       company: null,
       role: null,
@@ -326,30 +345,32 @@ async function run(): Promise<void> {
     assert.equal(limited.results.length, 1);
   }
 
-  // ── get_meeting ─────────────────────────────────────────────────────────────
+  // ── get_meeting (summary surface — no verbatim transcript) ──────────────────
   {
     const full = await getMeetingHandler({ meetingId: 'm-roadmap' });
     assert.equal(full.title, 'Q3 Roadmap Review');
     assert.deepEqual(full.attendees, ['Alex Chen', 'Priya Patel']);
     assert.equal(full.insights.summary, 'Team prioritized the billing revamp over analytics for Q3.');
     assert.equal(full.insights.decisions.length, 1);
-    assert.equal(full.transcript.nextOffset, null, 'short transcript fits in one chunk');
-    assert.equal(full.transcript.chunk.length, full.transcript.totalChars);
 
-    // Long transcript pages in <=48KB chunks
-    const page1 = await getMeetingHandler({ meetingId: 'm-long' });
-    assert.equal(page1.transcript.chunk.length, TRANSCRIPT_CHUNK_CHARS);
-    assert.equal(page1.transcript.nextOffset, TRANSCRIPT_CHUNK_CHARS);
-    assert.equal(page1.transcript.totalChars, longTranscript.length);
+    // The privacy boundary: get_meeting never returns the full transcript, only a
+    // capped excerpt, and points at the separately-approved tool for the rest.
+    assert.equal(full.transcript.totalChars, shortTranscript.length);
+    assert.ok(!('chunk' in full.transcript), 'get_meeting no longer serves transcript chunks');
+    assert.ok(full.transcript.full.includes('get_transcript'));
 
-    const page2 = await getMeetingHandler({ meetingId: 'm-long', transcriptOffset: page1.transcript.nextOffset });
-    assert.equal(page2.transcript.chunk.length, longTranscript.length - TRANSCRIPT_CHUNK_CHARS);
-    assert.equal(page2.transcript.nextOffset, null);
-    assert.equal(page1.transcript.chunk + page2.transcript.chunk, longTranscript, 'chunks reassemble losslessly');
+    const long = await getMeetingHandler({ meetingId: 'm-long' });
+    assert.equal(long.transcript.totalChars, longTranscript.length);
+    assert.ok(
+      long.transcript.excerpt.length <= TRANSCRIPT_EXCERPT_CHARS + 1,
+      'excerpt is capped regardless of transcript length (+1 for the ellipsis)'
+    );
+    assert.ok(long.transcript.excerpt.endsWith('…'), 'a clipped excerpt is marked as clipped');
 
     // Meeting without transcript
     const noTranscript = await getMeetingHandler({ meetingId: 'm-empty' });
     assert.equal(noTranscript.transcript.totalChars, 0);
+    assert.equal(noTranscript.transcript.full, null, 'nothing to escalate to when there is no transcript');
     assert.equal(noTranscript.insights, null);
 
     // Unknown id
@@ -357,46 +378,87 @@ async function run(): Promise<void> {
     assert.ok(missing.error);
   }
 
+  // ── get_transcript (the separately-approved verbatim surface) ───────────────
+  {
+    const short = await getTranscriptHandler({ meetingId: 'm-roadmap' });
+    assert.equal(short.chunk, shortTranscript);
+    assert.equal(short.nextOffset, null, 'short transcript fits in one chunk');
+
+    // Long transcript pages in <=48KB chunks
+    const page1 = await getTranscriptHandler({ meetingId: 'm-long' });
+    assert.equal(page1.chunk.length, TRANSCRIPT_CHUNK_CHARS);
+    assert.equal(page1.nextOffset, TRANSCRIPT_CHUNK_CHARS);
+    assert.equal(page1.totalChars, longTranscript.length);
+
+    const page2 = await getTranscriptHandler({ meetingId: 'm-long', offset: page1.nextOffset });
+    assert.equal(page2.chunk.length, longTranscript.length - TRANSCRIPT_CHUNK_CHARS);
+    assert.equal(page2.nextOffset, null);
+    assert.equal(page1.chunk + page2.chunk, longTranscript, 'chunks reassemble losslessly');
+
+    const none = await getTranscriptHandler({ meetingId: 'm-empty' });
+    assert.equal(none.totalChars, 0);
+    assert.equal(none.chunk, '');
+    assert.equal(none.nextOffset, null);
+
+    const missing = await getTranscriptHandler({ meetingId: 'nope' });
+    assert.ok(missing.error);
+  }
+
   // ── list_action_items ───────────────────────────────────────────────────────
   {
     const all = await listActionItemsHandler({});
-    assert.equal(all.total, 3, 'archived tasks excluded, snoozed included');
-    assert.ok(all.actionItems.some((t: any) => t.taskId === 't-3' && t.snoozed === true));
+    assert.equal(all.total, 4, 'archived tasks excluded, snoozed included');
+    assert.ok(all.actionItems.some((t: any) => t.actionItemId === 't-3' && t.snoozed === true));
 
     const todo = await listActionItemsHandler({ status: 'todo' });
-    assert.equal(todo.total, 2);
+    assert.equal(todo.total, 3);
     assert.ok(todo.actionItems.every((t: any) => t.status === 'todo'));
 
     const byMeeting = await listActionItemsHandler({ meetingId: 'm-roadmap' });
     assert.equal(byMeeting.total, 1);
-    assert.equal(byMeeting.actionItems[0].taskId, 't-1');
+    assert.equal(byMeeting.actionItems[0].actionItemId, 't-1');
     assert.equal(byMeeting.actionItems[0].sourceMeetingId, 'm-roadmap');
+    // t-1 carries no owner of its own; the meeting's action item names Alex Chen.
+    assert.equal(byMeeting.actionItems[0].owner, 'Alex Chen');
+    assert.equal(byMeeting.actionItems[0].ownerSource, 'meeting');
 
     const limited = await listActionItemsHandler({ limit: 1 });
     assert.equal(limited.actionItems.length, 1);
-    assert.equal(limited.total, 3, 'total reflects all matches even when page is capped');
+    assert.equal(limited.total, 4, 'total reflects all matches even when page is capped');
   }
 
-  // ── get_task ────────────────────────────────────────────────────────────────
+  // ── get_action_item ─────────────────────────────────────────────────────────
   {
-    const t = await getTaskHandler({ taskId: 't-2' });
+    const t = await getActionItemHandler({ actionItemId: 't-2' });
     assert.equal(t.title, 'Send all-hands notes');
     assert.equal(t.description, 'Recap for the team', 'detail view is untruncated');
     assert.equal(t.status, 'done');
     assert.equal(t.sourceMeetingId, 'm-long');
     assert.equal(t.aiExtracted, true);
+    // m-long has no insights, so there is nowhere to borrow an owner from
+    assert.equal(t.owner, null);
+    assert.equal(t.ownerSource, null);
+
+    // Owner on the item itself wins over the meeting's
+    const owned = await getActionItemHandler({ actionItemId: 't-1' });
+    assert.equal(owned.owner, 'Alex Chen');
+    assert.equal(owned.ownerSource, 'meeting', 'borrowed from the source meeting when the item has none');
+
+    const explicit = await getActionItemHandler({ actionItemId: 't-owned' });
+    assert.equal(explicit.owner, 'Priya Patel');
+    assert.equal(explicit.ownerSource, 'task');
 
     // Snoozed tasks are reachable by id, with the snooze surfaced
-    const snoozed = await getTaskHandler({ taskId: 't-3' });
+    const snoozed = await getActionItemHandler({ actionItemId: 't-3' });
     assert.equal(snoozed.snoozed, true);
     assert.equal(snoozed.snoozedAt, '2026-07-22T00:00:00.000Z');
-    assert.equal(snoozed.sourceMeetingId, null, 'manual tasks have no source meeting');
+    assert.equal(snoozed.sourceMeetingId, null, 'manual items have no source meeting');
 
-    // Archived tasks stay invisible, same as list_action_items
-    const archived = await getTaskHandler({ taskId: 't-archived' });
+    // Archived items stay invisible, same as list_action_items
+    const archived = await getActionItemHandler({ actionItemId: 't-archived' });
     assert.ok(archived.error);
 
-    const missing = await getTaskHandler({ taskId: 'nope' });
+    const missing = await getActionItemHandler({ actionItemId: 'nope' });
     assert.ok(missing.error);
   }
 
@@ -441,15 +503,29 @@ async function run(): Promise<void> {
     assert.ok(missing.error);
   }
 
-  // ── get_person_agenda ───────────────────────────────────────────────────────
+  // ── prepare_meeting: the 1:1 shape ──────────────────────────────────────────
   {
-    const a = await getPersonAgendaHandler({ personId: 'p-alex' });
+    const a = await prepareMeetingHandler({ personId: 'p-alex' });
+    assert.equal(a.subject, 'person');
     assert.equal(a.personId, 'p-alex');
+    assert.equal(a.name, 'Alex Chen');
     assert.ok(a.agenda.includes('Alex Chen'));
     assert.ok(a.agenda.includes('Q3 Roadmap Review'), 'agenda cites the meetings it drew on');
     assert.ok(a.agenda.includes('Engineering Lead'));
 
-    const missing = await getPersonAgendaHandler({ personId: 'nope' });
+    // Every agenda is source-linked: id, title, date, and the excerpt behind it.
+    assert.equal(a.sources.length, 1);
+    assert.equal(a.sources[0].attendee, 'Alex Chen');
+    const cited = a.sources[0].meetings;
+    assert.ok(cited.length > 0, 'the brief cites the meetings it came from');
+    const roadmap = cited.find((m: any) => m.meetingId === 'm-roadmap');
+    assert.ok(roadmap, 'sources carry meeting ids so a client can link back');
+    assert.equal(roadmap.title, 'Q3 Roadmap Review');
+    assert.equal(roadmap.date, '2026-07-21T10:00:00.000Z');
+    assert.ok(roadmap.excerpt.includes('billing revamp'), 'excerpt is the supporting text');
+    assert.deepEqual(roadmap.decisions, ['Billing revamp ships before analytics']);
+
+    const missing = await prepareMeetingHandler({ personId: 'nope' });
     assert.ok(missing.error);
   }
 
@@ -516,7 +592,7 @@ async function run(): Promise<void> {
     assert.ok(empty.note && empty.note.includes('No calendar events are cached'));
   }
 
-  // ── get_meeting_agenda ──────────────────────────────────────────────────────
+  // ── prepare_meeting: the upcoming-meeting shape ─────────────────────────────
   {
     const now = Date.now();
     setUpcomingEventsProvider(() => [
@@ -529,33 +605,63 @@ async function run(): Promise<void> {
       },
     ]);
 
-    const byEvent = await getMeetingAgendaHandler({ eventId: 'e-soon' });
+    const byEvent = await prepareMeetingHandler({ eventId: 'e-soon' });
+    assert.equal(byEvent.subject, 'meeting');
     assert.equal(byEvent.title, 'Billing sync');
     assert.deepEqual(byEvent.attendees, ['Alex Chen', 'Priya Patel']);
     assert.ok(byEvent.agenda.includes('Alex Chen'));
     assert.ok(byEvent.agenda.includes('Priya Patel'));
     assert.ok(byEvent.agenda.includes('Q3 Roadmap Review'), 'pulls history for the attendees');
 
-    // Explicit title + attendees works without a calendar
-    const byTitle = await getMeetingAgendaHandler({ title: 'Ad hoc chat', attendees: ['Alex Chen'] });
-    assert.ok(byTitle.agenda.includes('Alex Chen'));
+    // Sources are grouped per attendee, each meeting carrying its own citation
+    assert.deepEqual(
+      byEvent.sources.map((s: any) => s.attendee),
+      ['Alex Chen', 'Priya Patel']
+    );
+    const alexSources = byEvent.sources[0].meetings;
+    assert.ok(alexSources.some((m: any) => m.meetingId === 'm-roadmap'));
+    assert.ok(alexSources.some((m: any) => m.meetingId === 'm-long'), 'all shared meetings are cited');
+    assert.ok(alexSources.every((m: any) => m.title && m.date), 'every source carries title and date');
+    // m-long has no summary, so the excerpt falls back to the transcript opening
+    const allHands = alexSources.find((m: any) => m.meetingId === 'm-long');
+    assert.ok(allHands.excerpt && allHands.excerpt.startsWith('line of discussion'));
 
-    const badEvent = await getMeetingAgendaHandler({ eventId: 'nope' });
+    // Explicit title + attendees works without a calendar. p-nameless has a null
+    // name — real stores contain these, and an unguarded compare here used to
+    // throw and take the whole agenda down.
+    const byTitle = await prepareMeetingHandler({ title: 'Ad hoc chat', attendees: ['Alex Chen'] });
+    assert.ok(byTitle.agenda.includes('Alex Chen'));
+    assert.equal(byTitle.sources.length, 1);
+
+    const unknownAttendee = await prepareMeetingHandler({ title: 'Intro call', attendees: ['Nobody Known'] });
+    assert.ok(!unknownAttendee.error, 'an attendee with no history is not an error');
+    assert.deepEqual(unknownAttendee.sources, [{ attendee: 'Nobody Known', meetings: [] }]);
+
+    const badEvent = await prepareMeetingHandler({ eventId: 'nope' });
     assert.ok(badEvent.error);
 
-    const noArgs = await getMeetingAgendaHandler({});
-    assert.ok(noArgs.error);
+    const noArgs = await prepareMeetingHandler({});
+    assert.ok(noArgs.error && noArgs.error.includes('personId'));
 
     setUpcomingEventsProvider(null);
   }
 
-  // ── whoami ──────────────────────────────────────────────────────────────────
+  // ── get_connection_status ───────────────────────────────────────────────────
   {
-    const who = whoamiHandler();
-    assert.equal(who.mode, 'local');
-    assert.equal(who.access, 'read-only');
-    assert.ok(typeof who.version === 'string' && who.version.length > 0);
-    assert.ok(who.server.startsWith('http://127.0.0.1:'));
+    const status = getConnectionStatusHandler();
+    assert.equal(status.mode, 'local');
+    assert.equal(status.access, 'read-only');
+    assert.ok(typeof status.version === 'string' && status.version.length > 0);
+    assert.ok(status.server.startsWith('http://127.0.0.1:'));
+    assert.deepEqual(status.capabilities, [...TOOL_NAMES], 'reports the surface this build serves');
+    assert.ok(status.privacyNote.includes('get_transcript'), 'says where verbatim text can go');
+    assert.equal(status.calendarConnected, false, 'no provider wired at this point in the run');
+
+    setUpcomingEventsProvider(() => [
+      { id: 'e', title: 'x', startTime: new Date(Date.now() + 3600_000), attendees: [] },
+    ]);
+    assert.equal(getConnectionStatusHandler().calendarConnected, true);
+    setUpcomingEventsProvider(null);
   }
 
   // ── HTTP end-to-end (Streamable HTTP on an ephemeral loopback port) ─────────
@@ -582,17 +688,22 @@ async function run(): Promise<void> {
     const tools = JSON.parse(list.body).result.tools;
     const names = tools.map((t: any) => t.name).sort();
     assert.deepEqual(names, [
+      'get_action_item',
+      'get_connection_status',
       'get_meeting',
-      'get_meeting_agenda',
       'get_person',
-      'get_person_agenda',
-      'get_task',
+      'get_transcript',
       'list_action_items',
       'list_people',
       'list_upcoming_meetings',
+      'prepare_meeting',
       'search_meetings',
-      'whoami',
     ]);
+    assert.deepEqual(
+      names,
+      [...TOOL_NAMES].sort(),
+      'the advertised list and the registered tools cannot drift apart'
+    );
     for (const t of tools) {
       assert.equal(t.annotations?.readOnlyHint, true, `${t.name} is annotated read-only`);
     }
@@ -612,7 +723,7 @@ async function run(): Promise<void> {
       jsonrpc: '2.0',
       id: 4,
       method: 'tools/call',
-      params: { name: 'whoami', arguments: {} },
+      params: { name: 'get_connection_status', arguments: {} },
     });
     const whoResult = parseToolResult(who.body);
     assert.equal(whoResult.mode, 'local');
