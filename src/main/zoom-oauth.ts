@@ -19,14 +19,13 @@ const ZOOM_TOKEN_URL = 'https://zoom.us/oauth/token';
 
 // Public client ids of the Inwise Zoom Marketplace app. Safe to ship in MIT
 // source: they are public by design — PKCE replaces the client secret, so
-// there is no secret in this flow at all. The dev id authorizes while the
-// Marketplace app is unpublished; switch the default to the production id
-// once Zoom publishes the app. Forks can point at their own Zoom app via
-// INWISE_ZOOM_PUBLIC_CLIENT_ID or the BYO-credentials path in Settings.
-const ZOOM_PUBLIC_CLIENT_ID_DEV = 'pq0Gg4OSFa89B3miW92fA';
+// there is no secret in this flow at all. The Marketplace app is published,
+// so the production id is the default. Forks can point at their own Zoom app
+// via INWISE_ZOOM_PUBLIC_CLIENT_ID or the BYO-credentials path in Settings.
+export const ZOOM_PUBLIC_CLIENT_ID_DEV = 'pq0Gg4OSFa89B3miW92fA';
 export const ZOOM_PUBLIC_CLIENT_ID_PROD = 'M9fK63XqSCa6nZGUXPAqPg';
 const ZOOM_PUBLIC_CLIENT_ID =
-  process.env.INWISE_ZOOM_PUBLIC_CLIENT_ID || ZOOM_PUBLIC_CLIENT_ID_DEV;
+  process.env.INWISE_ZOOM_PUBLIC_CLIENT_ID || ZOOM_PUBLIC_CLIENT_ID_PROD;
 
 export const ZOOM_REDIRECT_URI_DISPLAY = ZOOM_REDIRECT_URI;
 
