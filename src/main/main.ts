@@ -105,6 +105,8 @@ let isRecordingActive = false;
 const AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS = 60 * 1000;
 let lastMicFailureNotifiedAt = 0;
 let lastSysAudioFailureNotifiedAt = 0;
+const RECORDING_SILENCE_NOTIFY_DEBOUNCE_MS = 60 * 1000;
+let lastRecordingSilenceNotifiedAt = 0;
 
 // Meeting conflict detection (US-006)
 const MEETING_CONFLICT_WINDOW_MS = 90 * 1000;
@@ -156,6 +158,26 @@ export function togglePopupWindow(): void {
     positionPopupWindow(mainWindow);
     mainWindow.show();
     mainWindow.focus();
+  }
+}
+
+const VOICE_CAPTURE_SHORTCUT = 'Alt+,';
+
+function openVoiceCapture(): void {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+
+  positionPopupWindow(win);
+  win.show();
+  win.focus();
+
+  const navigate = () => {
+    if (!win.isDestroyed()) win.webContents.send('app:navigate', 'voice-capture');
+  };
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', () => setTimeout(navigate, 100));
+  } else {
+    navigate();
   }
 }
 
@@ -2433,6 +2455,7 @@ ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string, 
   isRecordingActive = true;
   lastMicFailureNotifiedAt = 0;
   lastSysAudioFailureNotifiedAt = 0;
+  lastRecordingSilenceNotifiedAt = 0;
   return true;
 });
 
@@ -2462,6 +2485,7 @@ ipcMain.on('pill:resize', (e, { width, height }: { width: number; height?: numbe
 // User clicked the pill during preflight/countdown — abort before recording starts.
 ipcMain.on('pill:cancelled', () => {
   isRecordingActive = false;
+  lastRecordingSilenceNotifiedAt = 0;
   updateTrayMenu(mainWindow!, false);
   // Re-arm calendar-free VAD in the main window (it waits for a terminal status).
   mainWindow?.webContents.send('recording:status', { status: 'done' });
@@ -2577,6 +2601,42 @@ ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
       body: next.message || 'System audio lost â€” only your mic will be transcribed for the rest of this meeting.',
     }).show();
   }
+});
+
+ipcMain.on('recording:silence-check-in', (event, payload: { title?: string; silenceMs?: number }) => {
+  if (!isRecordingActive || !Notification.isSupported()) return;
+  if (!overlayWindow || overlayWindow.isDestroyed() || event.sender.id !== overlayWindow.webContents.id) return;
+
+  const now = Date.now();
+  if (now - lastRecordingSilenceNotifiedAt < RECORDING_SILENCE_NOTIFY_DEBOUNCE_MS) return;
+  lastRecordingSilenceNotifiedAt = now;
+
+  const rawTitle = typeof payload?.title === 'string' ? payload.title.trim() : '';
+  const recordingTitle = rawTitle.slice(0, 120) || 'This recording';
+  const notification = new Notification({
+    title: 'Are you still there?',
+    body: `"${recordingTitle}" has been quiet for five minutes. Inwise is still recording.`,
+    actions: [
+      { type: 'button', text: 'Keep recording' },
+      { type: 'button', text: 'Stop & save' },
+    ],
+  });
+
+  const showRecorder = () => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) return;
+    overlayWindow.show();
+    overlayWindow.focus();
+  };
+  notification.on('action', (_event, index) => {
+    if (index === 1 && overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send('recording:stop-request');
+      return;
+    }
+    showRecorder();
+  });
+  notification.on('click', showRecorder);
+  notification.show();
+  log('info', 'recording:silence-check-in', `notified for "${recordingTitle}"`);
 });
 
 ipcMain.handle('audio:health:get', () => latestAudioHealth);
@@ -2733,6 +2793,7 @@ const pendingAudio = new Map<string, { buffers: Buffer[]; title: string; calenda
 ipcMain.on('recording:audio-data', (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   isRecordingActive = false;
+  lastRecordingSilenceNotifiedAt = 0;
   const key = `${title}|${stereo ? 1 : 0}`;
   const entry = pendingAudio.get(key);
   if (entry) {
@@ -2856,6 +2917,7 @@ function startMeetingRecording(event: MeetingEvent): void {
   isRecordingActive = true;
   lastMicFailureNotifiedAt = 0;
   lastSysAudioFailureNotifiedAt = 0;
+  lastRecordingSilenceNotifiedAt = 0;
   mainWindow?.webContents.send('badge:show', event.title);
 }
 
@@ -3199,6 +3261,9 @@ app.whenReady().then(() => {
   globalShortcut.register('CommandOrControl+Shift+T', () => {
     createOverlayWindow('Test Meeting');
   });
+  if (!globalShortcut.register(VOICE_CAPTURE_SHORTCUT, openVoiceCapture)) {
+    log('warn', 'shortcut:voice-capture', `Could not register ${VOICE_CAPTURE_SHORTCUT}`);
+  }
 });
 
 app.on('window-all-closed', () => {

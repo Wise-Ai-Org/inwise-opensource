@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { NavProvider, useNav, api, Page, POPUP_NAV_EVENT, LegacyView, requestRecordSheet } from './nav';
+import { NavProvider, useNav, api, Page, POPUP_NAV_EVENT, LegacyView, requestRecordSheet, VOICE_CAPTURE_TRIGGER_EVENT } from './nav';
 import { ReviewItems, useReviewItems } from './useReviewItems';
 import MeetingsTab from './MeetingsTab';
 import TasksTab from './TasksTab';
@@ -211,7 +211,10 @@ function ShellInner() {
         return;
       }
       const view: LegacyView | undefined = detail.view;
-      if (view === 'settings') openPage({ kind: 'settings-root' });
+      if (view === 'voice-capture') {
+        window.dispatchEvent(new CustomEvent(VOICE_CAPTURE_TRIGGER_EVENT));
+        openPage({ kind: 'voice-capture' });
+      } else if (view === 'settings') openPage({ kind: 'settings-root' });
       else if (view === 'tasks') setTab('tasks');
       else if (view === 'people') setTab('people');
       else if (view === 'communications') setTab('meetings');
@@ -274,7 +277,7 @@ function ShellInner() {
               <button
                 className="vm-micbtn"
                 aria-label="Capture — voice note or meeting recording"
-                title="Voice note or record a meeting"
+                title="Voice note or record a meeting (Alt+,)"
                 onClick={() => setCaptureOpen(true)}
               >
                 <MicGlyph />

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, fmtTime, useNav } from './nav';
+import { api, fmtTime, useNav, VOICE_CAPTURE_TRIGGER_EVENT } from './nav';
 
 // ── Shared bits ──────────────────────────────────────────────────────────────
 
@@ -91,6 +91,8 @@ export function VoiceCapturePage() {
   const [people, setPeople] = useState<string[]>([]);
   const [userName, setUserName] = useState('');
   const [applying, setApplying] = useState(false);
+  const phaseRef = useRef<Phase>('recording');
+  phaseRef.current = phase;
 
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -273,6 +275,18 @@ export function VoiceCapturePage() {
     startCapture();
     return cleanupAudio;
   }, [startCapture, cleanupAudio]);
+
+  useEffect(() => {
+    const onShortcutCapture = () => {
+      // Do not interrupt active capture/processing. From review or an error,
+      // the shortcut intentionally starts a fresh voice note.
+      if (phaseRef.current === 'recording' || phaseRef.current === 'transcribing' || phaseRef.current === 'sorting') return;
+      cleanupAudio();
+      void startCapture();
+    };
+    window.addEventListener(VOICE_CAPTURE_TRIGGER_EVENT, onShortcutCapture);
+    return () => window.removeEventListener(VOICE_CAPTURE_TRIGGER_EVENT, onShortcutCapture);
+  }, [cleanupAudio, startCapture]);
 
   const cancel = () => { cleanupAudio(); pop(); };
 
