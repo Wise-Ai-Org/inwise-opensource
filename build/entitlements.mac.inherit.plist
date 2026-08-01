@@ -2,11 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- Microphone access: capture the user's voice during meetings -->
+  <!-- Electron helpers host the renderers that perform microphone capture. -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
 
-  <!-- Required by Electron's V8 runtime under the hardened runtime. -->
+  <!-- Electron helpers run V8 under the hardened runtime. -->
   <key>com.apple.security.cs.allow-jit</key>
   <true/>
 </dict>

@@ -1,5 +1,6 @@
 ﻿import Store from 'electron-store';
 import { randomUUID } from 'crypto';
+import { storeLocationOptions } from './store-location';
 
 export type CalendarProvider = 'google' | 'outlook' | 'ics';
 
@@ -68,6 +69,7 @@ interface Config {
 }
 
 const store = new Store<Config>({
+  ...storeLocationOptions(),
   defaults: {
     apiProvider: 'anthropic',
     apiKey: '',
@@ -281,5 +283,4 @@ export function migrateLegacyCalendars(): { migrated: boolean; added: number } {
   store.set('calendars', seeded);
   return { migrated: true, added: seeded.length };
 }
-
 

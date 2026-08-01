@@ -135,6 +135,9 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 
   // Desktop capture
   getDesktopSourceId: () => ipcRenderer.invoke('desktop:getSourceId'),
+  getMediaPermissions: () => ipcRenderer.invoke('media:permissions'),
+  requestMicrophonePermission: () => ipcRenderer.invoke('media:requestMicrophone'),
+  openMediaSettings: (kind: 'microphone' | 'screen') => ipcRenderer.invoke('media:openSettings', kind),
 
   // Audio health (mic + system audio capture status)
   getAudioHealth: () => ipcRenderer.invoke('audio:health:get'),

@@ -6,6 +6,11 @@ dist/
 release/
 release-v2/
 scripts/ralph/
+native/.build/
+native/whisper/darwin-*/whisper-cli
+native/whisper/darwin-*/manifest.json
+native/whisper/darwin-*/LICENSE.whisper.cpp
+tmp/test-electron-store/
 
 # local-only helper checkouts
 tools/

@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
+import { captureSystemAudio } from './system-audio';
+import type { MediaPermissionSnapshot } from './audio-probe';
 
 interface Config {
   apiProvider: 'anthropic' | 'openai';
@@ -340,6 +342,18 @@ function CalendarList() {
   );
 }
 
+function useMediaPermissions() {
+  const [permissions, setPermissions] = useState<MediaPermissionSnapshot | null>(null);
+  const refreshPermissions = useCallback(async () => {
+    const next = await (window as any).inwiseAPI.getMediaPermissions?.();
+    if (next) setPermissions(next);
+    return next as MediaPermissionSnapshot | undefined;
+  }, []);
+
+  useEffect(() => { void refreshPermissions(); }, [refreshPermissions]);
+  return { permissions, refreshPermissions };
+}
+
 function MicTest({ deviceId }: { deviceId: string }) {
   const [status, setStatus] = useState<'idle' | 'testing' | 'transcribing' | 'done' | 'error'>('idle');
   const [level, setLevel] = useState(0);
@@ -347,13 +361,23 @@ function MicTest({ deviceId }: { deviceId: string }) {
   const [errorMsg, setErrorMsg] = useState('');
   const rafRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
-
+  const { permissions, refreshPermissions } = useMediaPermissions();
   const runTest = async () => {
     setStatus('testing');
     setLevel(0);
     setTranscript('');
     setErrorMsg('');
     try {
+      let currentPermissions = await refreshPermissions();
+      if (currentPermissions?.platform === 'darwin' && currentPermissions.microphone === 'not-determined') {
+        await (window as any).inwiseAPI.requestMicrophonePermission?.();
+        currentPermissions = await refreshPermissions();
+      }
+      if (currentPermissions?.platform === 'darwin' && ['denied', 'restricted'].includes(currentPermissions.microphone)) {
+        setErrorMsg('Enable Microphone access for Inwise in System Settings, then try again.');
+        setStatus('error');
+        return;
+      }
       const constraint = deviceId && deviceId !== 'default' ? { deviceId: { exact: deviceId } } : true;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: constraint as any });
       streamRef.current = stream;
@@ -428,6 +452,7 @@ function MicTest({ deviceId }: { deviceId: string }) {
         }
       }, 3000);
     } catch (e: any) {
+      await refreshPermissions().catch(() => null);
       setStatus('error');
       setErrorMsg(e.message || 'Could not access microphone');
     }
@@ -468,7 +493,18 @@ function MicTest({ deviceId }: { deviceId: string }) {
         </div>
       )}
       {status === 'error' && (
-        <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 6 }}>✕ {errorMsg}</div>
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--red)' }}>✕ {errorMsg}</div>
+          {permissions?.platform === 'darwin' && ['denied', 'restricted'].includes(permissions.microphone) && (
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ marginTop: 8 }}
+              onClick={() => (window as any).inwiseAPI.openMediaSettings?.('microphone')}
+            >
+              Open System Settings
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -481,6 +517,7 @@ function SystemAudioTest() {
   const [errorMsg, setErrorMsg] = useState('');
   const rafRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
+  const { permissions, refreshPermissions } = useMediaPermissions();
 
   const runTest = async () => {
     setStatus('testing');
@@ -488,19 +525,13 @@ function SystemAudioTest() {
     setTranscript('');
     setErrorMsg('');
     try {
-      const sourceId = await (window as any).inwiseAPI.getDesktopSourceId();
-      if (!sourceId) {
-        setErrorMsg('System audio capture not available on this device');
+      const currentPermissions = await refreshPermissions();
+      if (currentPermissions?.platform === 'darwin' && ['denied', 'restricted'].includes(currentPermissions.screen)) {
+        setErrorMsg('Enable Screen & System Audio Recording for Inwise in System Settings, then restart the app.');
         setStatus('error');
         return;
       }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } } as any,
-        video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } } as any,
-      });
-      // Drop video tracks
-      stream.getVideoTracks().forEach(t => t.stop());
+      const stream = await captureSystemAudio();
       streamRef.current = stream;
 
       // Level meter
@@ -572,6 +603,7 @@ function SystemAudioTest() {
         }
       }, 5000);
     } catch (e: any) {
+      await refreshPermissions().catch(() => null);
       setStatus('error');
       setErrorMsg(e.message || 'Could not capture system audio');
     }
@@ -612,7 +644,18 @@ function SystemAudioTest() {
         </div>
       )}
       {status === 'error' && (
-        <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 6 }}>✕ {errorMsg}</div>
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--red)' }}>✕ {errorMsg}</div>
+          {permissions?.platform === 'darwin' && ['denied', 'restricted'].includes(permissions.screen) && (
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ marginTop: 8 }}
+              onClick={() => (window as any).inwiseAPI.openMediaSettings?.('screen')}
+            >
+              Open System Settings
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

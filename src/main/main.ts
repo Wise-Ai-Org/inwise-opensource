@@ -2,6 +2,8 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { session } from 'electron';
+import { installDisplayMediaHandler, installSessionPermissionHandlers } from './session-permissions';
 
 import { getConfig, setConfig, getSorJiraPrefs, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, getDailyPlanPrefs, markDailyPlanShown, wasAutostartConfigured, markAutostartConfigured, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
@@ -86,8 +88,10 @@ import { validateToken, isSlackConnected, listChannels as slackListChannels } fr
 import { normalizeSlackThread } from './slack-normalizer';
 import { startSlackPoller, stopSlackPoller, registerSlackPipeline } from './slack-poller';
 import { startMcpServer, stopMcpServer, getMcpStatus, setUpcomingEventsProvider } from './mcp-server';
-
-Menu.setApplicationMenu(null);
+import { computePopupBounds } from './popup-position';
+import { installApplicationMenu } from './application-menu';
+import { getMediaPermissions, openMediaSettings, requestMicrophonePermission } from './media-permissions';
+import { createLoginItemRegistration, shouldStartHidden } from './login-item';
 
 let mainWindow: BrowserWindow | null = null;
 let overlayWindow: BrowserWindow | null = null;
@@ -132,13 +136,13 @@ function positionPopupWindow(win: BrowserWindow): void {
     const display = trayBounds
       ? screen.getDisplayMatching(trayBounds)
       : screen.getPrimaryDisplay();
-    const wa = display.workArea;
-    // Anchor to the work-area corner nearest the taskbar. On Windows the work
-    // area already excludes the taskbar, so bottom-right of workArea sits just
-    // above a bottom taskbar and left of a right taskbar.
-    const x = Math.round(wa.x + wa.width - POPUP_WIDTH - 12);
-    const y = Math.round(wa.y + wa.height - POPUP_HEIGHT - 12);
-    win.setBounds({ x, y, width: POPUP_WIDTH, height: POPUP_HEIGHT });
+    win.setBounds(computePopupBounds({
+      platform: process.platform,
+      trayBounds,
+      workArea: display.workArea,
+      width: POPUP_WIDTH,
+      height: POPUP_HEIGHT,
+    }));
   } catch { /* positioning is best-effort; default placement is acceptable */ }
 }
 
@@ -199,9 +203,11 @@ function createMainWindow(): void {
   mainWindow.once('ready-to-show', () => {
     markAppOpened();
     if (mainWindow) positionPopupWindow(mainWindow);
-    let openedAsHidden = startHidden;
+    let openedAsHidden = shouldStartHidden(process.platform, startHidden);
     if (process.platform === 'darwin') {
-      try { openedAsHidden = openedAsHidden || app.getLoginItemSettings().wasOpenedAsHidden; } catch { /* keep flag */ }
+      try {
+        openedAsHidden = shouldStartHidden(process.platform, startHidden, app.getLoginItemSettings());
+      } catch { /* keep flag */ }
     }
     if (!openedAsHidden) mainWindow?.show();
   });
@@ -428,10 +434,7 @@ function tryShowDailyPlan(force = false): void {
 function applyAutostartDefault(): void {
   if (wasAutostartConfigured() || !app.isPackaged) return;
   try {
-    app.setLoginItemSettings({
-      openAtLogin: true,
-      ...(process.platform === 'darwin' ? { openAsHidden: true } : { args: ['--hidden'] }),
-    });
+    app.setLoginItemSettings(createLoginItemRegistration(process.platform, true));
     log('info', 'login-item', 'Autostart enabled by default (first run)');
   } catch (err) {
     log('error', 'login-item', `Default autostart failed: ${String(err)}`);
@@ -1245,6 +1248,9 @@ ipcMain.handle('desktop:getSourceId', async () => {
     return null;
   }
 });
+ipcMain.handle('media:permissions', () => getMediaPermissions());
+ipcMain.handle('media:requestMicrophone', () => requestMicrophonePermission());
+ipcMain.handle('media:openSettings', (_e, kind: 'microphone' | 'screen') => openMediaSettings(kind));
 ipcMain.handle('config:get', () => getConfig());
 ipcMain.handle('config:set', (_e, updates) => { setConfig(updates); return true; });
 
@@ -2619,10 +2625,7 @@ ipcMain.handle('welcomeBack:liveMeeting', () => {
 
 ipcMain.handle('app:setLoginItemOpenAtLogin', (_e, enabled: boolean) => {
   try {
-    app.setLoginItemSettings({
-      openAtLogin: !!enabled,
-      ...(process.platform === 'darwin' ? { openAsHidden: true } : { args: ['--hidden'] }),
-    });
+    app.setLoginItemSettings(createLoginItemRegistration(process.platform, !!enabled));
     markAutostartConfigured();
     log('info', 'login-item', `openAtLogin=${!!enabled}`);
     return { ok: true };
@@ -3062,7 +3065,20 @@ app.on('second-instance', () => {
 });
 
 app.whenReady().then(() => {
+  installApplicationMenu(() => {
+    mainWindow?.show();
+    mainWindow?.focus();
+    mainWindow?.webContents.send('app:navigate', 'settings');
+  });
   const RENDERER_DIR = path.join(__dirname, '../../dist/renderer');
+  installSessionPermissionHandlers(session.defaultSession, RENDERER_DIR);
+  installDisplayMediaHandler(session.defaultSession, RENDERER_DIR, async () => {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 0, height: 0 },
+    });
+    return sources[0] ?? null;
+  });
   protocol.handle('app', async (request) => {
     const { pathname } = new URL(request.url);
     const rel = decodeURIComponent(pathname).replace(/^\/+/, '') || 'index.html';
@@ -3184,17 +3200,6 @@ app.whenReady().then(() => {
   // Daily Jira pull â€” run on startup (after a short delay) and every 6 hours
   setTimeout(() => runDailyJiraPull(), 10_000);
   setInterval(() => runDailyJiraPull(), 6 * 60 * 60 * 1000);
-
-  // Grant microphone + screen access to all windows (needed for badge overlay)
-  const { session } = require('electron');
-  session.defaultSession.setPermissionRequestHandler((_webContents: any, permission: string, callback: (granted: boolean) => void) => {
-    const allowed = ['media', 'audioCapture', 'videoCapture', 'desktopCapture', 'screen'];
-    callback(allowed.includes(permission));
-  });
-  session.defaultSession.setPermissionCheckHandler((_webContents: any, permission: string) => {
-    const allowed = ['media', 'audioCapture', 'videoCapture', 'desktopCapture', 'screen'];
-    return allowed.includes(permission);
-  });
 
   globalShortcut.register('CommandOrControl+Shift+T', () => {
     createOverlayWindow('Test Meeting');

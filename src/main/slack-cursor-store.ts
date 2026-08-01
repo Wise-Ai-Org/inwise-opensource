@@ -10,6 +10,7 @@
 
 import Store from 'electron-store';
 import { log } from './logger';
+import { storeLocationOptions } from './store-location';
 
 interface SlackCursorState {
   /** channelId -> oldest ts string used as the fetch cursor */
@@ -21,6 +22,7 @@ interface SlackCursorState {
 }
 
 const cursorStore = new Store<SlackCursorState>({
+  ...storeLocationOptions(),
   name: 'slack-cursor-state',
   defaults: {
     cursors: {},

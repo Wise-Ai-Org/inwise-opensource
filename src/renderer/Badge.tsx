@@ -1,4 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
+import {
+  classifyPendingSystemAudio,
+  classifySystemAudioCapture,
+  measureStreamRms,
+  SystemAudioCaptureState,
+} from './audio-probe';
+import { captureSystemAudio } from './system-audio';
 
 // Compact recorder pill. Collapsed it is a small capsule with four dots that bob
 // with real audio level; hover expands it to show title, timer, and a stop square.
@@ -208,7 +215,8 @@ export default function Badge() {
   const [state, setState] = useState<State>({ status: 'idle', title: 'Meeting' });
   const [elapsed, setElapsed] = useState(0);
   const [hover, setHover] = useState(false);
-  const [sysAudioWarning, setSysAudioWarning] = useState(false);
+  const [systemAudioState, setSystemAudioState] = useState<SystemAudioCaptureState>('ok');
+  const sysAudioWarning = systemAudioState !== 'ok';
   const [jobs, setJobs] = useState<Record<string, Job>>({});
   const [test, setTest] = useState<null | { mic: 'pending' | 'ok' | 'fail'; spk: 'pending' | 'ok' | 'fail' }>(null);
 
@@ -217,6 +225,7 @@ export default function Badge() {
   const chunksRef = useRef<Blob[]>([]);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
+  const systemStreamRef = useRef<MediaStream | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const mergerRef = useRef<ChannelMergerNode | null>(null);
   const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
@@ -281,7 +290,7 @@ export default function Badge() {
 
     beginFlowRef.current = async (title: string) => {
       titleRef.current = title;
-      setSysAudioWarning(false);
+      setSystemAudioState('ok');
       const myRun = ++runIdRef.current;
       const alive = () => runIdRef.current === myRun;
 
@@ -308,7 +317,7 @@ export default function Badge() {
 
       // Soft fail: system audio missing — proceed but flag it
       setState(s => ({ ...s, preflight: { ...s.preflight!, audio: audioResult.ok } }));
-      if (!audioResult.ok) setSysAudioWarning(true);
+      if (!audioResult.ok) setSystemAudioState('missing');
       await new Promise(r => setTimeout(r, 250));
       if (!alive()) return;
 
@@ -405,66 +414,92 @@ export default function Badge() {
         }
       }
 
-      // System audio via desktopCapturer — Windows loopback, graceful fallback elsewhere
+      // System audio uses the same Chromium capture path on Windows and macOS.
+      // macOS permission state changes how initial silence is interpreted: a quiet
+      // call must not permanently discard an otherwise healthy capture stream.
+      const permissions = await (window as any).inwiseAPI.getMediaPermissions?.() ?? {
+        platform: 'unknown', microphone: 'unknown', screen: 'unknown',
+      };
       let sysStream: MediaStream | null = null;
+      let sysCaptureError = '';
       try {
-        const sourceId = await (window as any).inwiseAPI.getDesktopSourceId();
-        if (sourceId) {
-          sysStream = await navigator.mediaDevices.getUserMedia({
-            audio: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } } as any,
-            video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } } as any,
-          });
-          // Drop the video track — we only need audio
-          sysStream.getVideoTracks().forEach(t => t.stop());
-        }
-      } catch {
+        sysStream = await captureSystemAudio();
+      } catch (error: any) {
+        sysCaptureError = error?.message || String(error);
         sysStream = null;
       }
 
-      // Windows desktopCapturer can hand back a "successful" stream that produces
-      // silence when no app is actively routing audio to the captured source.
-      // Probe the stream for real content before trusting it — otherwise we write
-      // fake-stereo WAVs with a silent right channel and whisper hallucinates.
-      let sysAudioSilent = false;
-      if (sysStream) {
-        const probeCtx = new AudioContext();
-        const probeSrc = probeCtx.createMediaStreamSource(sysStream);
-        const analyser = probeCtx.createAnalyser();
-        analyser.fftSize = 2048;
-        probeSrc.connect(analyser);
-        const buf = new Float32Array(analyser.fftSize);
-        let maxRms = 0;
-        const probeStart = Date.now();
-        while (Date.now() - probeStart < 1500) {
-          analyser.getFloatTimeDomainData(buf);
-          let sumSq = 0;
-          for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
-          const rms = Math.sqrt(sumSq / buf.length);
-          if (rms > maxRms) maxRms = rms;
-          if (maxRms > 0.001) break;
-          await new Promise(r => setTimeout(r, 50));
-        }
-        probeSrc.disconnect();
-        await probeCtx.close();
-        if (maxRms <= 0.001) {
-          sysStream.getTracks().forEach(t => t.stop());
-          sysStream = null;
-          sysAudioSilent = true;
-        }
+      const initialRms = sysStream ? await measureStreamRms(sysStream, 1500) : 0;
+      const initialSystemState = classifySystemAudioCapture(!!sysStream, initialRms, permissions);
+      if (initialSystemState === 'missing' && sysStream) {
+        sysStream.getTracks().forEach(t => t.stop());
+        sysStream = null;
       }
 
-      if (!sysStream) setSysAudioWarning(true);
-      hasStereoRef.current = !!sysStream;
+      setSystemAudioState(initialSystemState);
+      systemStreamRef.current = sysStream;
+      // Only enable diarization once the right channel has carried real audio.
+      // The stream remains connected while pending so a quiet call can recover.
+      hasStereoRef.current = initialSystemState === 'ok';
 
       reportHealth({
         micOk: true,
         systemAudioOk: !!sysStream,
-        message: sysStream
+        message: initialSystemState === 'ok'
           ? undefined
-          : sysAudioSilent
-            ? 'System audio source is silent — check your meeting app is actively playing audio'
-            : 'System audio unavailable — only your voice will be recorded',
+          : initialSystemState === 'pending'
+            ? 'System audio is connected; waiting for another participant to speak'
+            : permissions.screen === 'denied' || permissions.screen === 'restricted'
+              ? 'Screen & System Audio Recording permission is disabled in System Settings'
+              : sysCaptureError || 'System audio unavailable — only your voice will be recorded',
       });
+
+      if (sysStream) {
+        const capturedStream = sysStream;
+        capturedStream.getAudioTracks()[0]?.addEventListener('ended', () => {
+          if (systemStreamRef.current !== capturedStream) return;
+          systemStreamRef.current = null;
+          hasStereoRef.current = false;
+          setSystemAudioState('missing');
+          reportHealth({
+            micOk: true,
+            systemAudioOk: false,
+            message: 'System audio capture ended — only your microphone is still being recorded',
+          });
+        });
+        if (initialSystemState === 'pending') {
+          void (async () => {
+            const pendingStartedAt = Date.now();
+            let silenceReported = false;
+            while (systemStreamRef.current === capturedStream) {
+              let maxRms = 0;
+              try {
+                maxRms = await measureStreamRms(capturedStream, 15_000);
+              } catch {
+                return; // the track-ended handler owns failure reporting
+              }
+              if (systemStreamRef.current !== capturedStream) return;
+              const nextState = classifyPendingSystemAudio(maxRms, Date.now() - pendingStartedAt);
+              if (nextState === 'ok') {
+                hasStereoRef.current = true;
+                setSystemAudioState('ok');
+                reportHealth({ micOk: true, systemAudioOk: true });
+                return;
+              }
+              if (nextState === 'missing' && !silenceReported) {
+                silenceReported = true;
+                hasStereoRef.current = false;
+                setSystemAudioState('missing');
+                reportHealth({
+                  micOk: true,
+                  systemAudioOk: false,
+                  message: 'No system audio detected — check Screen & System Audio Recording permission and call output',
+                });
+              }
+            }
+          })();
+        }
+      }
 
       const audioCtx = new AudioContext({ sampleRate: 16000 });
       audioCtxRef.current = audioCtx;
@@ -501,6 +536,8 @@ export default function Badge() {
       mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       mr.start(250);
     } catch (e: any) {
+      systemStreamRef.current?.getTracks().forEach(t => t.stop());
+      systemStreamRef.current = null;
       const msg = `Microphone error: ${e?.name || ''} ${e?.message || String(e)}`.trim();
       reportHealth({ micOk: false, systemAudioOk: false, message: msg });
       setState((s) => ({ ...s, status: 'error', message: msg }));
@@ -542,6 +579,8 @@ export default function Badge() {
     mr.stream.getTracks().forEach(t => t.stop());
     micStreamRef.current?.getTracks().forEach(t => t.stop());
     micStreamRef.current = null;
+    systemStreamRef.current?.getTracks().forEach(t => t.stop());
+    systemStreamRef.current = null;
     audioCtxRef.current?.close();
     audioCtxRef.current = null;
     analyserRef.current = null;
@@ -892,13 +931,17 @@ export default function Badge() {
           : [DIM, DIM, DIM, DIM])}
         {recording && hover && (
           <>
-            <span style={styles.label} title={state.title + (sysAudioWarning ? ' (mic only)' : '')}>{truncate(state.title)}</span>
+            <span style={styles.label} title={state.title + (systemAudioState === 'missing' ? ' (mic only)' : systemAudioState === 'pending' ? ' (waiting for system audio)' : '')}>{truncate(state.title)}</span>
             {busyJob && (
               <span style={{ ...styles.subtext, maxWidth: 90 }} title={`Transcribing — ${busyJob.title}`}>
                 ⟳ {truncate(busyJob.title, 14)}
               </span>
             )}
-            {sysAudioWarning && !busyJob && <span style={{ ...styles.subtext, color: AMBER }}>mic only</span>}
+            {sysAudioWarning && !busyJob && (
+              <span style={{ ...styles.subtext, color: AMBER }}>
+                {systemAudioState === 'pending' ? 'waiting for call audio' : 'mic only'}
+              </span>
+            )}
             <span style={styles.timer}>{fmt(elapsed)}</span>
             <button
               className="pill-stop"

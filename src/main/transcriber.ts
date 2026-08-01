@@ -5,19 +5,24 @@ import * as http from 'http';
 import { execSync, spawn } from 'child_process';
 import { app } from 'electron';
 import { getConfig } from './config';
+import { createWhisperRuntimePlan } from './whisper-runtime';
 
-const WHISPER_VERSION = 'v1.8.4';
-const WHISPER_ZIP_URL = `https://github.com/ggerganov/whisper.cpp/releases/download/${WHISPER_VERSION}/whisper-bin-x64.zip`;
 const MODEL_BASE_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main';
 
-function getWhisperDir(): string {
-  return path.join(app.getPath('userData'), 'whisper-bin');
+function getRuntimePlan() {
+  return createWhisperRuntimePlan({
+    platform: process.platform,
+    arch: process.arch,
+    isPackaged: app.isPackaged,
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    userDataPath: app.getPath('userData'),
+  });
 }
 
 function getWhisperExe(): string {
-  const cli = path.join(getWhisperDir(), 'Release', 'whisper-cli.exe');
-  const main = path.join(getWhisperDir(), 'Release', 'main.exe');
-  return fs.existsSync(cli) ? cli : main;
+  const plan = getRuntimePlan();
+  return plan.binaryCandidates.find(candidate => fs.existsSync(candidate)) ?? plan.binaryCandidates[0];
 }
 
 function getModelsDir(): string {
@@ -62,18 +67,27 @@ function downloadFile(url: string, dest: string, onProgress?: ProgressFn): Promi
 }
 
 async function ensureBinary(onProgress?: ProgressFn): Promise<void> {
+  const plan = getRuntimePlan();
   const exe = getWhisperExe();
   if (fs.existsSync(exe)) {
+    if (plan.platform === 'darwin') fs.chmodSync(exe, 0o755);
     onProgress?.('Whisper engine ready', 100);
     return;
   }
 
-  const dir = getWhisperDir();
+  if (plan.platform === 'darwin') {
+    throw new Error(
+      `The bundled macOS Whisper engine is missing for ${plan.arch}. ` +
+      'Development builds must run npm run build:whisper:mac before starting Inwise.',
+    );
+  }
+
+  const dir = plan.installDir;
   fs.mkdirSync(dir, { recursive: true });
-  const zipPath = path.join(dir, 'whisper-bin.zip');
+  const zipPath = plan.archivePath!;
 
   onProgress?.('Downloading Whisper engine…', 0);
-  await downloadFile(WHISPER_ZIP_URL, zipPath, (_, pct) => {
+  await downloadFile(plan.downloadUrl!, zipPath, (_, pct) => {
     onProgress?.(`Downloading Whisper engine… ${pct}%`, pct);
   });
 

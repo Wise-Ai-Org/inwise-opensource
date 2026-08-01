@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   },
   getConfig: () => ipcRenderer.invoke('config:get'),
   getDesktopSourceId: () => ipcRenderer.invoke('desktop:getSourceId'),
+  getMediaPermissions: () => ipcRenderer.invoke('media:permissions'),
+  requestMicrophonePermission: () => ipcRenderer.invoke('media:requestMicrophone'),
+  openMediaSettings: (kind: 'microphone' | 'screen') => ipcRenderer.invoke('media:openSettings', kind),
   startRecording: (title: string) => ipcRenderer.invoke('recording:start', title),
   resizePill: (width: number, height?: number) => ipcRenderer.send('pill:resize', { width, height }),
   showPillMenu: (payload: { mics: { id: string; label: string }[]; speakers: { id: string; label: string }[]; micOk?: boolean; spkOk?: boolean; recording: boolean; title?: string }) => {

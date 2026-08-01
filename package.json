@@ -12,12 +12,15 @@
     "build:shared": "tsc -p src/shared/tsconfig.json",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "webpack --config webpack.renderer.config.js && node scripts/copy-static.js",
+    "build:whisper:mac": "node scripts/build-whisper-mac.js",
+    "verify:whisper:mac": "node scripts/verify-whisper-mac.js",
     "watch:main": "tsc -p tsconfig.main.json --watch",
     "watch:renderer": "webpack --config webpack.renderer.config.js --watch",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win && node scripts/stable-installer.js",
-    "dist:mac": "npm run build && electron-builder --mac"
+    "dist:mac": "npm run build:whisper:mac && npm run verify:whisper:mac && npm run build && electron-builder --mac",
+    "test": "npm run build:shared && npm run build:main && node scripts/run-tests.js && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types tests/renderer-platform.test.mts"
   },
   "build": {
     "appId": "com.inwise.desktop",
@@ -27,8 +30,13 @@
     },
     "files": [
       "dist/**/*",
+      "assets/**/*",
       "node_modules/**/*",
-      "package.json"
+      "package.json",
+      "!dist/main/**/*.test.js",
+      "!dist/main/**/*.test.js.map",
+      "!dist/**/*.map",
+      "!node_modules/**/*.map"
     ],
     "win": {
       "target": [
@@ -52,29 +60,35 @@
     },
     "mac": {
       "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
+        "dmg",
+        "zip"
       ],
-      "icon": "assets/icon.png",
+      "icon": "build/icon-mac.png",
       "category": "public.app-category.productivity",
+      "minimumSystemVersion": "13.0.0",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "binaries": [
+        "Contents/Resources/whisper/whisper-cli"
+      ],
+      "notarize": true,
+      "artifactName": "Inwise-${version}-mac-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "native/whisper/darwin-${arch}",
+          "to": "whisper",
+          "filter": [
+            "whisper-cli",
+            "manifest.json",
+            "LICENSE.whisper.cpp"
+          ]
+        }
+      ],
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Inwise uses your microphone to record your voice during meetings for local transcription.",
+        "NSAudioCaptureUsageDescription": "Inwise records system audio during meetings so other participants can be transcribed locally.",
         "NSScreenCaptureUsageDescription": "Inwise captures system audio so other meeting participants can be transcribed. No video is recorded.",
         "LSUIElement": false
       }
@@ -103,22 +117,19 @@
     "onnxruntime-web": "^1.20.1",
     "openai": "^4.67.0",
     "react-icons": "^5.0.0",
-    "uuid": "^9.0.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
-    "@types/uuid": "^9.0.0",
     "concurrently": "^8.2.0",
     "css-loader": "^6.8.1",
-    "electron": "^31.0.0",
+    "electron": "^43.2.0",
     "electron-builder": "^26.8.1",
     "png-to-ico": "^3.0.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "sharp": "^0.34.5",
     "style-loader": "^3.3.3",
     "ts-loader": "^9.5.1",
     "ts-node": "^10.9.2",

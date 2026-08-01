@@ -4,9 +4,32 @@ End-to-end test plan covering all merged work since 2026-04-17. Assumes the app 
 
 ## Prerequisites
 
-- Run `npm run build` first. Everything below depends on the latest compiled `dist/`.
-- Keep `%APPDATA%/inwise-opensource/app.log` open in a tail for silent-check verification.
+- Run `npm test && npm run build` first. Everything below depends on the latest compiled `dist/`.
+- On macOS source builds, run `npm run build:whisper:mac && npm run verify:whisper:mac` before starting or packaging the app.
+- Keep the app log open in a tail for silent-check verification. The data root is `%APPDATA%/inwise-opensource/` on Windows and `~/Library/Application Support/inwise-opensource/` on macOS.
 - At least one existing voiceprint in `voiceprints.db` (Shravani Vatti, Zee are there from prior runs).
+
+---
+
+## macOS release qualification
+
+Run this section on both a clean Apple Silicon Mac and a clean Intel Mac using the DMG produced by the release workflow, not a development build.
+
+- **Gatekeeper** → drag Inwise to Applications and open it normally. No unidentified-developer warning or right-click override is required.
+- **Native runtime** → `Inwise.app/Contents/Resources/whisper/whisper-cli` exists, is executable, has the machine's architecture, and passes `codesign --verify --strict`.
+- **First launch** → the native Inwise menu is present, the tray icon is legible in light and dark menu-bar modes, and its popup opens directly below the tray item without leaving the visible work area.
+- **Microphone permission** → the first microphone test produces the macOS prompt. Allow it, speak for three seconds, and confirm the local transcript appears.
+- **System-audio permission** → the first system-audio test produces the Screen & System Audio Recording prompt. Allow it, restart when requested, play audio, and confirm the level meter and local transcript.
+- **Denied permission recovery** → deny Screen & System Audio Recording, run the system-audio test, and confirm the error offers **Open System Settings**. Re-enable it, restart, and confirm recovery.
+- **Real call capture** → record at least five minutes from Zoom, Teams, or Meet. Confirm the mic is one WAV channel, the other participants are the other channel, and Whisper completes without downloading or launching a Windows executable.
+- **Quiet call start** → start recording before the other participant speaks. The pill says **waiting for call audio**, stays attached to the system stream, and clears the warning when speech begins.
+- **Silent/dead system stream** → leave system audio silent for at least 60 seconds. The pill changes from **waiting for call audio** to **mic only** without stopping the stream; start playback and confirm it recovers automatically before stopping the recording.
+- **Sleep/wake and display changes** → sleep and wake the Mac, then move the tray between displays. The tray popup stays reachable and subsequent recordings still work.
+- **Launch at login** → enable startup, log out and back in, and confirm Inwise starts without showing an obsolete hidden-login option.
+- **Notifications and hotkey** → meeting notifications work and `Command+Shift+T` opens the test meeting without requesting Input Monitoring permission.
+- **Persistence** → quit fully, relaunch, and confirm meetings, tasks, calendars, settings, voiceprints, MCP settings, Jira settings, and Zoom transcript settings match the pre-quit state.
+
+The GitHub workflow must also pass `codesign --verify --deep --strict`, `spctl --assess`, and `xcrun stapler validate` for each architecture before a public release.
 
 ---
 
@@ -41,7 +64,7 @@ End-to-end test plan covering all merged work since 2026-04-17. Assumes the app 
 
 ## After a meeting ends
 
-- **Check `%APPDATA%/inwise-opensource/recordings/`** — the WAV file is still there after the pipeline completes. (Previously was deleted from `%TEMP%`.)
+- **Check the data root's `recordings/` directory** — the WAV file is still there after the pipeline completes. (Previously was deleted from the temporary directory.)
 - **Tasks the transcript implies you finished** → "Done?" pill appears next to the task title in the Tasks view with `[Yes]` `[No]`.
   - `[Yes]` → task status flips to `done`, pill clears.
   - `[No]` → `likelyDone` clears, task stays active, `updatedAt` ticks forward.
@@ -118,7 +141,7 @@ These are the signals that previously-broken behavior is fixed:
 
 If you want to reset state to test from scratch:
 
-- **Force welcome-back to re-appear** → edit `%APPDATA%/inwise-opensource/config.json` and delete `welcomeBackLastSeenAt` (or set to null).
+- **Force welcome-back to re-appear** → edit `config.json` in the platform data root and delete `welcomeBackLastSeenAt` (or set to null).
 - **Force staleness sweep to re-run** → edit the sweep result cache (in-memory only — just restart the app after artificially aging some `updatedAt` fields in `tasks.db`).
 - **Clear missed-meeting detection** → restore `lastOpenedAt` to a recent timestamp.
 - **Reset launch-at-startup offer** → `app.setLoginItemSettings({ openAtLogin: false })` manually in devtools or via terminal launching the Electron binary.

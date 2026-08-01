@@ -15,8 +15,9 @@ AI-powered meeting recorder that runs entirely on your machine. Your audio, your
 
 ## Requirements
 
-- **Windows 10/11** (macOS build in progress — see `build/` config)
-- **Node.js 18+** for the build step
+- **Windows 10/11** or **macOS 13 Ventura or later** (Apple Silicon and Intel)
+- **Node.js 22+** for source builds (CI uses Node.js 24)
+- **macOS source builds only:** Xcode Command Line Tools and CMake, used to compile the bundled whisper.cpp runtime
 - **An Anthropic or OpenAI API key** — you bring your own; nothing routes through Inwise servers
 - **Access to a secret ICS URL** from at least one calendar (Google / Outlook / other)
 
@@ -24,15 +25,29 @@ AI-powered meeting recorder that runs entirely on your machine. Your audio, your
 
 ## Install
 
-```bash
+```shell
 git clone --recurse-submodules https://github.com/Wise-Ai-Org/inwise-opensource.git
 cd inwise-opensource
-npm install
+npm ci
+```
+
+On Windows:
+
+```shell
 npm run build
 npm start
 ```
 
-The first run downloads whisper.cpp binaries and your selected Whisper model (~150 MB for `base`, ~750 MB for `medium`). This happens once; subsequent launches start instantly.
+On macOS:
+
+```shell
+npm run build:whisper:mac
+npm run verify:whisper:mac
+npm run build
+npm start
+```
+
+The Windows app downloads its whisper.cpp runtime on first use. The macOS runtime is compiled for the current Mac by `build:whisper:mac`, checksum-verified by `verify:whisper:mac`, and included in release builds. Both platforms download your selected Whisper model on first use (~150 MB for `base`, ~750 MB for `medium`).
 
 If you already cloned the repository, run `git submodule update --init --recursive` once before building.
 
@@ -49,10 +64,10 @@ Inwise needs three OS-level permissions. If any are missing or silently denied, 
 2. **Screen recording / system audio** — when you hit Record Meeting the first time, Windows may prompt for desktopCapturer permission; allow it. Without this, other participants' voices won't be captured and your transcripts will only contain what your mic picked up
 3. **Notifications** — Windows Settings → Notifications → "Inwise" → **On**. Used for "meeting starting" reminders and for alerting you mid-call if audio capture breaks
 
-### macOS (when the Mac build is available)
+### macOS
 1. **Microphone** — System Settings → Privacy & Security → Microphone → **Inwise: On**
-2. **Screen & System Audio Recording** — System Settings → Privacy & Security → Screen & System Audio Recording → **Inwise: On** (required to capture other meeting participants)
-3. **Input Monitoring** — System Settings → Privacy & Security → Input Monitoring → **Inwise: On** (for global hotkeys)
+2. **Screen & System Audio Recording** — System Settings → Privacy & Security → Screen & System Audio Recording → **Inwise: On** (called **Screen Recording** on macOS 13; required to capture other meeting participants)
+3. **Notifications** — System Settings → Notifications → **Inwise: On** for meeting reminders and recording-health alerts
 
 If you don't see Inwise listed, launch the app once, trigger the feature that needs the permission, and macOS will prompt you.
 
@@ -78,20 +93,21 @@ On first launch, you'll walk through:
 ### My transcript has everything attributed to me (the other person's voice is missing)
 Your system-audio capture is silent. Either:
 - The app being captured (Zoom/Teams/Meet) wasn't actively playing audio through your speakers at recording start, or
-- Windows routed output to a Bluetooth headset and desktopCapturer captured the local speakers (which were silent)
+- The OS routed output to a different device than the active meeting output, or
+- On macOS, Screen & System Audio Recording permission is disabled
 
 Check: before your next call, look at the Record Meeting pill. An amber dot means audio health is degraded — hover for the specific reason. The app will also fire a desktop Notification mid-call if system audio drops.
 
-**Quick fix:** make sure the app you're meeting through is set to output to the same device you've chosen in Windows Sound settings, and that audio starts flowing (someone says "hi") before you hit Record.
+**Quick fix:** make sure your meeting app uses the active system output, ensure someone is speaking, and use **Settings → Test System Audio**. On macOS, the test links directly to System Settings when permission was denied.
 
 ### My recording was cut short / died at 2 minutes
 Older builds had a hardcoded 2-minute Whisper timeout. If your `dist/` was built before `e1eaad5` (Apr 22, 2026), rebuild with `npm run build`. The new timeout scales with audio length — up to 3.6 hours for very long calls.
 
 ### "Processing recording..." has been showing for 10+ minutes
-The pipeline died silently. Check `%APPDATA%/inwise-opensource/app.log` for the last `pipeline:start` line and what followed. The WAV file for the recording is preserved at `%APPDATA%/inwise-opensource/recordings/inwise-rec-{timestamp}.wav` — you can re-run transcription manually on it, or delete the stuck meeting entry and try again.
+The pipeline died silently. Check `app.log` in the platform data directory for the last `pipeline:start` line and what followed. The WAV file is preserved in its `recordings/` directory, so you can recover or transcribe it again.
 
 ### My calendar isn't syncing
-Check `%APPDATA%/inwise-opensource/app.log` for `calendar-watcher:poll` lines. If you see `got=0 events`, the ICS URL is wrong or your calendar has no upcoming items. Google secret ICS URLs can expire if you reset sharing or change your password — re-copy from Calendar settings.
+Check `app.log` in the platform data directory for `calendar-watcher:poll` lines. If you see `got=0 events`, the ICS URL is wrong or your calendar has no upcoming items. Google secret ICS URLs can expire if you reset sharing or change your password — re-copy from Calendar settings.
 
 ### I came back after a month and my task list is empty
 The staleness sweep auto-snoozes tasks that haven't been touched in 30+ days, aren't high-priority, and weren't mentioned in any meeting in the last 14 days. Go to **Tasks → Snoozed filter** and hit `[Bring back]` on anything that's still relevant. Nothing is ever deleted automatically.
@@ -101,7 +117,7 @@ The staleness sweep auto-snoozes tasks that haven't been touched in 30+ days, ar
 2. Open an issue at [github.com/Wise-Ai-Org/inwise-opensource/issues](https://github.com/Wise-Ai-Org/inwise-opensource/issues) and attach the bundle
 
 Until the diagnostic bundle ships, please attach:
-- `%APPDATA%/inwise-opensource/app.log`
+- `app.log` from the platform data directory
 - A description of what you expected vs. what happened
 - The timestamp the bug occurred so I can grep logs
 
@@ -111,24 +127,26 @@ Until the diagnostic bundle ships, please attach:
 
 Everything is on your machine. No server round-trips except to your chosen LLM API and optional Jira.
 
-| What | Where |
-|---|---|
-| Config (API key, calendars, preferences) | `%APPDATA%/inwise-opensource/config.json` |
-| Meetings | `%APPDATA%/inwise-opensource/meetings.db` |
-| Tasks | `%APPDATA%/inwise-opensource/tasks.db` |
-| People + voiceprints | `%APPDATA%/inwise-opensource/people.db`, `voiceprints.db` |
-| Raw recordings (stereo WAV) | `%APPDATA%/inwise-opensource/recordings/` |
-| Whisper binaries | `%APPDATA%/inwise-opensource/whisper-bin/` |
-| Whisper models | `%APPDATA%/inwise-opensource/whisper-models/` |
-| Log | `%APPDATA%/inwise-opensource/app.log` |
+The data directory is `%APPDATA%/inwise-opensource/` on Windows and `~/Library/Application Support/inwise-opensource/` on macOS.
 
-To reset the app completely: quit Inwise, delete `%APPDATA%/inwise-opensource/`, restart.
+| What | Path inside the data directory |
+|---|---|
+| Config (API key, calendars, preferences) | `config.json` |
+| Meetings | `meetings.db` |
+| Tasks | `tasks.db` |
+| People + voiceprints | `people.db`, `voiceprints.db` |
+| Raw recordings (stereo WAV) | `recordings/` |
+| Whisper models | `whisper-models/` |
+| Windows Whisper runtime | `whisper-bin/` |
+| Log | `app.log` |
+
+The packaged macOS Whisper runtime lives inside `Inwise.app/Contents/Resources/whisper/`. To reset the app completely, quit Inwise, delete the platform data directory above, and restart.
 
 ---
 
 ## AI Models & Licenses
 
-The app ships with no pre-bundled AI models. On first use, Whisper model binaries are downloaded to `%APPDATA%/inwise-opensource/whisper-models/`:
+The app ships with no pre-bundled AI models. On first use, Whisper model binaries are downloaded to the platform data directory's `whisper-models/` folder:
 
 - **Whisper (OpenAI)** — MIT license. Runtime-downloaded; select `base` (~150 MB) or `medium` (~750 MB) on first launch. Runs entirely on your machine via [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
 - **LLM API keys** — bring your own Claude (Anthropic) or OpenAI key. These services' terms apply to API usage; your audio is never sent to Anthropic/OpenAI unless you explicitly ask for insights extraction
@@ -161,7 +179,6 @@ What's shipped:
 - Action-item completion inference from transcripts (soft flag, never auto-closes)
 
 What's next:
-- **Mac build** (`.dmg` with notarization)
 - **Auto-updater** (electron-updater against GitHub releases)
 - **Error logging + diagnostic bundle export** for bug reports
 - **Mobile companion** (view-only, reads from the same local store via sync)
@@ -171,7 +188,7 @@ What's next:
 
 ## Contributing
 
-Small PRs welcome. For bigger changes, please open an issue first so we can align on approach. The codebase uses Electron 31, TypeScript, React 18, Chakra UI, NeDB for storage, and whisper.cpp for transcription. `npm run build` gates on typecheck (both main and renderer). A simple manual test plan lives in [TEST_PLAN.md](./TEST_PLAN.md).
+Small PRs welcome. For bigger changes, please open an issue first so we can align on approach. The codebase uses Electron 43, TypeScript, React 18, Chakra UI, NeDB for storage, and whisper.cpp for transcription. `npm test` runs the main-process suite; `npm run build` typechecks and bundles the full application. A manual test plan lives in [TEST_PLAN.md](./TEST_PLAN.md). macOS signing and release setup is documented in [docs/macos-release.md](./docs/macos-release.md).
 
 ---
 
