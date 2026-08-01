@@ -26,7 +26,7 @@ AI-powered meeting recorder that runs entirely on your machine. Your audio, your
 ## Install
 
 ```shell
-git clone --recurse-submodules https://github.com/Wise-Ai-Org/inwise-opensource.git
+git clone https://github.com/Wise-Ai-Org/inwise-opensource.git
 cd inwise-opensource
 npm ci
 ```
@@ -49,7 +49,7 @@ npm start
 
 The Windows app downloads its whisper.cpp runtime on first use. The macOS runtime is compiled for the current Mac by `build:whisper:mac`, checksum-verified by `verify:whisper:mac`, and included in release builds. Both platforms download your selected Whisper model on first use (~150 MB for `base`, ~750 MB for `medium`).
 
-If you already cloned the repository, run `git submodule update --init --recursive` once before building.
+The shared TypeScript package is vendored in `src/shared`, so a normal clone contains everything required to install, test, and build the app.
 
 To use Inwise from OpenWorker, follow the [OpenWorker setup guide](./docs/openworker.md). The connection stays on this computer and exposes a pinned, read-only MCP tool set.
 

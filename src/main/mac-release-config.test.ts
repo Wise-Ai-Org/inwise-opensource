@@ -8,6 +8,19 @@ const read = (relativePath: string) => fs.readFileSync(path.join(projectDir, rel
 const packageJson = JSON.parse(read('package.json'));
 const mac = packageJson.build?.mac;
 
+assert.ok(!fs.existsSync(path.join(projectDir, '.gitmodules')), 'public builds must not depend on private submodules');
+for (const sharedFile of [
+  'src/shared/package.json',
+  'src/shared/package-lock.json',
+  'src/shared/tsconfig.json',
+  'src/shared/src/index.ts',
+  'src/shared/src/utils/audio-utils.ts',
+  'src/shared/src/utils/mfcc.ts',
+]) {
+  assert.ok(fs.existsSync(path.join(projectDir, sharedFile)), `vendored shared package missing: ${sharedFile}`);
+}
+assert.equal(packageJson.dependencies['@inwise/desktop-shared'], 'file:src/shared');
+
 assert.ok(mac, 'package.json must define a mac build');
 assert.deepEqual(mac.target, ['dmg', 'zip']);
 assert.equal(mac.minimumSystemVersion, '13.0.0');

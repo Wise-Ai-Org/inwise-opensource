@@ -1,0 +1,20 @@
+{
+  "name": "@inwise/desktop-shared",
+  "version": "0.0.1",
+  "description": "Shared TypeScript interfaces and local audio utilities for the Inwise desktop app",
+  "author": "Inwise.ai",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.3.0"
+  }
+}
