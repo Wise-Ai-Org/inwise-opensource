@@ -14,6 +14,7 @@
     "build:renderer": "webpack --config webpack.renderer.config.js && node scripts/copy-static.js",
     "watch:main": "tsc -p tsconfig.main.json --watch",
     "watch:renderer": "webpack --config webpack.renderer.config.js --watch",
+    "test:slack": "ts-node -P tsconfig.main.json src/main/slack-client.test.ts && ts-node -P tsconfig.main.json src/main/slack-oauth.test.ts && ts-node -P tsconfig.main.json src/main/slack-ingestion.test.ts && ts-node -P tsconfig.main.json src/main/slack-cursor-store.test.ts && ts-node -P tsconfig.main.json src/main/slack-poller.test.ts && ts-node -P tsconfig.main.json src/renderer/popup/slack-recap.test.ts",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win && node scripts/stable-installer.js",

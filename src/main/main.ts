@@ -82,9 +82,15 @@ import {
 import { listZoomRecordings, getTranscriptDownloadUrl } from './zoom-recordings';
 import { downloadAndParseVtt } from './zoom-vtt-parser';
 import { ingestNormalizedTranscript } from './zoom-transcript-ingestion';
-import { validateToken, isSlackConnected, listChannels as slackListChannels } from './slack-client';
+import {
+  validateToken,
+  getSlackConnectionInfo,
+  listChannels as slackListChannels,
+  postWiserNote,
+} from './slack-client';
+import { connectSlackWithOAuth } from './slack-oauth';
 import { normalizeSlackThread } from './slack-normalizer';
-import { startSlackPoller, stopSlackPoller, registerSlackPipeline } from './slack-poller';
+import { startSlackPoller, stopSlackPoller, registerSlackPipeline, runSlackPollNow } from './slack-poller';
 import { startMcpServer, stopMcpServer, getMcpStatus, setUpcomingEventsProvider } from './mcp-server';
 
 Menu.setApplicationMenu(null);
@@ -3184,6 +3190,9 @@ app.whenReady().then(() => {
     });
     if (!normalized) return;
 
+    // Extract first so a transient LLM failure cannot create a partial meeting
+    // that is then mistaken for a successfully consumed Slack batch.
+    const insights = await extractInsights(normalized.transcript);
     const meetingId = await createMeeting({
       title: normalized.title,
       date: normalized.date,
@@ -3191,16 +3200,9 @@ app.whenReady().then(() => {
       source: 'slack_thread',
     });
     await updateMeetingTranscript(meetingId, normalized.transcript, 0);
+    await saveInsights(meetingId, insights);
     mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
-
-    try {
-      const insights = await extractInsights(normalized.transcript);
-      await saveInsights(meetingId, insights);
-      mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
-      log('info', 'slack:pipeline', `Insights saved for thread in #${channelName} (meeting ${meetingId})`);
-    } catch (insightErr: any) {
-      log('error', 'slack:pipeline', `Insight extraction failed for ${meetingId}: ${insightErr.message}`);
-    }
+    log('info', 'slack:pipeline', `Insights saved for thread in #${channelName} (meeting ${meetingId})`);
   });
 
   // Start Slack poller (delayed 10 s to let the main window settle)
@@ -3279,23 +3281,62 @@ app.on('activate', () => {
 ipcMain.handle('slack:connect', async (_e, token: string) => {
   const result = await validateToken(token);
   if (result.ok) {
-    setConfig({ slackBotToken: token } as any);
+    setConfig({ slackUserToken: token, slackBotToken: '' } as any);
+    void runSlackPollNow().catch((error) => log('error', 'slack:poller', `Post-connect poll failed: ${error.message}`));
   }
   return result;
 });
 
+ipcMain.handle('slack:connectOAuth', async () => {
+  try {
+    const connection = await connectSlackWithOAuth();
+    setConfig({ slackUserToken: connection.token, slackBotToken: '' } as any);
+    void runSlackPollNow().catch((error) => log('error', 'slack:poller', `Post-connect poll failed: ${error.message}`));
+    return {
+      ok: true,
+      teamName: connection.teamName,
+      userName: connection.userName,
+      tokenType: connection.tokenType,
+    };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('slack:disconnect', () => {
-  setConfig({ slackBotToken: '' } as any);
+  setConfig({ slackUserToken: '', slackBotToken: '' } as any);
   return true;
 });
 
 ipcMain.handle('slack:status', () => {
-  return { connected: isSlackConnected() };
+  return getSlackConnectionInfo();
 });
 
 ipcMain.handle('slack:listChannels', async () => {
   try { return { ok: true, channels: await slackListChannels() }; }
   catch (e: any) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('slack:listWriteChannels', async () => {
+  try {
+    const allowed = new Set(((getConfig() as any).slackWriteChannels ?? []) as string[]);
+    const channels = (await slackListChannels()).filter((channel) => allowed.has(channel.id));
+    return { ok: true, channels };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('slack:postWiserNote', async (_e, channelId: string, note: string) => {
+  try {
+    if (typeof channelId !== 'string' || typeof note !== 'string') {
+      return { ok: false, error: 'Invalid Slack note request' };
+    }
+    await postWiserNote(channelId, note);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // ── Local MCP server IPC handlers ──────────────────────────────────────────

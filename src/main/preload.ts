@@ -101,9 +101,12 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 
   // Slack
   slackConnect: (token: string) => ipcRenderer.invoke('slack:connect', token),
+  slackConnectOAuth: () => ipcRenderer.invoke('slack:connectOAuth'),
   slackDisconnect: () => ipcRenderer.invoke('slack:disconnect'),
   slackStatus: () => ipcRenderer.invoke('slack:status'),
   slackListChannels: () => ipcRenderer.invoke('slack:listChannels'),
+  slackListWriteChannels: () => ipcRenderer.invoke('slack:listWriteChannels'),
+  slackPostWiserNote: (channelId: string, note: string) => ipcRenderer.invoke('slack:postWiserNote', channelId, note),
 
   // Jira
   jiraConnect: () => ipcRenderer.invoke('jira:connect'),

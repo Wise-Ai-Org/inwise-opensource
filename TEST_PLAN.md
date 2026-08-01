@@ -93,6 +93,22 @@ Each renders differently. Force each once to exercise the UI:
   - `[Turn on]` → card morphs: *"Done. Inwise will start automatically next time you log in."* `app.getLoginItemSettings().openAtLogin` becomes true. Re-open app → offer no longer appears.
 - **No ask qualifies** → empty-state copy (see "On app start" above).
 
+## Settings → Slack integration
+
+- **One-click connection** → click **Connect Slack**, choose a workspace in the browser, approve the displayed permissions, and return to Inwise. No app creation or token copy is requested; channel lists load automatically.
+- **Cancel consent** → Slack's browser page closes with a cancellation message and Inwise returns to its disconnected state with a retryable error.
+- **One-time handoff** → after a successful connection, replaying the broker poll credentials returns no token. The broker session record contains only RSA/AES ciphertext before claim and is deleted after claim.
+- **Local persistence** → restart Inwise after connecting. Slack remains connected from the locally stored `xoxp` token without calling the broker again.
+- **Advanced manual fallback** → expand **Advanced: use your own Slack app or token**. An `xoxb-` token is rejected; a properly scoped `xoxp-` token connects and loads channels.
+- **Select a private channel the user can access** → its history and thread replies can be read after saving it as a Read channel.
+- **Pagination regression** → post more than 15 top-level messages between polls. Every message appears in the imported loose-message batch, in chronological order; none are skipped when Slack returns `next_cursor`.
+- **Quiet-thread regression** → set inactivity to 1 minute, create a thread, and wait until it goes quiet without posting another top-level channel message. A later poll imports the full parent + replies exactly once.
+- **Restart durability** → quit after the poll first discovers an active thread but before its inactivity window expires. Restart after it is quiet; the pending thread imports without requiring new channel activity.
+- **Failure safety** → temporarily remove the configured LLM key while a loose batch is due. The Slack timestamp cursor does not advance; restoring the key lets the next poll retry the same messages.
+- **Explicit outbound recap** → select a Write channel, open a processed meeting, choose that channel under Share to Slack, and click **Post recap**. Slack receives summary/decisions/action items/blockers with a Wiser header; the raw transcript is absent.
+- **Write allowlist** → remove the destination from Write channels and retry. The post is rejected instead of sending to an unapproved channel.
+- **Rate limit recovery** → when Slack returns 429, `app.log` shows `slack:rate-limited` and the request resumes after `Retry-After` without advancing the history cursor early.
+
 ## Silent checks (tail `app.log`)
 
 These are the signals that previously-broken behavior is fixed:
