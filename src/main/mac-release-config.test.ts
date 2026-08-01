@@ -4,7 +4,9 @@ import * as path from 'node:path';
 import { WHISPER_VERSION, WINDOWS_WHISPER_URL } from './whisper-runtime';
 
 const projectDir = path.resolve(__dirname, '..', '..');
-const read = (relativePath: string) => fs.readFileSync(path.join(projectDir, relativePath), 'utf8');
+const normalizeNewlines = (text: string) => text.replace(/\r\n?/g, '\n');
+const read = (relativePath: string) => normalizeNewlines(fs.readFileSync(path.join(projectDir, relativePath), 'utf8'));
+assert.equal(normalizeNewlines('arm64\r\nx64\r'), 'arm64\nx64\n');
 const packageJson = JSON.parse(read('package.json'));
 const mac = packageJson.build?.mac;
 
