@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [master]
@@ -11,17 +12,23 @@ concurrency:
 
 jobs:
   test-and-build:
-    name: Test and build (${{ matrix.arch }})
+    name: Test and build (${{ matrix.label }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: windows-latest
-            arch: windows-x64
+            label: windows-x64
+            platform: windows
+            target_arch: x64
           - runner: macos-15
-            arch: macos-arm64
+            label: macos-arm64
+            platform: macos
+            target_arch: arm64
           - runner: macos-15-intel
-            arch: macos-x64
+            label: macos-x64
+            platform: macos
+            target_arch: x64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -35,3 +42,19 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build:renderer
+      - name: Build and verify native Whisper runtime
+        if: matrix.platform == 'macos'
+        run: |
+          npm run build:whisper:mac
+          npm run verify:whisper:mac
+          npm run smoke:whisper:mac
+      - name: Package unsigned Mac app
+        if: matrix.platform == 'macos'
+        run: npx electron-builder --mac --${{ matrix.target_arch }} --dir --publish never -c.mac.notarize=false -c.forceCodeSigning=false
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify packaged Mac runtime and startup
+        if: matrix.platform == 'macos'
+        run: npm run verify:package:mac
+        env:
+          INWISE_EXPECTED_ARCH: ${{ matrix.target_arch }}

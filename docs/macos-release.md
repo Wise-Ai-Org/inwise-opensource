@@ -43,3 +43,5 @@ Unsigned local packaging is useful for development, but public downloads must co
 5. Install each DMG on clean Apple Silicon and Intel Macs and complete the macOS section of `TEST_PLAN.md` before announcing the release.
 
 `workflow_dispatch` runs the same signed build and verification without publishing a GitHub release. It is the preferred release-candidate check.
+
+The separate **CI** workflow also supports `workflow_dispatch` and requires no Apple credentials. Its two Mac jobs compile Whisper natively, transcribe the bundled JFK sample with the tiny English model, create an unsigned architecture-specific app, and smoke-launch the packaged executable. This is useful for branch qualification, but it does not replace the signed release workflow or clean-device Gatekeeper testing.

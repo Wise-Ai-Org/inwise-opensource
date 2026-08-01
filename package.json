@@ -14,12 +14,14 @@
     "build:renderer": "webpack --config webpack.renderer.config.js && node scripts/copy-static.js",
     "build:whisper:mac": "node scripts/build-whisper-mac.js",
     "verify:whisper:mac": "node scripts/verify-whisper-mac.js",
+    "smoke:whisper:mac": "node scripts/smoke-whisper-mac.js",
+    "verify:package:mac": "node scripts/verify-packaged-mac.js",
     "watch:main": "tsc -p tsconfig.main.json --watch",
     "watch:renderer": "webpack --config webpack.renderer.config.js --watch",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win && node scripts/stable-installer.js",
-    "dist:mac": "npm run build:whisper:mac && npm run verify:whisper:mac && npm run build && electron-builder --mac",
+    "dist:mac": "npm run build:whisper:mac && npm run verify:whisper:mac && npm run build && electron-builder --mac && npm run verify:package:mac",
     "test": "npm run build:shared && npm run build:main && node scripts/run-tests.js && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types tests/renderer-platform.test.mts"
   },
   "build": {

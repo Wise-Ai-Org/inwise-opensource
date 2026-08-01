@@ -73,6 +73,22 @@ assert.ok(whisperVerify.includes("require('../src/main/whisper-runtime-config.js
 assert.ok(whisperVerify.includes('manifest.sha256 !== actualSha256'));
 assert.equal(packageJson.scripts['verify:whisper:mac'], 'node scripts/verify-whisper-mac.js');
 assert.ok(packageJson.scripts['dist:mac'].includes('npm run verify:whisper:mac'));
+const whisperSmoke = read('scripts/smoke-whisper-mac.js');
+assert.ok(whisperSmoke.includes('ggml-tiny.en.bin'));
+assert.ok(whisperSmoke.includes('ask\\s+not\\s+what\\s+your\\s+country'));
+assert.equal(packageJson.scripts['smoke:whisper:mac'], 'node scripts/smoke-whisper-mac.js');
+const packageVerify = read('scripts/verify-packaged-mac.js');
+for (const required of [
+  "run('lipo'",
+  "run('otool'",
+  'Print :LSMinimumSystemVersion',
+  'NSAudioCaptureUsageDescription',
+  'PACKAGED_APP_HEALTHY',
+]) {
+  assert.ok(packageVerify.includes(required), `Mac package verifier missing: ${required}`);
+}
+assert.equal(packageJson.scripts['verify:package:mac'], 'node scripts/verify-packaged-mac.js');
+assert.ok(packageJson.scripts['dist:mac'].includes('npm run verify:package:mac'));
 
 const releaseWorkflow = read('.github/workflows/release-mac.yml');
 for (const required of [
@@ -87,12 +103,9 @@ for (const required of [
   'codesign --verify --deep --strict',
   'spctl --assess --type execute',
   'xcrun stapler validate',
-  '"$whisper_path" --help',
   'npm run verify:whisper:mac',
-  'otool -L "$whisper_path"',
-  "Print :LSMinimumSystemVersion",
-  'Print :NSAudioCaptureUsageDescription',
-  'PACKAGED_APP_HEALTHY',
+  'npm run smoke:whisper:mac',
+  'npm run verify:package:mac',
   'release-v2/Inwise-*-mac-${{ matrix.arch }}.dmg',
   'release-v2/Inwise-*-mac-${{ matrix.arch }}.zip',
 ]) {
@@ -100,7 +113,18 @@ for (const required of [
 }
 
 const ciWorkflow = read('.github/workflows/ci.yml');
-for (const required of ['windows-latest', 'macos-15', 'macos-15-intel', 'npm test', 'npm run build:renderer']) {
+for (const required of [
+  'workflow_dispatch:',
+  'windows-latest',
+  'macos-15',
+  'macos-15-intel',
+  'npm test',
+  'npm run build:renderer',
+  'npm run build:whisper:mac',
+  'npm run smoke:whisper:mac',
+  'electron-builder --mac --${{ matrix.target_arch }} --dir',
+  'npm run verify:package:mac',
+]) {
   assert.ok(ciWorkflow.includes(required), `CI workflow missing: ${required}`);
 }
 
