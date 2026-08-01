@@ -186,7 +186,9 @@ async function run(): Promise<void> {
 
     const seq = (await listMatchDecisions()).map((d: any) => d.decisionType);
     assert.deepEqual(seq, ['undo_split', 'manual_merge'], 'both actions are logged, newest first');
-    assert.equal((await decisionsDb.findAsync({})).length, 2);
+    const loggedRows: any[] = await decisionsDb.findAsync({});
+    assert.equal(loggedRows.length, 2);
+    assert.equal(new Set(loggedRows.map(row => row.sequence)).size, 2, 'same-millisecond decisions retain insertion order');
 
     // Aggregates the PRD asks for
     await decisionsDb.insertAsync({ decisionType: 'auto_merge', createdAt: new Date().toISOString(), surface: 'oss' });

@@ -39,6 +39,13 @@ export interface MatchDecisionEntry {
 }
 
 let decisionsDb: Datastore | null = null;
+let lastDecisionSequence = 0;
+
+function nextDecisionSequence(): number {
+  const wallClockSequence = Date.now() * 1_000;
+  lastDecisionSequence = Math.max(wallClockSequence, lastDecisionSequence + 1);
+  return lastDecisionSequence;
+}
 
 export function initMatchDecisionLog(): void {
   const userDataPath = app.getPath('userData');
@@ -48,6 +55,7 @@ export function initMatchDecisionLog(): void {
 // Test-only: inject an in-memory Datastore. Do NOT call from production code.
 export function __setMatchDecisionsDbForTests(db: Datastore): void {
   decisionsDb = db;
+  lastDecisionSequence = 0;
 }
 
 /**
@@ -69,6 +77,7 @@ export async function logMatchDecision(entry: MatchDecisionEntry): Promise<void>
       surface: 'oss',
       promptVersion: entry.promptVersion ?? MATCH_PROMPT_VERSION,
       createdAt: entry.createdAt ?? new Date().toISOString(),
+      sequence: nextDecisionSequence(),
     });
   } catch (e: any) {
     log('error', 'match-decision-log:write-failed', e?.message || String(e));
@@ -77,7 +86,7 @@ export async function logMatchDecision(entry: MatchDecisionEntry): Promise<void>
 
 export async function listMatchDecisions(limit = 200): Promise<any[]> {
   if (!decisionsDb) return [];
-  const rows = await (decisionsDb as any).findAsync({}).sort({ createdAt: -1 }).limit(limit);
+  const rows = await (decisionsDb as any).findAsync({}).sort({ createdAt: -1, sequence: -1 }).limit(limit);
   return rows;
 }
 
