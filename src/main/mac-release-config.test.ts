@@ -115,6 +115,7 @@ for (const required of [
 const ciWorkflow = read('.github/workflows/ci.yml');
 for (const required of [
   'workflow_dispatch:',
+  "branches: [master, 'codex/**']",
   'windows-latest',
   'macos-15',
   'macos-15-intel',
