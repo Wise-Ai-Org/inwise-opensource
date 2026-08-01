@@ -138,8 +138,11 @@ for (const required of [
   'npm run build:renderer',
   'npm run build:whisper:mac',
   'npm run smoke:whisper:mac',
-  'electron-builder --mac --${{ matrix.target_arch }} --dir',
+  'electron-builder --mac --${{ matrix.target_arch }} --publish never',
   'npm run verify:package:mac',
+  'name: Inwise-${{ matrix.label }}-unsigned',
+  'release-v2/Inwise-*-mac-${{ matrix.target_arch }}.dmg',
+  'release-v2/Inwise-*-mac-${{ matrix.target_arch }}.zip',
 ]) {
   assert.ok(ciWorkflow.includes(required), `CI workflow missing: ${required}`);
 }

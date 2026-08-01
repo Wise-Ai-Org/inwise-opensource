@@ -46,9 +46,9 @@ jobs:
           npm run build:whisper:mac
           npm run verify:whisper:mac
           npm run smoke:whisper:mac
-      - name: Package unsigned Mac app
+      - name: Package unsigned Mac installers
         if: matrix.platform == 'macos'
-        run: npx electron-builder --mac --${{ matrix.target_arch }} --dir --publish never -c.mac.notarize=false -c.forceCodeSigning=false
+        run: npx electron-builder --mac --${{ matrix.target_arch }} --publish never -c.mac.notarize=false -c.forceCodeSigning=false
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Verify packaged Mac runtime and startup
@@ -56,3 +56,13 @@ jobs:
         run: npm run verify:package:mac
         env:
           INWISE_EXPECTED_ARCH: ${{ matrix.target_arch }}
+      - name: Upload unsigned Mac installers
+        if: matrix.platform == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Inwise-${{ matrix.label }}-unsigned
+          path: |
+            release-v2/Inwise-*-mac-${{ matrix.target_arch }}.dmg
+            release-v2/Inwise-*-mac-${{ matrix.target_arch }}.zip
+          if-no-files-found: error
+          retention-days: 7
