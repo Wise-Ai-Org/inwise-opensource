@@ -1,6 +1,6 @@
 {
   "name": "inwise-opensource",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Open-source AI meeting recorder — local transcription, local storage, your own API key",
   "license": "MIT",
   "author": "Inwise.ai",
@@ -16,6 +16,7 @@
     "watch:renderer": "webpack --config webpack.renderer.config.js --watch",
     "test:slack": "ts-node -P tsconfig.main.json src/main/slack-client.test.ts && ts-node -P tsconfig.main.json src/main/slack-oauth.test.ts && ts-node -P tsconfig.main.json src/main/slack-ingestion.test.ts && ts-node -P tsconfig.main.json src/main/slack-cursor-store.test.ts && ts-node -P tsconfig.main.json src/main/slack-poller.test.ts && ts-node -P tsconfig.main.json src/renderer/popup/slack-recap.test.ts",
     "test:zoom": "ts-node -P tsconfig.main.json src/main/zoom-oauth-config.test.ts && ts-node -P tsconfig.main.json src/main/zoom-recordings.test.ts && ts-node -P tsconfig.main.json src/main/zoom-vtt-parser.test.ts && ts-node -P tsconfig.main.json src/main/zoom-transcript-ingestion.test.ts && ts-node -P tsconfig.main.json src/main/zoom-credentials.test.ts",
+    "test:native-transcripts": "ts-node -P tsconfig.main.json src/main/oauth-loopback.test.ts && ts-node -P tsconfig.main.json src/main/oauth-credentials.test.ts && ts-node -P tsconfig.main.json src/main/teams-oauth-config.test.ts && ts-node -P tsconfig.main.json src/main/teams-vtt-parser.test.ts && ts-node -P tsconfig.main.json src/main/teams-api.test.ts && ts-node -P tsconfig.main.json src/main/meet-oauth-config.test.ts && ts-node -P tsconfig.main.json src/main/meet-api.test.ts && ts-node -P tsconfig.main.json src/main/zoom-vtt-parser.test.ts && ts-node -P tsconfig.main.json src/main/zoom-transcript-ingestion.test.ts",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win && node scripts/stable-installer.js",
