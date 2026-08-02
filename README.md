@@ -1,6 +1,6 @@
 # Inwise — Local-First Meeting Intelligence
 
-AI-powered meeting recorder that runs entirely on your machine. Your audio, your transcripts, your action items — none of it leaves your computer except to your Jira or LLM of choice, and only with your key.
+AI-powered meeting recorder that runs primarily on your machine. Your audio and transcripts stay local; extracted work can leave the app only through integrations you explicitly connect, such as your LLM, Jira, Zoom, or Slack.
 
 - **Local transcription** via [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — no audio ever leaves your device
 - **Local speaker voiceprints** via MFCC — identifies who said what, then auto-names it next time
@@ -9,6 +9,7 @@ AI-powered meeting recorder that runs entirely on your machine. Your audio, your
 - **Your own calendars** via ICS feed — Google, Outlook, or any provider that exposes a secret ICS URL
 - **Welcome-back screen** — when you return after a gap, the app tells you what it handled for you instead of piling work on you
 - **Jira integration** — auto-push action items to stories, optional daily pull
+- **Slack integration** — one-click browser authorization, local channel ingestion, and explicit recap sharing
 - **Local AI access** — connect OpenWorker or another MCP client to search meetings, prepare agendas, and follow up on action items without uploading an Inwise database
 
 ---
@@ -73,6 +74,23 @@ On first launch, you'll walk through:
 
 ---
 
+## Optional Slack integration
+
+Open **Settings → Integrations → Slack** and click **Connect Slack**. Choose a workspace in the browser,
+review Slack's permission screen, and click **Allow**. There is no Slack app to create and no token to paste.
+After authorization, select the channels Inwise may read and the channels available for explicit recap sharing.
+
+The managed Inwise Slack app uses Slack's standard web OAuth exchange, keeping its client secret out of the
+open-source desktop. The default flow therefore uses Inwise's hosted broker only for that exchange. The desktop
+supplies a one-time RSA public key; the broker stores only an
+encrypted, ten-minute handoff and deletes it when claimed. The resulting `xoxp` token is stored in the desktop's
+local config. Raw transcripts are never sent through the broker.
+
+Self-hosted forks can either set `INWISE_SLACK_OAUTH_BROKER_URL` to their broker or expand
+**Advanced: use your own Slack app or token** and provide an `xoxp` user token directly.
+
+---
+
 ## Troubleshooting
 
 ### My transcript has everything attributed to me (the other person's voice is missing)
@@ -109,7 +127,8 @@ Until the diagnostic bundle ships, please attach:
 
 ## Where your data lives
 
-Everything is on your machine. No server round-trips except to your chosen LLM API and optional Jira.
+Meeting data remains on your machine. Network calls occur only for services you explicitly configure; managed Slack
+OAuth additionally uses the short-lived token broker described above.
 
 | What | Where |
 |---|---|

@@ -74,17 +74,20 @@ directly off `getConfig()` or you'll hit `undefined` on migrated stores.
 
 ## Slack integration modules
 
-Four new modules implement the Slack integration pipeline:
+Six modules implement the Slack integration pipeline:
 
-- **`slack-client.ts`**: Local Slack API client. Exposes `listChannels()`, `getChannelHistory()`, `getThreadReplies()`, `postMessage()`, `resolveUser()`, `validateToken()`, `isSlackConnected()`, `postWiserNote()`. All API calls go through `slackGet()`/`slackPost()` helpers with 429/Retry-After backoff.
+- **`slack-oauth.ts`**: One-click managed OAuth. Generates an ephemeral RSA keypair, opens Slack in the system browser, polls the hosted broker, decrypts the one-time AES-GCM handoff, validates the `xoxp` token, and returns it only to the main process. Forks can override the broker with `INWISE_SLACK_OAUTH_BROKER_URL`.
+- **`slack-client.ts`**: Local Slack API client. Channel threads require an `xoxp` user token. History and replies fully consume Slack's cursor pagination at the non-Marketplace page limit (15); all API calls honor 429/Retry-After backoff.
 - **`slack-normalizer.ts`**: `normalizeSlackThread(messages, meta)` converts a thread into a `NormalizedConversation` compatible with `createMeeting()` + `extractInsights()`.
-- **`slack-ingestion.ts`**: `computeReadyBatches()` tracks per-thread activity in memory and returns threads quiet for ≥ the configured inactivity window. Integrates with cursor store for persistent dedup.
-- **`slack-cursor-store.ts`**: Separate electron-store (`slack-cursor-state`) for per-channel cursors and thread-level dedup that survives restarts.
-- **`slack-poller.ts`**: Timer-based poll loop. Wired into `main.ts` via `registerSlackPipeline()`. Starts after app ready (10 s delay), stops on `before-quit`.
+- **`slack-ingestion.ts`**: Pure partition/activity/quiet-window helpers. Keep them free of Electron and persistence so edge cases remain directly testable.
+- **`slack-cursor-store.ts`**: Separate electron-store (`slack-cursor-state`) for per-channel timestamp cursors, pending threads, and processed-thread dedup that survive restarts.
+- **`slack-poller.ts`**: Persists discovered thread parents before committing history, reevaluates pending threads even on empty history polls, and serializes API calls to cooperate with Slack rate limits.
 
-**Pipeline flow**: `getChannelHistory(cursor)` → `getThreadReplies()` → `computeReadyBatches()` → `normalizeSlackThread()` → `createMeeting()` → `extractInsights()` → `saveInsights()` → `markThreadProcessed()`.
+**Pipeline flow**: fully paginate `getChannelHistory(cursor)` → persist thread parents → commit timestamp cursor → reevaluate pending `getThreadReplies()` → quiet-window check → normalize/create/extract/save → mark processed + remove pending.
 
 **Key invariants:**
-- Threads only process after `slackInactivityWindowMin` minutes of silence
-- Reprocessing triggers when `latestActivityTs` changes after last process
-- Cursor advances to the newest ts seen; threads are deduped persistently
+- Never commit a history cursor until all pages are fetched and loose messages are safely processed.
+- Never mark a thread processed with an empty reply set or a failed pipeline.
+- Threads only process after `slackInactivityWindowMin` minutes of silence, including across app restarts.
+- Outbound Wiser notes are explicit user actions and are restricted to configured write channels.
+- OAuth handoff private keys and poll secrets are never persisted or exposed through renderer IPC; only the validated `xoxp` token is written to local config.

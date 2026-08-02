@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
 import JiraMappingModal from '../views/communications/JiraMappingModal';
 import UploadTranscriptSheet from './UploadTranscriptSheet';
+import { buildMeetingSlackRecap } from './slack-recap';
 
 interface Insights {
   summary?: string;
@@ -19,6 +20,11 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
   const [jiraConnected, setJiraConnected] = useState(false);
   const [mappingOpen, setMappingOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [slackConnected, setSlackConnected] = useState(false);
+  const [slackChannels, setSlackChannels] = useState<Array<{ id: string; name: string }>>([]);
+  const [slackChannelId, setSlackChannelId] = useState('');
+  const [slackSending, setSlackSending] = useState(false);
+  const [slackResult, setSlackResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   useEffect(() => {
     api().getMeeting?.(meetingId)
@@ -28,6 +34,18 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
     api().jiraStatus?.()
       .then((s: any) => setJiraConnected(!!(s?.connected || s?.isConnected)))
       .catch(() => {});
+    api().slackStatus?.()
+      .then(async (s: any) => {
+        const connected = !!s?.connected && s?.threadCapable !== false;
+        setSlackConnected(connected);
+        if (!connected) return;
+        const result = await api().slackListWriteChannels?.();
+        if (!result?.ok) return;
+        const channels = result.channels ?? [];
+        setSlackChannels(channels);
+        setSlackChannelId(channels[0]?.id ?? '');
+      })
+      .catch(() => {});
   }, [meetingId]);
 
   const insights: Insights = meeting?.insights || {};
@@ -36,6 +54,25 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
   const doDelete = async () => {
     await api().deleteMeeting?.(meetingId);
     popAll();
+  };
+
+  const postRecapToSlack = async () => {
+    if (!meeting || !slackChannelId) return;
+    setSlackSending(true);
+    setSlackResult(null);
+    try {
+      const result = await api().slackPostWiserNote?.(
+        slackChannelId,
+        buildMeetingSlackRecap(meeting),
+      );
+      setSlackResult(result?.ok
+        ? { ok: true, message: 'Recap posted to Slack.' }
+        : { ok: false, message: result?.error || 'Could not post the recap.' });
+    } catch (error: any) {
+      setSlackResult({ ok: false, message: error.message });
+    } finally {
+      setSlackSending(false);
+    }
   };
 
   return (
@@ -150,6 +187,53 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               <button className="pp-btn pp-ghost" onClick={() => setMappingOpen(true)}>
                 Map action items to Jira
               </button>
+            )}
+
+            {slackConnected && insights.summary && (
+              <>
+                <div className="pp-seclabel">Share to Slack</div>
+                <div className="pp-card">
+                  {slackChannels.length > 0 ? (
+                    <>
+                      <div className="pp-meta" style={{ marginBottom: 8 }}>
+                        Posts the summary, decisions, action items, and blockers. The transcript is not sent.
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <select
+                          className="form-input"
+                          aria-label="Slack write channel"
+                          value={slackChannelId}
+                          onChange={(event) => setSlackChannelId(event.target.value)}
+                          style={{ flex: 1, minWidth: 0 }}
+                        >
+                          {slackChannels.map((channel) => (
+                            <option key={channel.id} value={channel.id}>#{channel.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          className="pp-btn pp-solid"
+                          style={{ width: 'auto', margin: 0, whiteSpace: 'nowrap' }}
+                          disabled={slackSending || !slackChannelId}
+                          onClick={postRecapToSlack}
+                        >
+                          {slackSending ? 'Posting…' : 'Post recap'}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="pp-meta">Choose at least one write channel in Settings → Slack.</div>
+                  )}
+                  {slackResult && (
+                    <div
+                      className="pp-meta"
+                      role="status"
+                      style={{ marginTop: 8, color: slackResult.ok ? 'var(--teal)' : 'var(--red)' }}
+                    >
+                      {slackResult.message}
+                    </div>
+                  )}
+                </div>
+              </>
             )}
 
             <UploadTranscriptSheet

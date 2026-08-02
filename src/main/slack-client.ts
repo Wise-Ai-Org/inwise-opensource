@@ -1,12 +1,11 @@
 /**
- * Local Slack API client — all calls run from the Electron main process.
- * Auth is a plain bot token stored in electron-store (no OAuth).
+ * Local Slack Web API client. All calls run from the Electron main process.
+ *
+ * Public/private channel threads require a user OAuth token. Slack does not
+ * allow bot tokens to call conversations.replies for those channel types, so
+ * the supported connection path is an xoxp user token with the documented
+ * read/write scopes.
  */
-
-import { getConfig } from './config';
-import { log } from './logger';
-
-// ── Types ──────────────────────────────────────────────────────────────────
 
 export interface SlackChannel {
   id: string;
@@ -31,58 +30,108 @@ export interface SlackUser {
   realName: string;
 }
 
-// ── Internal fetch helper ──────────────────────────────────────────────────
+export type SlackTokenType = 'user' | 'bot' | 'unknown';
+
+export interface SlackApiDeps {
+  token?: string;
+  fetchFn?: typeof fetch;
+  delayFn?: (ms: number) => Promise<void>;
+}
+
+export interface SlackConnectionInfo {
+  connected: boolean;
+  tokenType: SlackTokenType | 'none';
+  threadCapable: boolean;
+}
 
 const SLACK_BASE = 'https://slack.com/api';
 const MAX_RETRIES = 5;
+// Slack caps non-Marketplace conversations.history/replies calls at 15 items.
+const CONVERSATIONS_PAGE_SIZE = '15';
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function getToken(): string {
-  const config = getConfig();
-  const token = (config as any).slackBotToken as string | undefined;
-  if (!token) throw new Error('Slack bot token not configured');
+// Keep the HTTP client usable in plain Node tests. Electron-backed config and
+// logging are loaded only when a production call actually needs them.
+function appLog(level: 'info' | 'warn' | 'error', message: string, detail?: string): void {
+  try {
+    (require('./logger') as typeof import('./logger')).log(level, message, detail);
+  } catch {
+    // Logging must never make a Slack operation fail (including unit tests).
+  }
+}
+
+export function classifySlackToken(token: string): SlackTokenType {
+  if (token.startsWith('xoxp-')) return 'user';
+  if (token.startsWith('xoxb-')) return 'bot';
+  return 'unknown';
+}
+
+function configuredToken(): string | undefined {
+  const { getConfig } = require('./config') as typeof import('./config');
+  const config = getConfig() as any;
+  // slackBotToken is retained as a read fallback for existing installations.
+  return (config.slackUserToken || config.slackBotToken) as string | undefined;
+}
+
+function resolveToken(deps: SlackApiDeps): string {
+  const token = deps.token || configuredToken();
+  if (!token) throw new Error('Slack user OAuth token not configured');
   return token;
+}
+
+function apiError(data: any, endpoint: string): Error {
+  const needed = data?.needed ? `; needs scope ${data.needed}` : '';
+  return new Error(`Slack API error: ${data?.error || 'unknown_error'} (${endpoint}${needed})`);
 }
 
 async function slackGet(
   endpoint: string,
   params: Record<string, string> = {},
+  deps: SlackApiDeps = {},
 ): Promise<any> {
-  const token = getToken();
+  const token = resolveToken(deps);
+  const fetchFn = deps.fetchFn ?? fetch;
+  const wait = deps.delayFn ?? delay;
   const qs = new URLSearchParams(params).toString();
   const url = `${SLACK_BASE}/${endpoint}${qs ? `?${qs}` : ''}`;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const res = await fetch(url, {
+    const res = await fetchFn(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (res.status === 429) {
-      const retryAfter = parseInt(res.headers.get('Retry-After') ?? '5', 10);
-      log('warn', 'slack:rate-limited', `GET ${endpoint} — retry after ${retryAfter}s`);
-      await delay(retryAfter * 1000);
+      const retryAfter = parseInt(res.headers.get('Retry-After') ?? '60', 10);
+      appLog('warn', 'slack:rate-limited', `GET ${endpoint} — retry after ${retryAfter}s`);
+      await wait(retryAfter * 1000);
       continue;
     }
 
     if (!res.ok) throw new Error(`Slack HTTP ${res.status} on ${endpoint}`);
 
     const data = (await res.json()) as any;
-    if (!data.ok) throw new Error(`Slack API error: ${data.error} (${endpoint})`);
+    if (!data.ok) throw apiError(data, endpoint);
     return data;
   }
 
   throw new Error(`Slack: max retries exceeded for ${endpoint}`);
 }
 
-async function slackPost(endpoint: string, body: Record<string, unknown>): Promise<any> {
-  const token = getToken();
+async function slackPost(
+  endpoint: string,
+  body: Record<string, unknown>,
+  deps: SlackApiDeps = {},
+): Promise<any> {
+  const token = resolveToken(deps);
+  const fetchFn = deps.fetchFn ?? fetch;
+  const wait = deps.delayFn ?? delay;
   const url = `${SLACK_BASE}/${endpoint}`;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const res = await fetch(url, {
+    const res = await fetchFn(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -92,25 +141,40 @@ async function slackPost(endpoint: string, body: Record<string, unknown>): Promi
     });
 
     if (res.status === 429) {
-      const retryAfter = parseInt(res.headers.get('Retry-After') ?? '5', 10);
-      log('warn', 'slack:rate-limited', `POST ${endpoint} — retry after ${retryAfter}s`);
-      await delay(retryAfter * 1000);
+      const retryAfter = parseInt(res.headers.get('Retry-After') ?? '60', 10);
+      appLog('warn', 'slack:rate-limited', `POST ${endpoint} — retry after ${retryAfter}s`);
+      await wait(retryAfter * 1000);
       continue;
     }
 
     if (!res.ok) throw new Error(`Slack HTTP ${res.status} on ${endpoint}`);
 
     const data = (await res.json()) as any;
-    if (!data.ok) throw new Error(`Slack API error: ${data.error} (${endpoint})`);
+    if (!data.ok) throw apiError(data, endpoint);
     return data;
   }
 
   throw new Error(`Slack: max retries exceeded for ${endpoint}`);
 }
 
-// ── listChannels ───────────────────────────────────────────────────────────
+function mapMessage(message: any): SlackMessage {
+  return {
+    ts: message.ts as string,
+    user: (message.user as string) ?? '',
+    text: (message.text as string) ?? '',
+    threadTs: message.thread_ts as string | undefined,
+    replyCount: message.reply_count as number | undefined,
+    latestReply: message.latest_reply as string | undefined,
+  };
+}
 
-export async function listChannels(): Promise<SlackChannel[]> {
+function sortAndDedupeMessages(messages: SlackMessage[]): SlackMessage[] {
+  const byTs = new Map<string, SlackMessage>();
+  for (const message of messages) byTs.set(message.ts, message);
+  return [...byTs.values()].sort((a, b) => parseFloat(a.ts) - parseFloat(b.ts));
+}
+
+export async function listChannels(deps: SlackApiDeps = {}): Promise<SlackChannel[]> {
   const channels: SlackChannel[] = [];
   let cursor: string | undefined;
 
@@ -122,13 +186,13 @@ export async function listChannels(): Promise<SlackChannel[]> {
     };
     if (cursor) params.cursor = cursor;
 
-    const data = await slackGet('conversations.list', params);
-    for (const ch of data.channels ?? []) {
+    const data = await slackGet('conversations.list', params, deps);
+    for (const channel of data.channels ?? []) {
       channels.push({
-        id: ch.id as string,
-        name: ch.name as string,
-        isPrivate: (ch.is_private as boolean) ?? false,
-        isMember: (ch.is_member as boolean) ?? false,
+        id: channel.id as string,
+        name: channel.name as string,
+        isPrivate: (channel.is_private as boolean) ?? false,
+        isMember: (channel.is_member as boolean) ?? false,
       });
     }
     cursor = (data.response_metadata?.next_cursor as string) || undefined;
@@ -137,141 +201,177 @@ export async function listChannels(): Promise<SlackChannel[]> {
   return channels;
 }
 
-// ── getChannelHistory ──────────────────────────────────────────────────────
-
+/** Fetch every history page after the persisted timestamp cursor. */
 export async function getChannelHistory(
   channelId: string,
   sinceCursor?: string,
-): Promise<{ messages: SlackMessage[]; nextCursor?: string }> {
-  const params: Record<string, string> = {
-    channel: channelId,
-    limit: '200',
-  };
-  if (sinceCursor) params.oldest = sinceCursor;
+  deps: SlackApiDeps = {},
+): Promise<{ messages: SlackMessage[] }> {
+  const messages: SlackMessage[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
 
-  const data = await slackGet('conversations.history', params);
+  do {
+    const params: Record<string, string> = {
+      channel: channelId,
+      limit: CONVERSATIONS_PAGE_SIZE,
+    };
+    if (sinceCursor) params.oldest = sinceCursor;
+    if (cursor) params.cursor = cursor;
 
-  const messages: SlackMessage[] = (data.messages ?? []).map((m: any) => ({
-    ts: m.ts as string,
-    user: (m.user as string) ?? '',
-    text: (m.text as string) ?? '',
-    threadTs: m.thread_ts as string | undefined,
-    replyCount: m.reply_count as number | undefined,
-    latestReply: m.latest_reply as string | undefined,
-  }));
+    const data = await slackGet('conversations.history', params, deps);
+    messages.push(...(data.messages ?? []).map(mapMessage));
 
-  const nextCursor = (data.response_metadata?.next_cursor as string) || undefined;
-  return { messages, nextCursor };
+    const next = (data.response_metadata?.next_cursor as string) || undefined;
+    if (next && seenCursors.has(next)) {
+      throw new Error('Slack returned a repeated conversations.history cursor');
+    }
+    if (next) seenCursors.add(next);
+    cursor = next;
+  } while (cursor);
+
+  return { messages: sortAndDedupeMessages(messages) };
 }
 
-// ── getThreadReplies ───────────────────────────────────────────────────────
-
+/** Fetch every page in a channel thread. Public/private channels need xoxp. */
 export async function getThreadReplies(
   channelId: string,
   ts: string,
+  deps: SlackApiDeps = {},
 ): Promise<SlackMessage[]> {
+  const token = resolveToken(deps);
+  if (classifySlackToken(token) !== 'user') {
+    throw new Error('Slack channel threads require a User OAuth Token (xoxp-…), not a bot token');
+  }
+
   const replies: SlackMessage[] = [];
+  const seenCursors = new Set<string>();
   let cursor: string | undefined;
 
   do {
     const params: Record<string, string> = {
       channel: channelId,
       ts,
-      limit: '200',
+      limit: CONVERSATIONS_PAGE_SIZE,
     };
     if (cursor) params.cursor = cursor;
 
-    const data = await slackGet('conversations.replies', params);
-    for (const m of data.messages ?? []) {
-      replies.push({
-        ts: m.ts as string,
-        user: (m.user as string) ?? '',
-        text: (m.text as string) ?? '',
-        threadTs: m.thread_ts as string | undefined,
-      });
+    const data = await slackGet('conversations.replies', params, deps);
+    replies.push(...(data.messages ?? []).map(mapMessage));
+
+    const next = (data.response_metadata?.next_cursor as string) || undefined;
+    if (next && seenCursors.has(next)) {
+      throw new Error('Slack returned a repeated conversations.replies cursor');
     }
-    cursor = (data.response_metadata?.next_cursor as string) || undefined;
+    if (next) seenCursors.add(next);
+    cursor = next;
   } while (cursor);
 
-  return replies;
+  return sortAndDedupeMessages(replies);
 }
 
-// ── postMessage ────────────────────────────────────────────────────────────
-
-export async function postMessage(channelId: string, text: string): Promise<void> {
-  await slackPost('chat.postMessage', { channel: channelId, text });
-  log('info', 'slack:message-posted', `channel ${channelId}`);
+export async function postMessage(
+  channelId: string,
+  text: string,
+  deps: SlackApiDeps = {},
+): Promise<void> {
+  await slackPost('chat.postMessage', { channel: channelId, text }, deps);
+  appLog('info', 'slack:message-posted', `channel ${channelId}`);
 }
-
-// ── User resolution ────────────────────────────────────────────────────────
 
 const userCache = new Map<string, SlackUser>();
 
-export async function resolveUser(userId: string): Promise<SlackUser | null> {
+export async function resolveUser(
+  userId: string,
+  deps: SlackApiDeps = {},
+): Promise<SlackUser | null> {
   if (userCache.has(userId)) return userCache.get(userId)!;
 
   try {
-    const data = await slackGet('users.info', { user: userId });
-    const u = data.user;
+    const data = await slackGet('users.info', { user: userId }, deps);
+    const raw = data.user;
     const user: SlackUser = {
-      id: u.id as string,
-      name: (u.name as string) ?? '',
-      displayName: (u.profile?.display_name as string) ?? '',
-      realName: ((u.profile?.real_name ?? u.real_name) as string) ?? '',
+      id: raw.id as string,
+      name: (raw.name as string) ?? '',
+      displayName: (raw.profile?.display_name as string) ?? '',
+      realName: ((raw.profile?.real_name ?? raw.real_name) as string) ?? '',
     };
     userCache.set(userId, user);
     return user;
-  } catch (err: any) {
-    log('warn', 'slack:resolve-user-failed', `${userId}: ${err.message}`);
+  } catch (error: any) {
+    appLog('warn', 'slack:resolve-user-failed', `${userId}: ${error.message}`);
     return null;
   }
 }
 
-// ── Token validation ───────────────────────────────────────────────────────
-
 export async function validateToken(
   token: string,
-): Promise<{ ok: boolean; teamName?: string; botName?: string; error?: string }> {
+  deps: Omit<SlackApiDeps, 'token'> = {},
+): Promise<{
+  ok: boolean;
+  teamName?: string;
+  userName?: string;
+  tokenType: SlackTokenType;
+  error?: string;
+}> {
+  const tokenType = classifySlackToken(token);
+  if (tokenType === 'bot') {
+    return {
+      ok: false,
+      tokenType,
+      error: 'Bot tokens cannot read public/private channel threads. Use a User OAuth Token beginning xoxp-.',
+    };
+  }
+  if (tokenType !== 'user') {
+    return { ok: false, tokenType, error: 'Unsupported Slack token. Use a User OAuth Token beginning xoxp-.' };
+  }
+
   try {
-    const res = await fetch(`${SLACK_BASE}/auth.test`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json; charset=utf-8',
-      },
-      body: JSON.stringify({}),
-    });
-    const data = (await res.json()) as any;
-    if (!data.ok) return { ok: false, error: data.error as string };
-    return { ok: true, teamName: data.team as string, botName: data.user as string };
-  } catch (err: any) {
-    return { ok: false, error: err.message };
+    const data = await slackPost('auth.test', {}, { ...deps, token });
+    return {
+      ok: true,
+      teamName: data.team as string,
+      userName: data.user as string,
+      tokenType,
+    };
+  } catch (error: any) {
+    return { ok: false, tokenType, error: error.message };
   }
 }
 
-export function isSlackConnected(): boolean {
-  const config = getConfig();
-  return !!(config as any).slackBotToken;
+export function getSlackConnectionInfo(): SlackConnectionInfo {
+  const token = configuredToken();
+  if (!token) return { connected: false, tokenType: 'none', threadCapable: false };
+  const tokenType = classifySlackToken(token);
+  return { connected: true, tokenType, threadCapable: tokenType === 'user' };
 }
 
-// ── Wiser-note write (placeholder) ────────────────────────────────────────
+export function isSlackConnected(): boolean {
+  return getSlackConnectionInfo().connected;
+}
 
-/**
- * Post a formatted Wiser note to a channel in the write list.
- *
- * PLACEHOLDER: this function is wired but intentionally never called
- * automatically. No code path invokes it in this PRD — it is an explicit
- * entry point for future Wiser integration.
- */
-export async function postWiserNote(channelId: string, note: string): Promise<void> {
-  const config = getConfig();
-  const writeChannels: string[] = (config as any).slackWriteChannels ?? [];
+export interface PostWiserNoteDeps extends SlackApiDeps {
+  writeChannels?: string[];
+}
+
+/** Post an explicitly user-requested Wiser note to an allowed write channel. */
+export async function postWiserNote(
+  channelId: string,
+  note: string,
+  deps: PostWiserNoteDeps = {},
+): Promise<void> {
+  const writeChannels = deps.writeChannels ?? (() => {
+    const { getConfig } = require('./config') as typeof import('./config');
+    return ((getConfig() as any).slackWriteChannels ?? []) as string[];
+  })();
 
   if (!writeChannels.includes(channelId)) {
     throw new Error(`Channel ${channelId} is not in the Slack write-channels list`);
   }
 
-  const formatted = `*Wiser Note*\n${note}`;
-  await postMessage(channelId, formatted);
-  log('info', 'slack:wiser-note', `Posted to channel ${channelId}`);
+  const trimmed = note.trim();
+  if (!trimmed) throw new Error('Slack note cannot be empty');
+
+  await postMessage(channelId, `*Wiser Note*\n${trimmed}`, deps);
+  appLog('info', 'slack:wiser-note', `Posted to channel ${channelId}`);
 }

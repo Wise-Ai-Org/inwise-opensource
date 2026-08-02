@@ -45,6 +45,9 @@ interface Config {
   jiraTokens: any | null;
   jiraAutoPush: boolean;
   jiraDefaultProject: string;
+  /** User OAuth token (xoxp) used for channel history and thread replies. */
+  slackUserToken: string;
+  /** @deprecated legacy bot-token storage; retained for migration/status messaging. */
   slackBotToken: string;
   slackReadChannels: string[];
   slackWriteChannels: string[];
@@ -86,6 +89,7 @@ const store = new Store<Config>({
     jiraTokens: null,
     jiraAutoPush: false,
     jiraDefaultProject: '',
+    slackUserToken: '',
     slackBotToken: '',
     slackReadChannels: [],
     slackWriteChannels: [],
@@ -281,5 +285,4 @@ export function migrateLegacyCalendars(): { migrated: boolean; added: number } {
   store.set('calendars', seeded);
   return { migrated: true, added: seeded.length };
 }
-
 

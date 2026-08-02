@@ -13,6 +13,7 @@ interface Config {
   jiraClientSecret: string;
   jiraAutoPush: boolean;
   jiraDefaultProject: string;
+  slackUserToken?: string;
   slackBotToken: string;
   slackReadChannels: string[];
   slackWriteChannels: string[];
@@ -627,11 +628,16 @@ interface SlackChannel {
 
 function SlackSettings() {
   const [token, setToken] = useState('');
-  const [status, setStatus] = useState<{ connected: boolean } | null>(null);
+  const [status, setStatus] = useState<{
+    connected: boolean;
+    tokenType?: 'user' | 'bot' | 'unknown' | 'none';
+    threadCapable?: boolean;
+  } | null>(null);
+  const [oauthConnecting, setOauthConnecting] = useState(false);
   const [validating, setValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [teamName, setTeamName] = useState<string | undefined>();
-  const [botName, setBotName] = useState<string | undefined>();
+  const [slackUserName, setSlackUserName] = useState<string | undefined>();
 
   // Channel + inactivity settings (shown when connected)
   const [channels, setChannels] = useState<SlackChannel[]>([]);
@@ -659,22 +665,47 @@ function SlackSettings() {
       const result = await (window as any).inwiseAPI.slackListChannels?.();
       if (result?.ok) {
         setChannels(result.channels ?? []);
+        setError(null);
+      } else {
+        setError(result?.error ?? 'Could not load Slack channels');
       }
+    } catch (e: any) {
+      setError(e.message);
     } finally {
       setLoadingChannels(false);
     }
   };
 
-  const connect = async () => {
+  const connectOAuth = async () => {
+    setOauthConnecting(true);
+    setError(null);
+    try {
+      const result = await (window as any).inwiseAPI.slackConnectOAuth?.();
+      if (result?.ok) {
+        setStatus({ connected: true, tokenType: result.tokenType, threadCapable: true });
+        setTeamName(result.teamName);
+        setSlackUserName(result.userName);
+        await loadChannels();
+      } else {
+        setError(result?.error ?? 'Slack authorization failed');
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setOauthConnecting(false);
+    }
+  };
+
+  const connectWithToken = async () => {
     if (!token.trim()) return;
     setValidating(true);
     setError(null);
     try {
       const result = await (window as any).inwiseAPI.slackConnect?.(token.trim());
       if (result?.ok) {
-        setStatus({ connected: true });
+        setStatus({ connected: true, tokenType: result.tokenType, threadCapable: true });
         setTeamName(result.teamName);
-        setBotName(result.botName);
+        setSlackUserName(result.userName);
         setToken('');
         loadChannels();
       } else {
@@ -689,9 +720,9 @@ function SlackSettings() {
 
   const disconnect = async () => {
     await (window as any).inwiseAPI.slackDisconnect?.();
-    setStatus({ connected: false });
+    setStatus({ connected: false, tokenType: 'none', threadCapable: false });
     setTeamName(undefined);
-    setBotName(undefined);
+    setSlackUserName(undefined);
     setChannels([]);
   };
 
@@ -713,8 +744,9 @@ function SlackSettings() {
   return (
     <div>
       <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16, lineHeight: 1.6 }}>
-        Connect Slack by pasting a bot token. The token is stored locally and never sent to any server.
-        Create a bot at <strong>api.slack.com/apps</strong>, add it to your workspace, and copy the Bot User OAuth Token.
+        Connect in your browser, choose a workspace, and review the permissions Slack displays. There is
+        nothing to create or paste. Your workspace token is handed securely to this app and stored only on
+        this computer.
       </p>
 
       {status?.connected ? (
@@ -722,10 +754,17 @@ function SlackSettings() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--green-500, #22c55e)', display: 'inline-block' }} />
             <span style={{ fontSize: 13, color: 'var(--slate-700)' }}>
-              Connected{teamName ? ` to ${teamName}` : ''}{botName ? ` as ${botName}` : ''}
+              Connected{teamName ? ` to ${teamName}` : ''}{slackUserName ? ` as ${slackUserName}` : ''}
             </span>
             <button className="btn btn-secondary" style={{ marginLeft: 'auto' }} onClick={disconnect}>Disconnect</button>
           </div>
+
+          {status.threadCapable === false && (
+            <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 16, lineHeight: 1.5 }}>
+              This is a legacy bot-token connection. Disconnect it and reconnect with an xoxp User OAuth Token
+              before enabling read channels; Slack blocks bot tokens from reading channel thread replies.
+            </div>
+          )}
 
           <div className="form-group">
             <label className="form-label">
@@ -759,6 +798,9 @@ function SlackSettings() {
 
           <div className="form-group">
             <label className="form-label">Write channels</label>
+            <span style={{ fontSize: 12, color: 'var(--slate-500)', display: 'block', marginBottom: 6 }}>
+              Meeting detail pages can post an explicit Wiser recap only to the channels selected here.
+            </span>
             {channels.length > 0 ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
                 {channels.map(ch => (
@@ -777,24 +819,29 @@ function SlackSettings() {
             )}
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Inactivity window (minutes)</label>
-            <input
-              type="number"
-              className="form-input"
-              min={1}
-              max={1440}
-              style={{ width: 100 }}
-              value={inactivityWindowMin}
-              onChange={e => {
-                setInactivityWindowMin(parseInt(e.target.value, 10) || 60);
-                setSettingsSaved(false);
-              }}
-            />
-            <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
-              A thread is only processed after this many minutes of silence. Default: 60.
-            </span>
-          </div>
+          <details style={{ marginBottom: 16 }}>
+            <summary style={{ fontSize: 12, color: 'var(--slate-500)', cursor: 'pointer' }}>
+              Advanced sync timing
+            </summary>
+            <div className="form-group" style={{ marginTop: 10 }}>
+              <label className="form-label">Thread inactivity window (minutes)</label>
+              <input
+                type="number"
+                className="form-input"
+                min={1}
+                max={1440}
+                style={{ width: 100 }}
+                value={inactivityWindowMin}
+                onChange={e => {
+                  setInactivityWindowMin(parseInt(e.target.value, 10) || 60);
+                  setSettingsSaved(false);
+                }}
+              />
+              <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
+                Threads are imported after this much silence. The default is 60 minutes.
+              </span>
+            </div>
+          </details>
 
           <button className="btn btn-primary" onClick={saveSettings}>
             {settingsSaved ? 'Saved!' : 'Save Slack Settings'}
@@ -802,27 +849,47 @@ function SlackSettings() {
         </div>
       ) : (
         <div>
-          <div className="form-group">
-            <label className="form-label">Bot Token</label>
-            <input
-              type="password"
-              className="form-input"
-              value={token}
-              onChange={e => setToken(e.target.value)}
-              placeholder="xoxb-…"
-              style={{ fontFamily: 'monospace' }}
-            />
-          </div>
           {error && (
-            <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 8 }}>&#x2715; {error}</div>
+            <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 12 }}>&#x2715; {error}</div>
           )}
           <button
             className="btn btn-primary"
-            disabled={validating || !token.trim()}
-            onClick={connect}
+            disabled={oauthConnecting}
+            onClick={connectOAuth}
           >
-            {validating ? 'Validating…' : 'Connect Slack'}
+            {oauthConnecting ? 'Waiting for Slack…' : 'Connect Slack'}
           </button>
+
+          <details style={{ marginTop: 16 }}>
+            <summary style={{ fontSize: 12, color: 'var(--slate-500)', cursor: 'pointer' }}>
+              Advanced: use your own Slack app or token
+            </summary>
+            <p style={{ fontSize: 12, color: 'var(--slate-500)', lineHeight: 1.55, margin: '12px 0' }}>
+              For self-hosted forks, create a Slack app with these User Token Scopes, install it, and paste its
+              <strong> xoxp-</strong> token:
+              <code style={{ display: 'block', marginTop: 6, whiteSpace: 'normal' }}>
+                channels:read, groups:read, channels:history, groups:history, users:read, chat:write
+              </code>
+            </p>
+            <div className="form-group">
+              <label className="form-label">User OAuth Token</label>
+              <input
+                type="password"
+                className="form-input"
+                value={token}
+                onChange={e => setToken(e.target.value)}
+                placeholder="xoxp-…"
+                style={{ fontFamily: 'monospace' }}
+              />
+            </div>
+            <button
+              className="btn btn-secondary"
+              disabled={validating || !token.trim() || oauthConnecting}
+              onClick={connectWithToken}
+            >
+              {validating ? 'Validating…' : 'Connect with token'}
+            </button>
+          </details>
         </div>
       )}
     </div>
