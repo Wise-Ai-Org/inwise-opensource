@@ -72,6 +72,25 @@ async function run(): Promise<void> {
   const allZoomImports = await meetingsDb.findAsync({ source: 'zoom_cloud_recording', externalId: 'zoom-uuid-abc123' });
   assert.equal(allZoomImports.length, 1, 're-import does not create duplicate meeting');
 
+  const teamsFixture: NormalizedTranscript = {
+    ...FIXTURE,
+    meetingId: 'teams-meeting-1',
+    externalId: 'teams-transcript-1',
+    sourceMetadata: { teamsTranscriptId: 'teams-transcript-1' },
+  };
+  const teamsMeetingId = await ingestNormalizedTranscript(teamsFixture, {
+    source: 'teams_transcript',
+    runInsights: stubInsights,
+  });
+  const teamsMeeting = await meetingsDb.findOneAsync({ _id: teamsMeetingId });
+  assert.equal(teamsMeeting.source, 'teams_transcript', 'caller-selected source stored');
+  assert.equal(teamsMeeting.sourceMetadata.platformMeetingId, 'teams-meeting-1');
+  const teamsMeetingIdAgain = await ingestNormalizedTranscript(
+    { ...teamsFixture, title: 'Updated Teams title' },
+    { source: 'teams_transcript', runInsights: stubInsights },
+  );
+  assert.equal(teamsMeetingIdAgain, teamsMeetingId, 'Teams platform transcript is idempotent');
+
   // ── insights failure is non-fatal ─────────────────────────────────────────
   const throwingInsights = async () => { throw new Error('LLM unavailable'); };
   const meetingId2 = await ingestNormalizedTranscript(

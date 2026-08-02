@@ -70,7 +70,13 @@ interface Config {
   autostartConfigured: boolean;
 }
 
+// Node-run unit tests import database.ts without an Electron app context. Give
+// them an explicit, task-scoped config directory instead of touching a real
+// user's electron-store fallback directory.
+const testConfigDir = process.env.INWISE_TEST_CONFIG_DIR?.trim();
+
 const store = new Store<Config>({
+  ...(testConfigDir ? { cwd: testConfigDir } : {}),
   defaults: {
     apiProvider: 'anthropic',
     apiKey: '',

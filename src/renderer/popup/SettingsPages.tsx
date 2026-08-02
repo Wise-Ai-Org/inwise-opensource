@@ -20,16 +20,20 @@ const INTEGRATION_ROWS: Array<{ key: SettingsSectionKey; icon: string; label: st
   { key: 'jira', icon: '⇄', label: 'Jira' },
   { key: 'slack', icon: '#', label: 'Slack' },
   { key: 'zoom', icon: '◎', label: 'Zoom' },
+  { key: 'teams', icon: 'T', label: 'Microsoft Teams' },
+  { key: 'meet', icon: 'M', label: 'Google Meet' },
   { key: 'integrations', icon: '⚙', label: 'Approval gates & sync' },
 ];
 
 async function fetchIntegrationStatuses(): Promise<Record<string, string>> {
   const a = api();
-  const [cals, jira, slack, zoom] = await Promise.allSettled([
+  const [cals, jira, slack, zoom, teams, meet] = await Promise.allSettled([
     a.listCalendars?.(),
     a.jiraStatus?.(),
     a.slackStatus?.(),
     a.zoomStatus?.(),
+    a.teamsStatus?.(),
+    a.meetStatus?.(),
   ]);
   const next: Record<string, string> = {};
   if (cals.status === 'fulfilled' && Array.isArray(cals.value)) {
@@ -41,6 +45,8 @@ async function fetchIntegrationStatuses(): Promise<Record<string, string>> {
   next['jira'] = connLabel(jira);
   next['slack'] = connLabel(slack);
   next['zoom'] = connLabel(zoom);
+  next['teams'] = connLabel(teams);
+  next['meet'] = connLabel(meet);
   next['integrations'] = 'What syncs, and when to ask first';
   return next;
 }
@@ -73,11 +79,11 @@ export function SettingsRootPage() {
       }
       next['data'] = 'Local only · export or clear';
       if (integrations.status === 'fulfilled') {
-        const connected = ['calendar', 'jira', 'slack', 'zoom'].filter(k => {
-          const v = integrations.value[k] || '';
-          return v.includes('connected') || v === 'Connected';
+        const connected = ['calendar', 'jira', 'slack', 'zoom', 'teams', 'meet'].filter(k => {
+          const value = integrations.value[k] || '';
+          return value === 'Connected' || /^\d+ calendars? connected$/.test(value);
         }).length;
-        next['integrations-hub'] = `${connected} of 4 connected`;
+        next['integrations-hub'] = `${connected} of 6 connected`;
       }
       setSubs(next);
     });
@@ -266,7 +272,7 @@ function ZoomConnectHeader() {
 
 // ── Section page ─────────────────────────────────────────────────────────────
 
-const AUTH_SECTIONS: SettingsSectionKey[] = ['zoom', 'calendar', 'jira', 'slack'];
+const AUTH_SECTIONS: SettingsSectionKey[] = ['zoom', 'teams', 'meet', 'calendar', 'jira', 'slack'];
 
 export function SettingsSectionPage({ section, title }: { section: SettingsSectionKey; title: string }) {
   const { pop } = useNav();
