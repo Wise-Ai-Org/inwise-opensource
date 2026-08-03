@@ -1618,6 +1618,7 @@ interface McpStatus {
 
 function ConnectToAISection() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [writebackEnabled, setWritebackEnabled] = useState(false);
   const [port, setPort] = useState<number>(43117);
   const [portInput, setPortInput] = useState('43117');
   const [status, setStatus] = useState<McpStatus | null>(null);
@@ -1633,6 +1634,7 @@ function ConnectToAISection() {
     (window as any).inwiseAPI.getConfig?.().then((cfg: any) => {
       if (cfg) {
         setEnabled(cfg.mcpEnabled !== false);
+        setWritebackEnabled(cfg.mcpWritebackEnabled === true);
         const p = typeof cfg.mcpPort === 'number' ? cfg.mcpPort : 43117;
         setPort(p);
         setPortInput(String(p));
@@ -1671,6 +1673,21 @@ function ConnectToAISection() {
     }
   };
 
+  const toggleWriteback = async (next: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await (window as any).inwiseAPI.mcpSetWritebackEnabled?.(next);
+      if (result && result.ok === false) {
+        setError(result.error ?? 'Could not change action writeback access.');
+      } else {
+        setWritebackEnabled(next);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (enabled === null) return null;
 
   const effectivePort = status?.running && status.port ? status.port : port;
@@ -1690,9 +1707,9 @@ function ConnectToAISection() {
     <div className="settings-section">
       <div className="settings-section-title">Connect to AI</div>
       <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16, lineHeight: 1.6 }}>
-        Let Claude Desktop, Claude Code, or Codex answer questions about your meetings.
-        Inwise runs a small server on this machine only (127.0.0.1) — read-only,
-        and nothing ever leaves your computer.
+        Let Claude Desktop, Claude Code, OpenWorker, or Codex use your meeting memory.
+        Inwise listens on this machine only (127.0.0.1). Your connected AI client may
+        send the content it reads to its configured AI provider.
       </p>
 
       <div className="form-group">
@@ -1714,6 +1731,31 @@ function ConnectToAISection() {
             <span style={{ color: 'var(--slate-400)' }}>○ Stopped</span>
           )}
         </div>
+      </div>
+
+      <div className="form-group">
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: enabled ? 'pointer' : 'default' }}>
+          <input
+            type="checkbox"
+            checked={writebackEnabled}
+            disabled={busy || !enabled}
+            onChange={e => toggleWriteback(e.target.checked)}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            <span className="form-label" style={{ margin: 0 }}>Allow approved action writeback</span>
+            <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block', lineHeight: 1.55 }}>
+              Adds three write tools for approved execution plans, outcome summaries and artifact links,
+              and action-item status changes. Inwise never calls external apps itself; your AI client does,
+              and must record your approval before starting each run.
+            </span>
+          </span>
+        </label>
+        {writebackEnabled && (
+          <div style={{ fontSize: 12, marginTop: 8, padding: '8px 10px', borderRadius: 6, background: 'var(--amber-50, #fffbeb)', color: 'var(--amber-800, #92400e)', lineHeight: 1.5 }}>
+            Writeback is enabled. Review every proposed plan, external tool, recipient, and data-sharing scope in your AI client before approving it.
+          </div>
+        )}
       </div>
 
       <div className="form-group">
@@ -1756,6 +1798,7 @@ function ConnectToAISection() {
           <li>"What did we decide in last Tuesday's meeting?"</li>
           <li>"Summarize my most recent meeting with Alex."</li>
           <li>"Which action items from this week are still open?"</li>
+          {writebackEnabled && <li>"Draft a follow-up for this action item. Show me the plan and tools before you act, then save the outcome to Inwise."</li>}
         </ul>
       </div>
     </div>

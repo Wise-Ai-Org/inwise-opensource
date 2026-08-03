@@ -65,6 +65,7 @@ import {
 import {
   initPendingApprovals, stashPending, listPending, getPending, removePending,
 } from './sor-pending-approvals';
+import { initActionExecutionLog } from './action-execution-log';
 import { matchAllItems, semanticMatch } from './jira-matcher';
 import { scoreTasks } from './task-scorer';
 import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from '@inwise/desktop-shared';
@@ -3101,6 +3102,7 @@ app.whenReady().then(() => {
   }).catch(() => { /* repair pass is best-effort */ });
   initSorWriteLog();
   initPendingApprovals();
+  initActionExecutionLog();
   onWriteCompleted((entry) => {
     mainWindow?.webContents.send('sor:write-completed', entry);
   });
@@ -3160,7 +3162,8 @@ app.whenReady().then(() => {
   // Start Slack poller (delayed 10 s to let the main window settle)
   setTimeout(() => startSlackPoller(), 10_000);
 
-  // Local MCP server ("Connect to AI") — loopback-only, read-only.
+  // Local MCP server ("Connect to AI") — loopback-only. Action writeback has
+  // its own default-off preference and requires an approval record per run.
   // The watcher's event cache is handed over as a getter so mcp-server.ts stays
   // free of Electron/network imports; with no calendar connected it returns [].
   setUpcomingEventsProvider(() => calendarWatcher.getUpcomingEvents());
@@ -3261,6 +3264,11 @@ ipcMain.handle('mcp:setPort', async (_e, port: number) => {
     return startMcpServer(p);
   }
   return { ok: true, port: p };
+});
+
+ipcMain.handle('mcp:setWritebackEnabled', (_e, enabled: boolean) => {
+  setConfig({ mcpWritebackEnabled: !!enabled });
+  return { ok: true, enabled: getMcpPrefs().writebackEnabled };
 });
 
 app.on('before-quit', () => {

@@ -57,6 +57,16 @@ interface DetailedTask {
     slackThreadId?: string | null;
   };
   distillationSessionId?: string;
+  executionSummary?: {
+    executionId: string;
+    status: 'running' | 'completed' | 'failed' | 'cancelled';
+    objective: string;
+    latestOutcomeSummary?: string | null;
+    artifacts?: Array<{ type: string; label: string; url: string; externalId?: string | null }>;
+    remainingWork?: string | null;
+    approvedBy?: string;
+    updatedAt: string;
+  };
 }
 
 interface TaskDetailSidebarProps {
@@ -891,6 +901,65 @@ export default function TaskDetailSidebar({
                   onSave={val => saveField('description', val)}
                   renderValue={val => <Text fontSize="sm" color="gray.700" whiteSpace="pre-wrap">{val}</Text>} />
               </Box>
+
+              {/* ── Approved AI execution writeback ── */}
+              {task.executionSummary && (
+                <Section label="AI execution" icon={MdSync}>
+                  <VStack align="stretch" spacing={3}>
+                    <HStack justify="space-between" align="start">
+                      <Text fontSize="sm" fontWeight="semibold" color="gray.700">
+                        {task.executionSummary.objective}
+                      </Text>
+                      <Badge
+                        colorScheme={
+                          task.executionSummary.status === 'completed'
+                            ? 'green'
+                            : task.executionSummary.status === 'failed'
+                              ? 'red'
+                              : task.executionSummary.status === 'cancelled'
+                                ? 'gray'
+                                : 'blue'
+                        }
+                        flexShrink={0}
+                      >
+                        {task.executionSummary.status}
+                      </Badge>
+                    </HStack>
+                    {task.executionSummary.latestOutcomeSummary && (
+                      <Box p={3} bg="teal.50" borderRadius="md" borderLeft="3px solid" borderLeftColor="teal.400">
+                        <Text fontSize="xs" fontWeight="semibold" color="teal.700" mb={1}>Latest outcome</Text>
+                        <Text fontSize="sm" color="gray.700" whiteSpace="pre-wrap">
+                          {task.executionSummary.latestOutcomeSummary}
+                        </Text>
+                      </Box>
+                    )}
+                    {(task.executionSummary.artifacts?.length ?? 0) > 0 && (
+                      <VStack align="stretch" spacing={1}>
+                        {task.executionSummary.artifacts!.map((artifact, index) => (
+                          <Button
+                            key={`${artifact.url}-${index}`}
+                            variant="ghost"
+                            size="sm"
+                            justifyContent="flex-start"
+                            leftIcon={<ExternalLinkIcon />}
+                            onClick={() => api.openExternal(artifact.url)}
+                          >
+                            {artifact.label}
+                          </Button>
+                        ))}
+                      </VStack>
+                    )}
+                    {task.executionSummary.remainingWork && (
+                      <Text fontSize="xs" color="orange.700">
+                        Remaining: {task.executionSummary.remainingWork}
+                      </Text>
+                    )}
+                    <Text fontSize="xs" color={labelColor}>
+                      Approved by {task.executionSummary.approvedBy || 'the user'} · {formatRelativeTime(task.executionSummary.updatedAt)}
+                    </Text>
+                  </VStack>
+                </Section>
+              )}
 
               {/* ── Definition of Done ── */}
               {task.definition && (task.definition.acceptanceCriteria?.length || task.definition.outcome) ? (

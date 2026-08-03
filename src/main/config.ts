@@ -54,10 +54,12 @@ interface Config {
   welcomeBackLastSeenAt: string | null;
   calendarFreeRecordingEnabled: boolean;
   sor: SorPrefs;
-  /** Local MCP server ("Connect to AI"): loopback-only, read-only access for MCP clients like Claude Desktop / Claude Code. */
+  /** Local MCP server ("Connect to AI"): loopback-only access for MCP clients like Claude Desktop / Claude Code. */
   mcpEnabled: boolean;
   /** Port the local MCP server listens on (127.0.0.1 only). */
   mcpPort: number;
+  /** Opt-in: let approved MCP executions write outcomes/statuses back to local action items. */
+  mcpWritebackEnabled: boolean;
   /** Last dragged position of the recorder pill; null = default top-left. */
   pillX: number | null;
   pillY: number | null;
@@ -97,6 +99,7 @@ const store = new Store<Config>({
     calendarFreeRecordingEnabled: true,
     mcpEnabled: true,
     mcpPort: 43117,
+    mcpWritebackEnabled: false,
     pillX: null,
     pillY: null,
     dailyPlanEnabled: true,
@@ -133,12 +136,16 @@ export function getSorJiraPrefs(): SorJiraPrefs {
  * existed may not have them persisted — fall back to the shipped defaults
  * (enabled, port 43117) instead of `undefined`.
  */
-export function getMcpPrefs(): { enabled: boolean; port: number } {
+export function getMcpPrefs(): { enabled: boolean; port: number; writebackEnabled: boolean } {
   const enabled = store.get('mcpEnabled') as boolean | undefined;
   const port = store.get('mcpPort') as number | undefined;
+  const writebackEnabled = store.get('mcpWritebackEnabled') as boolean | undefined;
   return {
     enabled: typeof enabled === 'boolean' ? enabled : true,
     port: typeof port === 'number' && Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : 43117,
+    // Existing installs predate this setting. Keep them read-only until the
+    // user explicitly enables action writeback.
+    writebackEnabled: typeof writebackEnabled === 'boolean' ? writebackEnabled : false,
   };
 }
 
@@ -283,4 +290,3 @@ export function migrateLegacyCalendars(): { migrated: boolean; added: number } {
   store.set('calendars', seeded);
   return { migrated: true, added: seeded.length };
 }
-

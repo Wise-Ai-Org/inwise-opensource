@@ -11,6 +11,7 @@ native/whisper/darwin-*/whisper-cli
 native/whisper/darwin-*/manifest.json
 native/whisper/darwin-*/LICENSE.whisper.cpp
 tmp/test-electron-store/
+tmp/runtime-action-test/
 
 # local-only helper checkouts
 tools/

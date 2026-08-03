@@ -112,6 +112,49 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
 
             <MentionThread taskId={taskId} onChanged={() => setReloadKey(k => k + 1)} />
 
+            {task.executionSummary && (
+              <>
+                <div className="pp-seclabel">AI execution</div>
+                <div className="pp-card">
+                  <div className="pp-row" style={{ alignItems: 'flex-start' }}>
+                    <div className="pp-grow">
+                      <div className="pp-title-sm">{task.executionSummary.objective}</div>
+                      {task.executionSummary.latestOutcomeSummary && (
+                        <div style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.5, marginTop: 6 }}>
+                          {task.executionSummary.latestOutcomeSummary}
+                        </div>
+                      )}
+                    </div>
+                    <span className={`pp-chip ${task.executionSummary.status === 'completed' ? 'pp-teal' : task.executionSummary.status === 'failed' ? 'pp-amber' : ''}`}>
+                      {task.executionSummary.status}
+                    </span>
+                  </div>
+                  {(task.executionSummary.artifacts?.length || 0) > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      {task.executionSummary.artifacts.map((artifact: any, index: number) => (
+                        <button
+                          key={`${artifact.url}-${index}`}
+                          className="pp-link"
+                          style={{ display: 'block', marginTop: index ? 6 : 0, textAlign: 'left' }}
+                          onClick={() => api().openExternal?.(artifact.url)}
+                        >
+                          ↗ {artifact.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {task.executionSummary.remainingWork && (
+                    <div className="pp-meta" style={{ marginTop: 8 }}>
+                      Remaining: {task.executionSummary.remainingWork}
+                    </div>
+                  )}
+                  <div className="pp-meta" style={{ marginTop: 8 }}>
+                    Approved by {task.executionSummary.approvedBy || 'the user'}
+                  </div>
+                </div>
+              </>
+            )}
+
             {task.likelyDone && (
               <div className="pp-row" style={{ gap: 8 }}>
                 <button className="pp-btn pp-solid" style={{ flex: 1, padding: '7px 0' }} onClick={async () => {

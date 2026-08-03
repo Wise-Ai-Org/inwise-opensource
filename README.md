@@ -9,7 +9,7 @@ AI-powered meeting recorder that runs entirely on your machine. Your audio, your
 - **Your own calendars** via ICS feed — Google, Outlook, or any provider that exposes a secret ICS URL
 - **Welcome-back screen** — when you return after a gap, the app tells you what it handled for you instead of piling work on you
 - **Jira integration** — auto-push action items to stories, optional daily pull
-- **Local AI access** — connect OpenWorker or another MCP client to search meetings, prepare agendas, and follow up on action items without uploading an Inwise database
+- **Local AI access** — connect OpenWorker or another MCP client to search meetings, prepare agendas, and follow up on action items without uploading an Inwise database; optionally write approved execution outcomes back to the originating task
 
 ---
 
@@ -51,7 +51,7 @@ The Windows app downloads its whisper.cpp runtime on first use. The macOS runtim
 
 The shared TypeScript package is vendored in `src/shared`, so a normal clone contains everything required to install, test, and build the app.
 
-To use Inwise from OpenWorker, follow the [OpenWorker setup guide](./docs/openworker.md). The connection stays on this computer and exposes a pinned, read-only MCP tool set.
+To use Inwise from OpenWorker, follow the [OpenWorker setup guide](./docs/openworker.md). The connection stays on this computer. The original tool set is read-only; development builds can separately opt into [approval-aware action execution](./docs/action-execution.md).
 
 ---
 
@@ -161,7 +161,7 @@ The app ships with no pre-bundled AI models. On first use, Whisper model binarie
 - **Calendar events** come from ICS URLs you paste; we don't OAuth your Google/Microsoft account
 - **Jira** integration uses OAuth stored in your config; tokens never leave your machine except in direct calls to your Jira instance
 - **Keys and tokens at rest**: API keys and integration tokens are stored unencrypted in your user profile (`config.json` / `credentials.db`), protected by your OS user account's file permissions — the standard local-first tradeoff. Treat the app's data directory like you'd treat `~/.ssh`
-- **Local MCP server** (Settings → Connect to AI): serves meetings, action items, people, and meeting-prep context read-only to AI clients on this machine at `127.0.0.1:43117`. Meeting details return only a short transcript excerpt; full transcripts require a separate paginated tool call. Loopback-only with DNS-rebinding guards, but on a shared multi-user machine other OS accounts can reach loopback ports — turn it off in Settings there. See the [OpenWorker setup and data-boundary notes](./docs/openworker.md#understand-the-data-boundary)
+- **Local MCP server** (Settings → Connect to AI): serves meetings, action items, people, and meeting-prep context to AI clients on this machine at `127.0.0.1:43117`. Ten tools are read-only. Three default-off tools can record a user-approved execution, outcome/artifact links, and a local task-status change; the connected AI client still owns all external tool calls. Meeting details return only a short transcript excerpt; full transcripts require a separate paginated tool call. Loopback-only with DNS-rebinding guards, but on a shared multi-user machine other OS accounts can reach loopback ports — turn it off in Settings there. See the [OpenWorker data-boundary notes](./docs/openworker.md#understand-the-data-boundary) and [action-execution test flow](./docs/action-execution.md).
 - **Telemetry**: none yet. When it's added (see Roadmap) it'll be opt-in and diagnostic-only
 
 ---

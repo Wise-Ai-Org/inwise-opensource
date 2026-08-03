@@ -98,6 +98,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   mcpStatus: () => ipcRenderer.invoke('mcp:status'),
   mcpSetEnabled: (enabled: boolean) => ipcRenderer.invoke('mcp:setEnabled', enabled),
   mcpSetPort: (port: number) => ipcRenderer.invoke('mcp:setPort', port),
+  mcpSetWritebackEnabled: (enabled: boolean) => ipcRenderer.invoke('mcp:setWritebackEnabled', enabled),
 
   // Slack
   slackConnect: (token: string) => ipcRenderer.invoke('slack:connect', token),

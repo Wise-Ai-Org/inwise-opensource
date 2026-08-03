@@ -11,18 +11,31 @@ import {
   getPerson,
   getPersonAgendaContext,
   getMeetingAgendaContext,
+  updateTask,
 } from './database';
+import { getMcpPrefs } from './config';
+import {
+  appendExecutionOutcome,
+  createActionExecution,
+  getActionExecution,
+  listActionExecutionsByActionItem,
+  recordActionStatusUpdate,
+  ActionOutcomeResult,
+  ExecutionArtifact,
+  ProposedExecutionTool,
+} from './action-execution-log';
 import { log } from './logger';
 
 /**
  * Local MCP server ("Connect to AI").
  *
  * Serves the app's local meeting store to MCP clients (Claude Desktop,
- * Claude Code, etc.) over Streamable HTTP. Strictly read-only, strictly
- * loopback: the listener binds to 127.0.0.1 and every request is additionally
- * checked for a loopback peer address and a localhost Host header (defense
- * against DNS-rebinding). No auth is used: the surface never leaves the
- * machine. Caveat: on a multi-user machine, loopback is shared across OS
+ * Claude Code, etc.) over Streamable HTTP. Reads are available while the server
+ * is on. The three action-execution write tools require a separate, default-off
+ * setting plus an explicit user-approval record. The listener binds to
+ * 127.0.0.1 and every request is additionally checked for a loopback peer
+ * address and a localhost Host header (defense against DNS-rebinding). No auth
+ * is used. Caveat: on a multi-user machine, loopback is shared across OS
  * accounts, so another local user could query this port while the app runs.
  * Disable the server in Settings → Connect to AI on shared machines.
  */
@@ -39,6 +52,19 @@ export const TRANSCRIPT_EXCERPT_CHARS = 500;
 const SEARCH_DEFAULT_LIMIT = 20;
 const SEARCH_MAX_LIMIT = 50;
 const SNIPPET_RADIUS = 120;
+const APPROVAL_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const APPROVAL_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+let writebackEnabledOverride: (() => boolean) | null = null;
+
+function isWritebackEnabled(): boolean {
+  return writebackEnabledOverride ? writebackEnabledOverride() : getMcpPrefs().writebackEnabled;
+}
+
+/** Test-only/runtime override without mutating electron-store. Pass null to reset. */
+export function setMcpWritebackEnabledProvider(provider: (() => boolean) | null): void {
+  writebackEnabledOverride = provider;
+}
 
 // ── Tool handlers (exported for tests; no HTTP or Electron required) ─────────
 
@@ -205,6 +231,13 @@ export async function getActionItemHandler(args: { actionItemId: string }): Prom
   const tasks = await getTasks({ includeSnoozed: true });
   const t = tasks.find((x: any) => x._id === args.actionItemId);
   if (!t) return { error: `No action item found with id "${args.actionItemId}"` };
+  let executionHistory: any[] = [];
+  try {
+    executionHistory = await listActionExecutionsByActionItem(t._id);
+  } catch {
+    // Older/test-only callers may use the read surface without initialising the
+    // new execution log. Action-item reads should still work in that case.
+  }
   return {
     actionItemId: t._id,
     title: t.title,
@@ -220,11 +253,364 @@ export async function getActionItemHandler(args: { actionItemId: string }): Prom
     likelyDone: !!t.likelyDone,
     snoozed: t.snoozedAt != null,
     snoozedAt: t.snoozedAt || null,
-    snoozeReason: t.snoozeReason || null,
+    snoozeReason: t.snoozedReason || null,
     lastMentionedAt: t.lastMentionedAt || null,
     createdAt: t.createdAt,
     updatedAt: t.updatedAt || null,
+    executionRecommendation: buildActionExecutionRecommendation(t),
+    executionHistoryTotal: executionHistory.length,
+    executionHistory: executionHistory.slice(0, 10).map(toPublicExecution),
   };
+}
+
+function toPublicExecution(execution: any): any {
+  return {
+    executionId: execution._id,
+    actionItemId: execution.actionItemId,
+    actionItemTitle: execution.actionItemTitle,
+    objective: execution.objective,
+    plan: execution.plan || [],
+    proposedTools: execution.proposedTools || [],
+    client: execution.client,
+    approval: execution.approval,
+    status: execution.status,
+    outcomes: (execution.outcomes || []).map(toPublicOutcome),
+    auditTrail: (execution.auditTrail || []).map((event: any) => ({
+      eventId: event.id,
+      type: event.type,
+      at: event.at,
+      client: event.client,
+      details: event.details,
+    })),
+    createdAt: execution.createdAt,
+    updatedAt: execution.updatedAt,
+  };
+}
+
+function toPublicOutcome(outcome: any): any {
+  return {
+    outcomeId: outcome.id,
+    result: outcome.result,
+    summary: outcome.summary,
+    artifacts: outcome.artifacts || [],
+    remainingWork: outcome.remainingWork || null,
+    client: outcome.client,
+    createdAt: outcome.createdAt,
+  };
+}
+
+export function buildActionExecutionRecommendation(task: any): {
+  source: 'inwise-starter';
+  objective: string;
+  suggestedSteps: string[];
+  suggestedToolCategories: string[];
+  approvalReminder: string;
+} {
+  const title = String(task?.title || '').trim();
+  const text = `${title} ${task?.description || ''}`.toLowerCase();
+  let deliverable = 'a concrete draft or completed result';
+  let toolCategories = ['general productivity'];
+
+  if (/\b(email|e-mail|reply|respond|send|follow[- ]?up)\b/.test(text)) {
+    deliverable = 'a reviewed message draft, then the approved send';
+    toolCategories = ['email'];
+  } else if (/\b(schedule|calendar|book|invite|meeting)\b/.test(text)) {
+    deliverable = 'a proposed time and attendee list, then an approved calendar change';
+    toolCategories = ['calendar'];
+  } else if (/\b(doc|document|proposal|brief|plan|spec|report|notes|memo)\b/.test(text)) {
+    deliverable = 'a reviewable document draft with a shareable link';
+    toolCategories = ['documents'];
+  } else if (/\b(jira|ticket|issue|bug|linear|asana|task)\b/.test(text)) {
+    deliverable = 'a proposed issue update with the exact fields to change';
+    toolCategories = ['work tracking'];
+  }
+
+  const contextStep = task?.source?.type === 'meeting' && task?.source?.id
+    ? 'Review the linked meeting summary and only fetch verbatim transcript text if exact wording is necessary.'
+    : 'Confirm the intended outcome, audience, and constraints with the user.';
+  const ownershipStep = task?.owner
+    ? `Keep ${task.owner} as the named owner unless the user changes ownership.`
+    : 'Confirm who owns the final follow-through.';
+  const dueStep = task?.dueDate
+    ? `Work toward the recorded due date (${task.dueDate}).`
+    : 'Ask whether there is a deadline before committing externally.';
+
+  return {
+    source: 'inwise-starter',
+    objective: `Produce ${deliverable} for “${title || 'this action item'}”.`,
+    suggestedSteps: [contextStep, ownershipStep, dueStep, 'Show the exact plan and external tools to the user before acting.'],
+    suggestedToolCategories: toolCategories,
+    approvalReminder: 'Call start_action_execution only after the user explicitly approves the plan and tool scope.',
+  };
+}
+
+async function findActionItem(actionItemId: string): Promise<any | null> {
+  const tasks = await getTasks({ includeSnoozed: true });
+  return tasks.find((t: any) => t._id === actionItemId) || null;
+}
+
+function writebackDisabled(): any {
+  return {
+    error:
+      'Action writeback is disabled. In Inwise, open Settings → Connect to AI and enable “Allow approved action writeback”.',
+    code: 'WRITEBACK_DISABLED',
+  };
+}
+
+function validateApproval(approval: {
+  confirmed: boolean;
+  approvedBy: string;
+  approvedAt: string;
+  scope: string;
+  approvedTools?: string[];
+}, proposedTools: ProposedExecutionTool[]): string | null {
+  if (approval?.confirmed !== true) return 'The client must obtain explicit user approval before starting execution.';
+  if (!approval.approvedBy?.trim()) return 'approval.approvedBy must identify who approved the execution.';
+  if (!approval.scope?.trim()) return 'approval.scope must describe exactly what the user approved.';
+  const approvedAtMs = Date.parse(approval.approvedAt);
+  if (!Number.isFinite(approvedAtMs)) return 'approval.approvedAt must be a valid ISO timestamp.';
+  const now = Date.now();
+  if (approvedAtMs > now + APPROVAL_CLOCK_SKEW_MS) return 'approval.approvedAt cannot be in the future.';
+  if (approvedAtMs < now - APPROVAL_MAX_AGE_MS) return 'Approval is older than 24 hours; ask the user to approve this execution again.';
+  const approved = new Set((approval.approvedTools || []).map((name) => name.trim()).filter(Boolean));
+  const unapproved = proposedTools.map((tool) => tool.name).filter((name) => !approved.has(name));
+  if (unapproved.length > 0) return `These proposed tools are not in approval.approvedTools: ${unapproved.join(', ')}`;
+  return null;
+}
+
+function normalizeArtifacts(artifacts: ExecutionArtifact[]): { artifacts?: ExecutionArtifact[]; error?: string } {
+  const normalized: ExecutionArtifact[] = [];
+  for (const artifact of artifacts || []) {
+    try {
+      const url = new URL(artifact.url);
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+        return { error: `Artifact URL must use http or https: ${artifact.url}` };
+      }
+      normalized.push({
+        type: artifact.type.trim(),
+        label: artifact.label.trim(),
+        url: url.toString(),
+        externalId: artifact.externalId?.trim() || null,
+      });
+    } catch {
+      return { error: `Invalid artifact URL: ${artifact.url}` };
+    }
+  }
+  return { artifacts: normalized };
+}
+
+export interface StartActionExecutionArgs {
+  actionItemId: string;
+  objective: string;
+  plan: string[];
+  proposedTools?: ProposedExecutionTool[];
+  client: string;
+  approval: {
+    confirmed: boolean;
+    approvedBy: string;
+    approvedAt: string;
+    scope: string;
+    approvedTools?: string[];
+  };
+  idempotencyKey: string;
+}
+
+export async function startActionExecutionHandler(args: StartActionExecutionArgs): Promise<any> {
+  if (!isWritebackEnabled()) return writebackDisabled();
+  const task = await findActionItem(args.actionItemId);
+  if (!task) return { error: `No active action item found with id "${args.actionItemId}"` };
+  if (task.snoozedAt != null) {
+    return { error: 'This action item is snoozed. Bring it back in Inwise before starting execution.' };
+  }
+  const proposedTools = (args.proposedTools || []).map((tool) => ({
+    name: tool.name.trim(),
+    purpose: tool.purpose.trim(),
+    target: tool.target?.trim() || null,
+    dataShared: tool.dataShared?.trim() || null,
+  }));
+  const approvalError = validateApproval(args.approval, proposedTools);
+  if (approvalError) return { error: approvalError, code: 'APPROVAL_REQUIRED' };
+
+  try {
+    const result = await createActionExecution({
+      actionItemId: task._id,
+      actionItemTitle: task.title,
+      objective: args.objective.trim(),
+      plan: args.plan.map((step) => step.trim()),
+      proposedTools,
+      client: args.client.trim(),
+      approval: {
+        approvedBy: args.approval.approvedBy.trim(),
+        approvedAt: new Date(args.approval.approvedAt).toISOString(),
+        scope: args.approval.scope.trim(),
+        approvedTools: [...new Set((args.approval.approvedTools || []).map((name) => name.trim()).filter(Boolean))],
+      },
+      idempotencyKey: args.idempotencyKey.trim(),
+    });
+    const projection = {
+      executionId: result.execution._id,
+      status: result.execution.status,
+      objective: result.execution.objective,
+      latestOutcomeSummary: null,
+      artifacts: [],
+      remainingWork: null,
+      approvedBy: result.execution.approval.approvedBy,
+      updatedAt: result.execution.updatedAt,
+    };
+    await updateTask(task._id, { executionSummary: projection, updatedAt: result.execution.updatedAt });
+    return {
+      execution: toPublicExecution(result.execution),
+      replayed: result.replayed,
+      actionItem: { actionItemId: task._id, title: task.title, status: task.status },
+      next: 'Perform only the approved external work, then call append_action_outcome with the result and artifact links.',
+    };
+  } catch (err: any) {
+    return { error: err?.message || String(err) };
+  }
+}
+
+export interface AppendActionOutcomeArgs {
+  executionId: string;
+  result: ActionOutcomeResult;
+  summary: string;
+  artifacts?: ExecutionArtifact[];
+  remainingWork?: string;
+  client: string;
+  idempotencyKey: string;
+}
+
+export async function appendActionOutcomeHandler(args: AppendActionOutcomeArgs): Promise<any> {
+  if (!isWritebackEnabled()) return writebackDisabled();
+  const artifactResult = normalizeArtifacts(args.artifacts || []);
+  if (artifactResult.error) return { error: artifactResult.error };
+  try {
+    const result = await appendExecutionOutcome(args.executionId, {
+      idempotencyKey: args.idempotencyKey.trim(),
+      result: args.result,
+      summary: args.summary.trim(),
+      artifacts: artifactResult.artifacts || [],
+      remainingWork: args.remainingWork?.trim() || null,
+      client: args.client.trim(),
+    });
+    const projection = {
+      executionId: result.execution._id,
+      status: result.execution.status,
+      objective: result.execution.objective,
+      latestOutcomeSummary: result.outcome.summary,
+      artifacts: result.outcome.artifacts,
+      remainingWork: result.outcome.remainingWork,
+      approvedBy: result.execution.approval.approvedBy,
+      updatedAt: result.execution.updatedAt,
+    };
+    await updateTask(result.execution.actionItemId, {
+      executionSummary: projection,
+      updatedAt: result.execution.updatedAt,
+    });
+    return {
+      execution: toPublicExecution(result.execution),
+      outcome: toPublicOutcome(result.outcome),
+      replayed: result.replayed,
+      next:
+        args.result === 'completed'
+          ? 'If the action item itself is now complete, call update_action_status.'
+          : 'Continue only within the approved scope; append another outcome when the state changes.',
+    };
+  } catch (err: any) {
+    return { error: err?.message || String(err) };
+  }
+}
+
+export interface UpdateActionStatusArgs {
+  actionItemId: string;
+  executionId: string;
+  status: 'todo' | 'inProgress' | 'completed' | 'cancelled';
+  note?: string;
+  expectedUpdatedAt?: string;
+  client: string;
+  idempotencyKey: string;
+}
+
+export async function updateActionStatusHandler(args: UpdateActionStatusArgs): Promise<any> {
+  if (!isWritebackEnabled()) return writebackDisabled();
+  const task = await findActionItem(args.actionItemId);
+  if (!task) return { error: `No active action item found with id "${args.actionItemId}"` };
+  const execution = await getActionExecution(args.executionId);
+  if (!execution) return { error: `No action execution found with id "${args.executionId}"` };
+  const priorCall = execution.auditTrail.find(
+    (event) => event.type === 'action-status-updated' && event.idempotencyKey === args.idempotencyKey.trim(),
+  );
+  if (priorCall) {
+    if (
+      execution.actionItemId !== args.actionItemId ||
+      execution.client !== args.client.trim() ||
+      priorCall.details.toStatus !== args.status ||
+      (priorCall.details.note || null) !== (args.note?.trim() || null)
+    ) {
+      return { error: 'idempotencyKey was already used for a different status update' };
+    }
+    return {
+      actionItem: {
+        actionItemId: task._id,
+        title: task.title,
+        status: task.status,
+        updatedAt: task.updatedAt || null,
+      },
+      execution: toPublicExecution(execution),
+      replayed: true,
+    };
+  }
+  if (args.expectedUpdatedAt && (task.updatedAt || null) !== args.expectedUpdatedAt) {
+    return {
+      error: 'The action item changed after the client read it. Read get_action_item again before updating status.',
+      code: 'STALE_ACTION_ITEM',
+      currentUpdatedAt: task.updatedAt || null,
+      currentStatus: task.status,
+    };
+  }
+  if (
+    args.status === 'completed' &&
+    !execution.outcomes.some((outcome) => outcome.result === 'completed')
+  ) {
+    return {
+      error: 'Cannot mark the action item completed until append_action_outcome records a completed result.',
+      code: 'COMPLETED_OUTCOME_REQUIRED',
+    };
+  }
+  try {
+    const recorded = await recordActionStatusUpdate(args.executionId, {
+      actionItemId: args.actionItemId,
+      fromStatus: task.status,
+      toStatus: args.status,
+      note: args.note?.trim() || null,
+      client: args.client.trim(),
+      idempotencyKey: args.idempotencyKey.trim(),
+    });
+    const now = recorded.execution.updatedAt;
+    const priorProjection = task.executionSummary || {};
+    const updated = await updateTask(task._id, {
+      status: args.status,
+      likelyDone: false,
+      updatedAt: now,
+      executionSummary: {
+        ...priorProjection,
+        executionId: recorded.execution._id,
+        status: recorded.execution.status,
+        updatedAt: now,
+      },
+    });
+    return {
+      actionItem: {
+        actionItemId: updated._id,
+        title: updated.title,
+        status: updated.status,
+        updatedAt: updated.updatedAt,
+      },
+      execution: toPublicExecution(recorded.execution),
+      replayed: recorded.replayed,
+    };
+  } catch (err: any) {
+    return { error: err?.message || String(err) };
+  }
 }
 
 export async function listPeopleHandler(args: { search?: string; limit?: number }): Promise<any> {
@@ -477,24 +863,34 @@ export const TOOL_NAMES = [
   'list_upcoming_meetings',
   'prepare_meeting',
   'get_connection_status',
+  'start_action_execution',
+  'append_action_outcome',
+  'update_action_status',
 ] as const;
 
 export function getConnectionStatusHandler(): any {
+  const writebackEnabled = isWritebackEnabled();
   return {
     app: 'Inwise (open source)',
     version: getAppVersion(),
     mode: 'local',
     storage: 'local NeDB files on this machine',
-    access: 'read-only',
+    access: writebackEnabled ? 'read plus approved action writeback' : 'read-only',
     server: `http://127.0.0.1:${currentPort ?? MCP_DEFAULT_PORT}${MCP_PATH}`,
     capabilities: [...TOOL_NAMES],
+    actionWriteback: {
+      enabled: writebackEnabled,
+      externalToolCaller: 'the connected MCP host (for example Claude, Codex, or OpenWorker)',
+      inwiseRole: 'validate the linked action item and store the approved plan, outcome, artifacts, and status',
+    },
     // Reading is local; what the client does with what it reads is not. Say so
     // where a client can actually surface it.
     privacyNote:
       'This server reads only from this machine and never sends anything itself. ' +
       'Anything a client reads — transcripts especially — goes wherever that client sends it, ' +
       'including its AI provider. get_transcript is a separate tool so verbatim text can be ' +
-      'approved separately from summaries.',
+      'approved separately from summaries. Action writeback is off by default; when enabled, ' +
+      'the client must record explicit approval before an execution can start.',
     calendarConnected: upcomingEventsProvider ? upcomingEventsProvider().length > 0 : false,
   };
 }
@@ -527,9 +923,9 @@ function toText(result: any): { content: { type: 'text'; text: string }[]; isErr
 }
 
 /**
- * Registration goes through this wrapper for two reasons: every tool on this
- * server is read-only by design (readOnlyHint is applied centrally), and the
- * SDK's zod-generic inference on registerTool hits TS2589 ("excessively deep")
+ * Registration goes through this wrapper so read-only annotations cannot drift,
+ * and because the SDK's zod-generic inference on registerTool hits TS2589
+ * ("excessively deep")
  * under this repo's TypeScript 5.3 — the cast sidesteps the inference while
  * mcp-server.test.ts verifies the actual wire behavior (tool list, annotations,
  * schemas, calls).
@@ -543,6 +939,27 @@ function registerReadOnlyTool(
   (server.registerTool as any)(
     name,
     { ...cfg, annotations: { readOnlyHint: true } },
+    async (args: any) => toText(await handler(args))
+  );
+}
+
+function registerWriteTool(
+  server: McpServer,
+  name: string,
+  cfg: { title: string; description: string; inputSchema: Record<string, z.ZodTypeAny> },
+  handler: (args: any) => any
+): void {
+  (server.registerTool as any)(
+    name,
+    {
+      ...cfg,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
     async (args: any) => toText(await handler(args))
   );
 }
@@ -616,7 +1033,7 @@ function buildMcpServer(): McpServer {
     {
       title: 'Get action item',
       description:
-        'Full detail for one action item: untruncated description, owner when known, due date, priority, snooze state, and the meeting it came from.',
+        'Full detail for one action item: untruncated description, owner when known, due date, priority, snooze state, source meeting, an Inwise starter recommendation, and recent approved execution outcomes.',
       inputSchema: {
         actionItemId: z.string().describe('Action item id from list_action_items'),
       },
@@ -701,6 +1118,93 @@ function buildMcpServer(): McpServer {
       inputSchema: {},
     },
     getConnectionStatusHandler
+  );
+
+  registerWriteTool(
+    server,
+    'start_action_execution',
+    {
+      title: 'Start approved action execution',
+      description:
+        'Record a user-approved plan for acting on one Inwise action item. This does not call external tools itself: the connected MCP host performs only the approved work, then reports the result with append_action_outcome. Action writeback must be enabled in Inwise Settings.',
+      inputSchema: {
+        actionItemId: z.string().min(1).max(200).describe('Action item id from list_action_items or get_action_item'),
+        objective: z.string().min(1).max(2000).describe('Concrete outcome this execution is meant to produce'),
+        plan: z.array(z.string().min(1).max(1000)).min(1).max(12).describe('Steps shown to and approved by the user'),
+        proposedTools: z
+          .array(
+            z.object({
+              name: z.string().min(1).max(200).describe('External tool or connector the MCP host plans to use'),
+              purpose: z.string().min(1).max(1000).describe('Why this tool is needed'),
+              target: z.string().max(500).nullable().optional().describe('Account, document, recipient, or system being changed'),
+              dataShared: z.string().max(1000).nullable().optional().describe('Meeting/action data that will be sent to the tool'),
+            })
+          )
+          .max(12)
+          .optional()
+          .describe('External tools covered by the user approval; empty is allowed for local-only work'),
+        client: z.string().min(1).max(200).describe('Calling MCP host, e.g. claude-desktop, codex, or openworker'),
+        approval: z.object({
+          confirmed: z.literal(true).describe('Client attestation that the user explicitly approved this exact plan and tool scope'),
+          approvedBy: z.string().min(1).max(200).describe('Name or local identity of the approving user'),
+          approvedAt: z.string().datetime().describe('ISO timestamp from the approval interaction; must be within the last 24 hours'),
+          scope: z.string().min(1).max(2000).describe('Plain-language boundary of what the user approved'),
+          approvedTools: z.array(z.string().min(1).max(200)).max(12).optional().describe('Every proposed tool name the user approved'),
+        }),
+        idempotencyKey: z.string().min(8).max(200).describe('Unique stable key for safe retry of this exact start request'),
+      },
+    },
+    startActionExecutionHandler
+  );
+
+  registerWriteTool(
+    server,
+    'append_action_outcome',
+    {
+      title: 'Append action outcome',
+      description:
+        'Write the external result back to the approved Inwise execution: a concise summary, artifact links, and any remaining work. This creates the local memory/audit record; it does not itself send email, edit documents, or call other services.',
+      inputSchema: {
+        executionId: z.string().min(1).max(200).describe('Execution id returned by start_action_execution'),
+        result: z.enum(['progress', 'completed', 'failed']).describe('State of this execution after the reported outcome'),
+        summary: z.string().min(1).max(5000).describe('What actually happened; do not claim work that was not verified'),
+        artifacts: z
+          .array(
+            z.object({
+              type: z.string().min(1).max(100).describe('Artifact kind, e.g. document, email, ticket'),
+              label: z.string().min(1).max(300).describe('Human-readable artifact label'),
+              url: z.string().url().max(2000).describe('http(s) link to the created or changed artifact'),
+              externalId: z.string().max(300).nullable().optional().describe('Provider record id, if available'),
+            })
+          )
+          .max(25)
+          .optional(),
+        remainingWork: z.string().max(3000).optional().describe('Anything still outstanding or requiring user follow-through'),
+        client: z.string().min(1).max(200).describe('Must match the client that started the execution'),
+        idempotencyKey: z.string().min(8).max(200).describe('Unique stable key for safe retry of this exact outcome'),
+      },
+    },
+    appendActionOutcomeHandler
+  );
+
+  registerWriteTool(
+    server,
+    'update_action_status',
+    {
+      title: 'Update Inwise action status',
+      description:
+        'Update the local Inwise action item after an approved execution. Link every change to its execution, use expectedUpdatedAt to avoid overwriting a newer edit, and only mark completed when the reported outcome supports it.',
+      inputSchema: {
+        actionItemId: z.string().min(1).max(200).describe('Action item id linked to the execution'),
+        executionId: z.string().min(1).max(200).describe('Execution id returned by start_action_execution'),
+        status: z.enum(['todo', 'inProgress', 'completed', 'cancelled']).describe('New local Inwise status'),
+        note: z.string().max(2000).optional().describe('Why the status changed'),
+        expectedUpdatedAt: z.string().datetime().optional().describe('updatedAt from get_action_item for optimistic concurrency'),
+        client: z.string().min(1).max(200).describe('Must match the client that started the execution'),
+        idempotencyKey: z.string().min(8).max(200).describe('Unique stable key for safe retry of this exact status update'),
+      },
+    },
+    updateActionStatusHandler
   );
 
   return server;
