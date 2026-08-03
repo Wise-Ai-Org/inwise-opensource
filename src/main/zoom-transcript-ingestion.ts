@@ -17,6 +17,11 @@ export interface NormalizedTranscript {
   sourceMetadata?: Record<string, any>;
 }
 
+export type NativeTranscriptSource =
+  | 'zoom_cloud_recording'
+  | 'teams_transcript'
+  | 'meet_transcript';
+
 export function segmentsToText(segments: NormalizedSegment[]): string {
   return segments.map(s => `${s.speaker}: ${s.text}`).join('\n');
 }
@@ -29,18 +34,21 @@ export async function ingestNormalizedTranscript(
   nt: NormalizedTranscript,
   deps: {
     runInsights?: (content: string, meetingId: string) => Promise<void>;
+    source?: NativeTranscriptSource;
   } = {},
 ): Promise<string> {
   const content = segmentsToText(nt.segments);
+  const source = deps.source ?? 'zoom_cloud_recording';
 
   const meeting = await createMeetingFromTranscript({
     title: nt.title,
     content,
     date: nt.startedAt,
-    source: 'zoom_cloud_recording',
+    source,
     externalId: nt.externalId || nt.meetingId,
     sourceMetadata: {
-      zoomMeetingId: nt.meetingId,
+      platformMeetingId: nt.meetingId,
+      ...(source === 'zoom_cloud_recording' ? { zoomMeetingId: nt.meetingId } : {}),
       ...nt.sourceMetadata,
     },
   });

@@ -83,6 +83,17 @@ import { listZoomRecordings, getTranscriptDownloadUrl } from './zoom-recordings'
 import { downloadAndParseVtt } from './zoom-vtt-parser';
 import { ingestNormalizedTranscript } from './zoom-transcript-ingestion';
 import {
+  connectTeams, disconnectTeams, getTeamsStatus, saveTeamsCredentials,
+  testTeamsConnection, TEAMS_REDIRECT_URI_DISPLAY,
+} from './teams-oauth';
+import { fetchTeamsTranscriptArtifact, listTeamsMeetings } from './teams-api';
+import { parseTeamsVtt } from './teams-vtt-parser';
+import {
+  connectMeet, disconnectMeet, getMeetStatus, saveMeetCredentials,
+  testMeetConnection, MEET_REDIRECT_URI_DISPLAY,
+} from './meet-oauth';
+import { fetchMeetTranscript, listMeetConferenceRecords } from './meet-api';
+import {
   validateToken,
   getSlackConnectionInfo,
   listChannels as slackListChannels,
@@ -2284,6 +2295,86 @@ ipcMain.handle('zoom:fetchTranscript', async (_e, recording: { meetingId: string
       zoomUuid: recording.uuid,
     };
     const meetingId = await ingestNormalizedTranscript(nt);
+    return { ok: true, meetingId };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+
+// Microsoft Teams native transcripts
+ipcMain.handle('teams:saveCredentials', async (_e, clientId: string, tenant?: string) => {
+  try { await saveTeamsCredentials(clientId, tenant); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('teams:connect', async () => {
+  try { return await connectTeams(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('teams:disconnect', async () => {
+  try { await disconnectTeams(); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('teams:status', async () => {
+  try { return await getTeamsStatus(); }
+  catch { return { connected: false }; }
+});
+ipcMain.handle('teams:test', async () => {
+  try { return await testTeamsConnection(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('teams:redirectUri', () => TEAMS_REDIRECT_URI_DISPLAY);
+ipcMain.handle('teams:listMeetings', async () => {
+  try {
+    if (!(await getTeamsStatus()).connected) {
+      return { ok: false, error: 'Not connected to Microsoft Teams. Connect in Settings first.' };
+    }
+    return { ok: true, meetings: await listTeamsMeetings() };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('teams:fetchTranscript', async (_e, meeting) => {
+  try {
+    const artifact = await fetchTeamsTranscriptArtifact(meeting);
+    const normalized = parseTeamsVtt(artifact);
+    if (normalized.segments.length === 0) {
+      return { ok: false, error: 'Microsoft returned an empty or unsupported Teams transcript.' };
+    }
+    const meetingId = await ingestNormalizedTranscript(normalized, { source: 'teams_transcript' });
+    return { ok: true, meetingId, speakerAttributed: artifact.speakerAttributed };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+
+// Google Meet native transcripts
+ipcMain.handle('meet:saveCredentials', async (_e, clientId: string, clientSecret: string) => {
+  try { await saveMeetCredentials(clientId, clientSecret); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('meet:connect', async () => {
+  try { return await connectMeet(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('meet:disconnect', async () => {
+  try { await disconnectMeet(); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('meet:status', async () => {
+  try { return await getMeetStatus(); }
+  catch { return { connected: false }; }
+});
+ipcMain.handle('meet:test', async () => {
+  try { return await testMeetConnection(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('meet:redirectUri', () => MEET_REDIRECT_URI_DISPLAY);
+ipcMain.handle('meet:listMeetings', async () => {
+  try {
+    if (!(await getMeetStatus()).connected) {
+      return { ok: false, error: 'Not connected to Google Meet. Connect in Settings first.' };
+    }
+    return { ok: true, meetings: await listMeetConferenceRecords() };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('meet:fetchTranscript', async (_e, conference) => {
+  try {
+    const normalized = await fetchMeetTranscript(conference);
+    const meetingId = await ingestNormalizedTranscript(normalized, { source: 'meet_transcript' });
     return { ok: true, meetingId };
   } catch (e: any) { return { ok: false, error: e.message }; }
 });

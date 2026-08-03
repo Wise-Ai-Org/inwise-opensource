@@ -94,6 +94,26 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   zoomListRecordings: () => ipcRenderer.invoke('zoom:listRecordings'),
   zoomFetchTranscript: (recording: any) => ipcRenderer.invoke('zoom:fetchTranscript', recording),
 
+  // Microsoft Teams native transcripts
+  teamsSaveCredentials: (clientId: string, tenant?: string) => ipcRenderer.invoke('teams:saveCredentials', clientId, tenant),
+  teamsConnect: () => ipcRenderer.invoke('teams:connect'),
+  teamsDisconnect: () => ipcRenderer.invoke('teams:disconnect'),
+  teamsStatus: () => ipcRenderer.invoke('teams:status'),
+  teamsTest: () => ipcRenderer.invoke('teams:test'),
+  teamsRedirectUri: () => ipcRenderer.invoke('teams:redirectUri'),
+  teamsListMeetings: () => ipcRenderer.invoke('teams:listMeetings'),
+  teamsFetchTranscript: (meeting: any) => ipcRenderer.invoke('teams:fetchTranscript', meeting),
+
+  // Google Meet native transcripts
+  meetSaveCredentials: (clientId: string, clientSecret: string) => ipcRenderer.invoke('meet:saveCredentials', clientId, clientSecret),
+  meetConnect: () => ipcRenderer.invoke('meet:connect'),
+  meetDisconnect: () => ipcRenderer.invoke('meet:disconnect'),
+  meetStatus: () => ipcRenderer.invoke('meet:status'),
+  meetTest: () => ipcRenderer.invoke('meet:test'),
+  meetRedirectUri: () => ipcRenderer.invoke('meet:redirectUri'),
+  meetListMeetings: () => ipcRenderer.invoke('meet:listMeetings'),
+  meetFetchTranscript: (meeting: any) => ipcRenderer.invoke('meet:fetchTranscript', meeting),
+
   // Local MCP server ("Connect to AI")
   mcpStatus: () => ipcRenderer.invoke('mcp:status'),
   mcpSetEnabled: (enabled: boolean) => ipcRenderer.invoke('mcp:setEnabled', enabled),

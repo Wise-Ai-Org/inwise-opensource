@@ -3,7 +3,7 @@ import React, { createContext, useCallback, useContext, useMemo, useState } from
 export type Tab = 'meetings' | 'tasks' | 'people';
 
 export type SettingsSectionKey =
-  | 'ai' | 'startup' | 'transcription' | 'calendar' | 'jira' | 'zoom' | 'slack'
+  | 'ai' | 'startup' | 'transcription' | 'calendar' | 'jira' | 'zoom' | 'teams' | 'meet' | 'slack'
   | 'ai-connect' | 'integrations' | 'voice' | 'data';
 
 export type Page =

@@ -1825,6 +1825,100 @@ export async function clearZoomCredentials(): Promise<void> {
   await credentialsDb.removeAsync({ _id: ZOOM_DOC_ID }, {});
 }
 
+// ── Native meeting-provider OAuth credentials ────────────────────────────────
+
+export type NativeOAuthProvider = 'teams' | 'meet';
+
+export interface OAuthCredentials {
+  clientId: string | null;
+  clientSecret: string | null;
+  tenant: string | null;
+  accessToken: string | null;
+  refreshToken: string | null;
+  tokenExpiresAt: string | null;
+}
+
+function oauthDocId(provider: NativeOAuthProvider): string {
+  return `oauth:${provider}`;
+}
+
+export async function getOAuthCredentials(provider: NativeOAuthProvider): Promise<OAuthCredentials | null> {
+  const doc = await credentialsDb.findOneAsync({ _id: oauthDocId(provider) });
+  if (!doc) return null;
+  const d = doc as any;
+  return {
+    clientId: d.clientId ?? null,
+    clientSecret: d.clientSecret ?? null,
+    tenant: d.tenant ?? null,
+    accessToken: d.accessToken ?? null,
+    refreshToken: d.refreshToken ?? null,
+    tokenExpiresAt: d.tokenExpiresAt ?? null,
+  };
+}
+
+export async function setOAuthClientCredentials(
+  provider: NativeOAuthProvider,
+  credentials: { clientId: string; clientSecret?: string | null; tenant?: string | null },
+): Promise<void> {
+  const id = oauthDocId(provider);
+  const existing = await credentialsDb.findOneAsync({ _id: id });
+  const next = {
+    clientId: credentials.clientId,
+    clientSecret: credentials.clientSecret ?? null,
+    tenant: credentials.tenant ?? null,
+  };
+
+  if (existing) {
+    const e = existing as any;
+    const changed = e.clientId !== next.clientId
+      || (e.clientSecret ?? null) !== next.clientSecret
+      || (e.tenant ?? null) !== next.tenant;
+    await credentialsDb.updateAsync(
+      { _id: id },
+      {
+        $set: {
+          ...next,
+          ...(changed ? { accessToken: null, refreshToken: null, tokenExpiresAt: null } : {}),
+        },
+      },
+      {},
+    );
+    return;
+  }
+
+  await credentialsDb.insertAsync({
+    _id: id,
+    ...next,
+    accessToken: null,
+    refreshToken: null,
+    tokenExpiresAt: null,
+  });
+}
+
+export async function setOAuthTokens(
+  provider: NativeOAuthProvider,
+  tokens: { accessToken: string; refreshToken: string; tokenExpiresAt: string },
+): Promise<void> {
+  const id = oauthDocId(provider);
+  const existing = await credentialsDb.findOneAsync({ _id: id });
+  if (existing) {
+    await credentialsDb.updateAsync({ _id: id }, { $set: tokens }, {});
+    return;
+  }
+
+  await credentialsDb.insertAsync({
+    _id: id,
+    clientId: null,
+    clientSecret: null,
+    tenant: null,
+    ...tokens,
+  });
+}
+
+export async function clearOAuthCredentials(provider: NativeOAuthProvider): Promise<void> {
+  await credentialsDb.removeAsync({ _id: oauthDocId(provider) }, {});
+}
+
 export function __setCredentialsDbForTests(db: Datastore): void {
   credentialsDb = db;
 }

@@ -7,6 +7,7 @@ AI-powered meeting recorder that runs primarily on your machine. Your audio and 
 - **Local storage** — NeDB single-file databases, all in your user profile directory
 - **Your own LLM key** — Claude (Anthropic) or OpenAI for action-item extraction, transcript summaries, and insights
 - **Your own calendars** via ICS feed — Google, Outlook, or any provider that exposes a secret ICS URL
+- **Native transcript imports** — manually pull completed Zoom, Microsoft Teams, or Google Meet transcripts with your own provider credentials
 - **Welcome-back screen** — when you return after a gap, the app tells you what it handled for you instead of piling work on you
 - **Jira integration** — auto-push action items to stories, optional daily pull
 - **Slack integration** — one-click browser authorization, local channel ingestion, and explicit recap sharing
@@ -38,6 +39,8 @@ The first run downloads whisper.cpp binaries and your selected Whisper model (~1
 If you already cloned the repository, run `git submodule update --init --recursive` once before building.
 
 To use Inwise from OpenWorker, follow the [OpenWorker setup guide](./docs/openworker.md). The connection stays on this computer and exposes a pinned, read-only MCP tool set.
+
+To import provider-generated transcripts without running the local recorder, follow the [Teams and Google Meet setup guide](./docs/setup-teams-meet-transcripts.md). Zoom setup is available directly in Settings.
 
 ---
 
@@ -127,8 +130,9 @@ Until the diagnostic bundle ships, please attach:
 
 ## Where your data lives
 
-Meeting data remains on your machine. Network calls occur only for services you explicitly configure; managed Slack
-OAuth additionally uses the short-lived token broker described above.
+Meeting data remains on your machine. Network calls occur only for services you explicitly configure: your chosen
+LLM, Jira, Zoom, Microsoft, Google, or Slack. Managed Slack OAuth additionally uses the short-lived token broker
+described above.
 
 | What | Where |
 |---|---|
@@ -159,7 +163,7 @@ The app ships with no pre-bundled AI models. On first use, Whisper model binarie
 - **Audio** never leaves your machine. whisper.cpp runs as a local subprocess
 - **Transcripts** are sent to your LLM of choice (Claude or OpenAI) *only* when you approve insights extraction, and only with your API key
 - **Voiceprints** are MFCC vectors (~1 KB per person) stored in your local NeDB; they aren't audio samples and can't be used to reproduce anyone's voice
-- **Calendar events** come from ICS URLs you paste; we don't OAuth your Google/Microsoft account
+- **Calendar events** normally come from ICS URLs you paste. Teams/Meet OAuth is used only if you explicitly enable native transcript imports
 - **Jira** integration uses OAuth stored in your config; tokens never leave your machine except in direct calls to your Jira instance
 - **Keys and tokens at rest**: API keys and integration tokens are stored unencrypted in your user profile (`config.json` / `credentials.db`), protected by your OS user account's file permissions — the standard local-first tradeoff. Treat the app's data directory like you'd treat `~/.ssh`
 - **Local MCP server** (Settings → Connect to AI): serves meetings, action items, people, and meeting-prep context read-only to AI clients on this machine at `127.0.0.1:43117`. Meeting details return only a short transcript excerpt; full transcripts require a separate paginated tool call. Loopback-only with DNS-rebinding guards, but on a shared multi-user machine other OS accounts can reach loopback ports — turn it off in Settings there. See the [OpenWorker setup and data-boundary notes](./docs/openworker.md#understand-the-data-boundary)
@@ -178,6 +182,7 @@ What's shipped:
 - Simultaneous-meeting conflict modal
 - Jira auto-push and daily pull
 - Action-item completion inference from transcripts (soft flag, never auto-closes)
+- Manual native transcript import from Zoom, Microsoft Teams, and Google Meet
 
 What's next:
 - **Mac build** (`.dmg` with notarization)

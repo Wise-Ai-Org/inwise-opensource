@@ -121,6 +121,31 @@ These are the signals that previously-broken behavior is fixed:
 - `login-item | openAtLogin=true|false` when the launch-at-startup offer is acted on.
 - `audio-data:received | calendarEventId=...` when a manual Record is linked to a calendar event.
 
+## Settings → Microsoft Teams transcript import
+
+- Register a public-client Entra app with redirect `http://localhost:17293/callback` and the delegated permissions documented in `docs/setup-teams-meet-transcripts.md`.
+- Use an account with an active cloud Exchange Online mailbox; verify an on-premises/inactive mailbox produces the documented actionable error.
+- **Save credentials** → status changes from unconfigured to ready to connect; no secret/token appears in `config.json` or logs.
+- **Connect** → system browser opens, callback completes, and status changes to connected.
+- **Refresh meetings** → recent Teams calendar meetings appear; non-Teams calendar events do not.
+- **Import a transcribed meeting** → meeting appears once with named speakers and source `teams_transcript`.
+- **Import the same transcript again** → clear already-imported message; no duplicate meeting row.
+- **Meeting with speaker attribution disabled** → unattributed fallback imports as `Unknown speaker`, or a clear tenant-policy error appears.
+- **Missing admin consent / transcript disabled / unauthorized meeting** → actionable provider-specific message, no silent failure.
+- **Disconnect** → status returns to disconnected and the local Teams OAuth credential record is cleared.
+
+## Settings → Google Meet transcript import
+
+- Configure a Google OAuth Desktop client and Meet API as documented in `docs/setup-teams-meet-transcripts.md`.
+- **Save credentials** → status changes from unconfigured to ready to connect; secret/token does not appear in logs.
+- **Connect** → system browser opens, callback completes, and status changes to connected.
+- **Refresh meetings** → completed conference records from the last 30 days appear.
+- **Import a transcribed meeting** → meeting appears once with participant names and source `meet_transcript`.
+- **Import the same transcript again** → clear already-imported message; no duplicate meeting row.
+- **No transcript / disabled API / denied scope / expired Testing token** → actionable Google-specific message.
+- Reconnect after invalidating the access token and confirm the refresh token is used successfully.
+- **Disconnect** → Google token revoke is attempted and the local Meet OAuth credential record is cleared.
+
 ## Recovery checks (when something goes wrong)
 
 - **Auto-snooze was wrong** → Tasks → Snoozed filter → `[Bring back]` on the row. Task is back in Active. No data lost. Test reversibility by bringing back a just-snoozed task.
