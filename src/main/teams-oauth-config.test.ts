@@ -8,6 +8,7 @@ import {
 } from './teams-oauth-config';
 
 async function run(): Promise<void> {
+  assert.equal(TEAMS_REDIRECT_URI, 'http://localhost:17293/callback');
   assert.equal(normalizeTeamsTenant(''), 'organizations');
   assert.equal(normalizeTeamsTenant('contoso.onmicrosoft.com'), 'contoso.onmicrosoft.com');
   assert.throws(() => normalizeTeamsTenant('../common?bad=true'));

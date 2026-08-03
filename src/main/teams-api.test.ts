@@ -38,6 +38,17 @@ async function run(): Promise<void> {
   assert.equal(meetings[0].startedAt, '2026-08-01T10:00:00.000Z');
   assert.equal(requested.length, 2, 'calendar pagination followed');
 
+  await assert.rejects(
+    () => listTeamsMeetings({
+      getToken: async () => 'token',
+      fetchFn: (async () => response(404, {
+        error: { code: 'ErrorItemNotFound', message: 'The mailbox was not found.' },
+      })) as typeof fetch,
+      now: new Date('2026-08-02T12:00:00.000Z'),
+    }),
+    /Exchange Online mailbox/,
+  );
+
   const meeting: TeamsMeetingItem = meetings[0];
   const calls: Array<{ url: string; accept?: string }> = [];
   const fetchArtifact = async (url: any, init?: any) => {

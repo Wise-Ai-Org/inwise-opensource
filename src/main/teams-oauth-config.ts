@@ -1,5 +1,7 @@
 export const TEAMS_OAUTH_PORT = 17293;
-export const TEAMS_REDIRECT_URI = `http://127.0.0.1:${TEAMS_OAUTH_PORT}/callback`;
+// This must exactly match the redirect registered on the public client. The
+// callback server still binds to the IPv4 loopback interface only.
+export const TEAMS_REDIRECT_URI = `http://localhost:${TEAMS_OAUTH_PORT}/callback`;
 export const TEAMS_GRAPH_SCOPES = [
   'openid',
   'profile',

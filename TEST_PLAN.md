@@ -123,7 +123,8 @@ These are the signals that previously-broken behavior is fixed:
 
 ## Settings → Microsoft Teams transcript import
 
-- Register a public-client Entra app with redirect `http://127.0.0.1:17293/callback` and the delegated permissions documented in `docs/setup-teams-meet-transcripts.md`.
+- Register a public-client Entra app with redirect `http://localhost:17293/callback` and the delegated permissions documented in `docs/setup-teams-meet-transcripts.md`.
+- Use an account with an active cloud Exchange Online mailbox; verify an on-premises/inactive mailbox produces the documented actionable error.
 - **Save credentials** → status changes from unconfigured to ready to connect; no secret/token appears in `config.json` or logs.
 - **Connect** → system browser opens, callback completes, and status changes to connected.
 - **Refresh meetings** → recent Teams calendar meetings appear; non-Teams calendar events do not.

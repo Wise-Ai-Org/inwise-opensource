@@ -26,7 +26,7 @@ function graphDateTime(value: any): string {
   return new Date(`${dateTime}Z`).toISOString();
 }
 
-function graphErrorDetail(status: number, body: string): string {
+function graphErrorDetail(status: number, body: string, requestUrl?: string): string {
   let code = '';
   let innerCode = '';
   let message = body;
@@ -45,7 +45,11 @@ function graphErrorDetail(status: number, body: string): string {
   if (status === 403 || /Authorization_RequestDenied|ErrorAccessDenied/i.test(code)) {
     return 'Microsoft denied transcript access. A tenant administrator must grant OnlineMeetingTranscript.Read.All and allow Graph transcript access.';
   }
-  if (status === 404 || /ResourceNotFound/i.test(code)) {
+  const requestPath = requestUrl ? new URL(requestUrl).pathname : '';
+  if (status === 404 && /\/me\/calendarView$/i.test(requestPath)) {
+    return `Microsoft could not read this account's calendar. Verify that it has an Exchange Online mailbox and Calendars.Read access. Microsoft Graph: ${message}`;
+  }
+  if ((status === 404 || /ResourceNotFound/i.test(code)) && /\/onlineMeetings(?:\/|$)/i.test(requestPath)) {
     return 'This Teams meeting could not be resolved. It may have expired or may not be on your calendar invite.';
   }
   return `Microsoft Graph returned HTTP ${status}: ${message}`;
@@ -67,7 +71,7 @@ async function graphJson(url: string, token: string, fetchFn: FetchFn): Promise<
     },
   });
   const body = await response.text();
-  if (!response.ok) throw new Error(graphErrorDetail(response.status, body));
+  if (!response.ok) throw new Error(graphErrorDetail(response.status, body, url));
   return body ? JSON.parse(body) : {};
 }
 
@@ -170,10 +174,10 @@ async function getTranscriptContent(
       },
     });
     body = await response.text();
-    if (!response.ok) throw new Error(graphErrorDetail(response.status, body));
+    if (!response.ok) throw new Error(graphErrorDetail(response.status, body, url));
     return { content: body, speakerAttributed: false };
   }
-  if (!response.ok) throw new Error(graphErrorDetail(response.status, body));
+  if (!response.ok) throw new Error(graphErrorDetail(response.status, body, url));
   return { content: body, speakerAttributed: true };
 }
 

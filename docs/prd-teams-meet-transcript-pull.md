@@ -31,7 +31,7 @@ No bot joins the meeting, no recorder is required, and no Inwise-hosted OAuth cr
 ### Microsoft Teams
 
 1. The user creates a public-client Entra app and enters its application/client ID plus an optional tenant ID.
-2. Inwise opens the Microsoft authorization page and receives the PKCE callback on `http://127.0.0.1:17293/callback`.
+2. Inwise opens the Microsoft authorization page and receives the PKCE callback on `http://localhost:17293/callback`.
 3. Inwise reads the user's recent calendar events, retains Teams meetings, and resolves each selected join URL to an online meeting.
 4. Inwise selects the newest transcript, downloads it, parses VTT/JSON cues, and imports it.
 5. If speaker attribution is disabled by tenant policy, Inwise retries Microsoft's unattributed transcript representation and labels the speaker as `Unknown speaker`.
@@ -66,11 +66,18 @@ The UI must surface actionable messages for:
 - callback port already in use, state mismatch, denial, or timeout;
 - Microsoft admin consent required;
 - Microsoft tenant transcript access or speaker attribution disabled;
+- Microsoft calendar discovery unavailable because the signed-in account has an inactive, soft-deleted, or on-premises Exchange mailbox;
 - the signed-in Microsoft account not allowed to access a transcript;
 - Google API disabled, missing scope, or consent policy denial;
 - no recent meetings, no completed transcript, or an expired provider record;
 - expired/revoked refresh token or provider rate/API failure;
 - a transcript previously imported into Inwise.
+
+## Target-tenant live validation (2026-08-02)
+
+- Microsoft public-client PKCE, loopback callback, token exchange, tenant consent, and Graph identity access succeeded. The available tenant accounts could not exercise `calendarView` because Graph reported their Exchange mailboxes as inactive, soft-deleted, or hosted on-premises; the client now surfaces that prerequisite explicitly.
+- Google Desktop-client PKCE, unverified-app consent, loopback callback, token exchange, and the Meet REST API succeeded against an External/In production OAuth project. The available account returned zero conference records, so no live transcript artifact existed to import.
+- Provider pagination, transcript normalization, native content retrieval behavior, and source-specific idempotent ingestion remain covered by the automated native-transcript suite.
 
 ## Acceptance criteria
 
