@@ -42,6 +42,19 @@ Open the action item in Inwise after step 5. Its task-detail view should show an
 **AI execution** card with the approved objective, latest outcome, status, remaining
 work, and clickable artifacts.
 
+## What it looks like
+
+These screenshots come from a packaged Windows build using an isolated synthetic
+Project Aurora profile. Windows and macOS share this same Electron renderer.
+
+![The source action item in the Inwise task list](./screenshots/action-layer/01-action-in-task-list.png)
+
+![A locally created draft awaiting human review](./screenshots/action-layer/02-draft-awaiting-review-v2.png)
+
+![The approved plan, scope, and tool boundary recorded in Inwise](./screenshots/action-layer/03-approved-plan-and-scope-v2.png)
+
+![A completed action with its verified artifact linked back to Inwise](./screenshots/action-layer/04-completed-with-artifact-v2.png)
+
 ## Approval contract
 
 `start_action_execution` requires a recent approval record containing:
@@ -67,4 +80,3 @@ Inwise does not send the email, edit the document, create the calendar event, or
 which external connector to call. The AI client is the MCP host and orchestrator. This
 separation lets the same Inwise memory work with different clients while keeping the
 approval and result record in one local place.
-

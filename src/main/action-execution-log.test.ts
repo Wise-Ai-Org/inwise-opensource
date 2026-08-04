@@ -3,6 +3,7 @@ import Datastore from '@seald-io/nedb';
 import {
   __setActionExecutionsDbForTests,
   appendExecutionOutcome,
+  buildActionExecutionSummary,
   createActionExecution,
   getActionExecution,
   listActionExecutionsByActionItem,
@@ -102,6 +103,15 @@ async function run(): Promise<void> {
     () => recordActionStatusUpdate(started.execution._id, { ...statusInput, note: 'Conflicting note' }),
     /idempotencyKey was already used/,
   );
+
+  const projection = buildActionExecutionSummary(status.execution);
+  assert.deepEqual(projection.plan, input.plan);
+  assert.equal(projection.client, 'codex');
+  assert.equal(projection.approvalScope, input.approval.scope);
+  assert.deepEqual(projection.approvedTools, ['gmail.send']);
+  assert.equal(projection.outcomeResult, 'completed');
+  assert.equal(projection.latestOutcomeSummary, outcomeInput.summary);
+  assert.equal(projection.lastStatusNote, statusInput.note);
 
   const fetched = await getActionExecution(started.execution._id);
   assert.equal(fetched?.actionItemId, 'task-1');

@@ -65,7 +65,7 @@ import {
 import {
   initPendingApprovals, stashPending, listPending, getPending, removePending,
 } from './sor-pending-approvals';
-import { initActionExecutionLog } from './action-execution-log';
+import { buildActionExecutionSummary, getActionExecution, initActionExecutionLog } from './action-execution-log';
 import { matchAllItems, semanticMatch } from './jira-matcher';
 import { scoreTasks } from './task-scorer';
 import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from '@inwise/desktop-shared';
@@ -1608,7 +1608,20 @@ ipcMain.handle('people:notSame', async (_e, idA: string, idB: string) => {
 });
 
 // Tasks
-ipcMain.handle('db:getTasks', async () => getTasks());
+ipcMain.handle('db:getTasks', async () => {
+  const tasks = await getTasks();
+  // Hydrate old compact projections from the durable execution log so the
+  // richer review UI also works for executions recorded before these fields
+  // were added. Only tasks with an execution id incur a lookup.
+  return Promise.all(tasks.map(async (task: any) => {
+    const executionId = task.executionSummary?.executionId;
+    if (!executionId) return task;
+    const execution = await getActionExecution(executionId);
+    return execution
+      ? { ...task, executionSummary: buildActionExecutionSummary(execution) }
+      : task;
+  }));
+});
 ipcMain.handle('db:createTask', async (_e, data) => createTask(data));
 ipcMain.handle('db:updateTask', async (_e, id, updates) => {
   const result = await updateTask(id, updates);

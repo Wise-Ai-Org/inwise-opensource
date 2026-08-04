@@ -74,6 +74,38 @@ export interface ActionExecutionEntry {
   updatedAt: string;
 }
 
+/**
+ * Compact renderer projection. The durable execution entry remains the source
+ * of truth; this shape gives task surfaces enough structure to present a useful
+ * review state instead of flattening the plan and outcome into one paragraph.
+ */
+export function buildActionExecutionSummary(execution: ActionExecutionEntry): Record<string, any> {
+  const latestOutcome = execution.outcomes[execution.outcomes.length - 1] || null;
+  const latestStatusEvent = [...execution.auditTrail]
+    .reverse()
+    .find((event) => event.type === 'action-status-updated');
+  return {
+    executionId: execution._id,
+    status: execution.status,
+    objective: execution.objective,
+    plan: execution.plan,
+    proposedTools: execution.proposedTools,
+    client: execution.client,
+    latestOutcomeSummary: latestOutcome?.summary || null,
+    outcomeResult: latestOutcome?.result || null,
+    outcomeCreatedAt: latestOutcome?.createdAt || null,
+    artifacts: latestOutcome?.artifacts || [],
+    remainingWork: latestOutcome?.remainingWork || null,
+    approvedBy: execution.approval.approvedBy,
+    approvedAt: execution.approval.approvedAt,
+    approvalScope: execution.approval.scope,
+    approvedTools: execution.approval.approvedTools,
+    lastStatusNote: latestStatusEvent?.details?.note || null,
+    createdAt: execution.createdAt,
+    updatedAt: execution.updatedAt,
+  };
+}
+
 let actionExecutionsDb: Datastore<ActionExecutionEntry> | null = null;
 
 export function initActionExecutionLog(): void {

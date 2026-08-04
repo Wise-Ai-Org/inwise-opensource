@@ -50,7 +50,7 @@
         }
       ],
       "icon": "assets/icon.ico",
-      "signAndEditExecutable": false
+      "signExecutable": false
     },
     "forceCodeSigning": false,
     "nsis": {

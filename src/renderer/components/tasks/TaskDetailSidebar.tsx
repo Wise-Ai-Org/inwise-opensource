@@ -22,6 +22,26 @@ interface TaskComment {
 interface RelatedTask {
   taskId: string; type: 'dependency' | 'related' | 'blocks' | 'blocked_by'; title?: string;
 }
+interface ExecutionSummary {
+  executionId: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  objective: string;
+  plan?: string[];
+  proposedTools?: Array<{ name: string; purpose: string; target?: string | null; dataShared?: string | null }>;
+  client?: string;
+  latestOutcomeSummary?: string | null;
+  outcomeResult?: 'progress' | 'completed' | 'failed' | null;
+  outcomeCreatedAt?: string | null;
+  artifacts?: Array<{ type: string; label: string; url: string; externalId?: string | null }>;
+  remainingWork?: string | null;
+  approvedBy?: string;
+  approvedAt?: string;
+  approvalScope?: string;
+  approvedTools?: string[];
+  lastStatusNote?: string | null;
+  createdAt?: string;
+  updatedAt: string;
+}
 interface DetailedTask {
   _id: string; title: string; description?: string; status: string; priority: string;
   complexity?: string; estimate?: number; dueDate?: string | null; createdAt: string; updatedAt: string;
@@ -57,16 +77,7 @@ interface DetailedTask {
     slackThreadId?: string | null;
   };
   distillationSessionId?: string;
-  executionSummary?: {
-    executionId: string;
-    status: 'running' | 'completed' | 'failed' | 'cancelled';
-    objective: string;
-    latestOutcomeSummary?: string | null;
-    artifacts?: Array<{ type: string; label: string; url: string; externalId?: string | null }>;
-    remainingWork?: string | null;
-    approvedBy?: string;
-    updatedAt: string;
-  };
+  executionSummary?: ExecutionSummary;
 }
 
 interface TaskDetailSidebarProps {
@@ -291,6 +302,218 @@ function Section({ label, icon, children }: { label: string; icon?: any; childre
         <Text fontSize="sm" fontWeight="semibold">{label}</Text>
       </HStack>
       {children}
+    </Box>
+  );
+}
+
+function splitExecutionOutcome(summary?: string | null): { update: string; draft: string | null } {
+  const text = summary?.trim() || '';
+  const match = /\n\s*Full draft:\s*\n/i.exec(text);
+  if (!match || match.index == null) return { update: text, draft: null };
+  return {
+    update: text.slice(0, match.index).trim(),
+    draft: text.slice(match.index + match[0].length).trim() || null,
+  };
+}
+
+function clientLabel(client?: string): string {
+  if (!client) return 'AI client';
+  if (client === 'claude-code') return 'Claude Code';
+  if (client === 'openworker') return 'OpenWorker';
+  if (client === 'codex') return 'Codex';
+  return client.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const toast = useToast();
+  const outcome = splitExecutionOutcome(summary.latestOutcomeSummary);
+  const hasOutcome = !!summary.latestOutcomeSummary;
+  const hasExternalTools = (summary.proposedTools?.length || 0) > 0 || (summary.approvedTools?.length || 0) > 0;
+  const isAwaitingReview = summary.status === 'running' && hasOutcome && !!summary.remainingWork;
+  const state = summary.status === 'completed'
+    ? { label: 'Completed', color: 'green', heading: 'Action completed' }
+    : summary.status === 'failed'
+      ? { label: 'Needs attention', color: 'red', heading: 'Execution needs attention' }
+      : summary.status === 'cancelled'
+        ? { label: 'Cancelled', color: 'gray', heading: 'Execution cancelled' }
+        : isAwaitingReview
+          ? { label: 'Awaiting review', color: 'orange', heading: outcome.draft ? 'Draft ready for review' : 'Progress ready for review' }
+          : { label: 'In progress', color: 'blue', heading: 'Approved plan in progress' };
+
+  const copyDraft = async () => {
+    if (!outcome.draft || !navigator.clipboard?.writeText) {
+      toast({ title: 'Copy is not available', status: 'error', duration: 1800 });
+      return;
+    }
+    await navigator.clipboard.writeText(outcome.draft);
+    toast({ title: 'Draft copied', status: 'success', duration: 1600 });
+  };
+
+  return (
+    <Box border="1px solid" borderColor="gray.200" borderRadius="12px" overflow="hidden" bg="white">
+      <Box px={4} py={3.5} bg="gray.50" borderBottom="1px solid" borderColor="gray.100">
+        <HStack justify="space-between" align="start" spacing={3}>
+          <HStack spacing={3} align="start" minW={0}>
+            <Flex w="34px" h="34px" borderRadius="10px" bg="teal.100" align="center" justify="center" flexShrink={0}>
+              <Icon as={MdSync} color="teal.700" boxSize={4} />
+            </Flex>
+            <VStack align="start" spacing={0.5} minW={0}>
+              <Text fontSize="sm" fontWeight="700" color="gray.800">{state.heading}</Text>
+              <Text fontSize="xs" color="gray.500">
+                {clientLabel(summary.client)} · {formatRelativeTime(summary.outcomeCreatedAt || summary.updatedAt)}
+              </Text>
+            </VStack>
+          </HStack>
+          <Badge colorScheme={state.color} borderRadius="full" px={2.5} py={1} fontSize="10px" flexShrink={0}>
+            {state.label}
+          </Badge>
+        </HStack>
+      </Box>
+
+      <Box px={4} pt={3.5}>
+        <Flex align="center" mb={3}>
+          {[
+            { label: 'Plan approved', done: true },
+            { label: 'Outcome saved', done: hasOutcome },
+            { label: 'Work complete', done: summary.status === 'completed' },
+          ].map((step, index, steps) => (
+            <React.Fragment key={step.label}>
+              <VStack spacing={1} minW="72px">
+                <Flex
+                  w="20px" h="20px" borderRadius="full" align="center" justify="center"
+                  bg={step.done ? 'teal.500' : 'gray.100'}
+                  border="1px solid" borderColor={step.done ? 'teal.500' : 'gray.200'}
+                >
+                  {step.done ? <CheckIcon color="white" boxSize="9px" /> : <Box w="5px" h="5px" bg="gray.300" borderRadius="full" />}
+                </Flex>
+                <Text fontSize="9px" color={step.done ? 'gray.700' : 'gray.400'} textAlign="center" lineHeight="short">
+                  {step.label}
+                </Text>
+              </VStack>
+              {index < steps.length - 1 && <Box h="1px" flex={1} bg={step.done && steps[index + 1].done ? 'teal.300' : 'gray.200'} mb="17px" />}
+            </React.Fragment>
+          ))}
+        </Flex>
+
+        <HStack spacing={2} px={3} py={2} bg={hasExternalTools ? 'orange.50' : 'green.50'} borderRadius="8px" mb={3} align="start">
+          <CheckIcon boxSize="11px" mt="3px" color={hasExternalTools ? 'orange.600' : 'green.600'} flexShrink={0} />
+          <Text fontSize="11px" color={hasExternalTools ? 'orange.800' : 'green.800'} lineHeight="short">
+            {hasExternalTools
+              ? 'External tool access was limited to the approved scope shown below.'
+              : 'Draft only · No external tools used · Nothing sent'}
+          </Text>
+        </HStack>
+
+        {outcome.update && (
+          <Text fontSize="12px" color="gray.600" lineHeight="1.55" mb={outcome.draft ? 3 : 0}>
+            {outcome.update}
+          </Text>
+        )}
+
+        {outcome.draft && (
+          <Box border="1px solid" borderColor="gray.200" borderRadius="10px" overflow="hidden" mb={3}>
+            <HStack justify="space-between" px={3} py={2} bg="gray.50" borderBottom="1px solid" borderColor="gray.100">
+              <HStack spacing={2}>
+                <Icon as={MdEmail} boxSize={3.5} color="gray.500" />
+                <Text fontSize="10px" color="gray.500" fontWeight="700" textTransform="uppercase" letterSpacing="0.06em">
+                  Email draft
+                </Text>
+              </HStack>
+              <Button size="xs" variant="ghost" colorScheme="teal" h="24px" fontSize="10px" onClick={copyDraft}>
+                Copy draft
+              </Button>
+            </HStack>
+            <Text px={3} py={3} fontSize="12px" color="gray.800" lineHeight="1.6" whiteSpace="pre-wrap">
+              {outcome.draft}
+            </Text>
+          </Box>
+        )}
+
+        {(summary.artifacts?.length ?? 0) > 0 && (
+          <VStack align="stretch" spacing={1} mb={3}>
+            {summary.artifacts!.map((artifact, index) => (
+              <Button
+                key={`${artifact.url}-${index}`}
+                variant="outline"
+                size="sm"
+                justifyContent="flex-start"
+                leftIcon={<ExternalLinkIcon />}
+                onClick={() => api.openExternal(artifact.url)}
+              >
+                {artifact.label}
+              </Button>
+            ))}
+          </VStack>
+        )}
+
+        {summary.remainingWork && (
+          <Box px={3} py={2.5} bg="orange.50" borderRadius="8px" borderLeft="3px solid" borderLeftColor="orange.300" mb={3}>
+            <Text fontSize="10px" fontWeight="700" color="orange.700" textTransform="uppercase" letterSpacing="0.06em" mb={1}>
+              Next step
+            </Text>
+            <Text fontSize="11px" color="orange.900" lineHeight="1.5">{summary.remainingWork}</Text>
+          </Box>
+        )}
+      </Box>
+
+      <Box px={4} pb={3.5}>
+        <Button
+          variant="ghost"
+          size="xs"
+          px={0}
+          color="gray.600"
+          rightIcon={showDetails ? <ChevronDownIcon /> : <ChevronRightIcon />}
+          onClick={() => setShowDetails(value => !value)}
+        >
+          Execution details
+        </Button>
+
+        {showDetails && (
+          <VStack align="stretch" spacing={3} mt={2} pt={3} borderTop="1px solid" borderColor="gray.100">
+            <Box>
+              <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Objective</Text>
+              <Text fontSize="11px" color="gray.700" lineHeight="1.5">{summary.objective}</Text>
+            </Box>
+            {(summary.plan?.length || 0) > 0 && (
+              <Box>
+                <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1.5}>Approved plan</Text>
+                <VStack align="stretch" spacing={1.5}>
+                  {summary.plan!.map((step, index) => (
+                    <HStack key={index} spacing={2} align="start">
+                      <Flex w="17px" h="17px" borderRadius="full" bg="gray.100" align="center" justify="center" flexShrink={0}>
+                        <Text fontSize="9px" fontWeight="700" color="gray.500">{index + 1}</Text>
+                      </Flex>
+                      <Text fontSize="11px" color="gray.600" lineHeight="1.45">{step}</Text>
+                    </HStack>
+                  ))}
+                </VStack>
+              </Box>
+            )}
+            <Box>
+              <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Approval scope</Text>
+              <Text fontSize="11px" color="gray.700" lineHeight="1.5">
+                {summary.approvalScope || 'The approved execution scope was recorded by the connected AI client.'}
+              </Text>
+              <Text fontSize="10px" color="gray.500" mt={1}>
+                {(summary.approvedTools?.length || 0) > 0
+                  ? `Approved tools: ${summary.approvedTools!.join(', ')}`
+                  : 'Approved tools: none'}
+              </Text>
+            </Box>
+            {summary.lastStatusNote && (
+              <Box>
+                <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Status note</Text>
+                <Text fontSize="11px" color="gray.700" lineHeight="1.5">{summary.lastStatusNote}</Text>
+              </Box>
+            )}
+          </VStack>
+        )}
+
+        <Text fontSize="10px" color="gray.400" mt={3}>
+          Approved by {summary.approvedBy || 'the user'} · {formatRelativeTime(summary.approvedAt || summary.updatedAt)}
+        </Text>
+      </Box>
     </Box>
   );
 }
@@ -905,59 +1128,7 @@ export default function TaskDetailSidebar({
               {/* ── Approved AI execution writeback ── */}
               {task.executionSummary && (
                 <Section label="AI execution" icon={MdSync}>
-                  <VStack align="stretch" spacing={3}>
-                    <HStack justify="space-between" align="start">
-                      <Text fontSize="sm" fontWeight="semibold" color="gray.700">
-                        {task.executionSummary.objective}
-                      </Text>
-                      <Badge
-                        colorScheme={
-                          task.executionSummary.status === 'completed'
-                            ? 'green'
-                            : task.executionSummary.status === 'failed'
-                              ? 'red'
-                              : task.executionSummary.status === 'cancelled'
-                                ? 'gray'
-                                : 'blue'
-                        }
-                        flexShrink={0}
-                      >
-                        {task.executionSummary.status}
-                      </Badge>
-                    </HStack>
-                    {task.executionSummary.latestOutcomeSummary && (
-                      <Box p={3} bg="teal.50" borderRadius="md" borderLeft="3px solid" borderLeftColor="teal.400">
-                        <Text fontSize="xs" fontWeight="semibold" color="teal.700" mb={1}>Latest outcome</Text>
-                        <Text fontSize="sm" color="gray.700" whiteSpace="pre-wrap">
-                          {task.executionSummary.latestOutcomeSummary}
-                        </Text>
-                      </Box>
-                    )}
-                    {(task.executionSummary.artifacts?.length ?? 0) > 0 && (
-                      <VStack align="stretch" spacing={1}>
-                        {task.executionSummary.artifacts!.map((artifact, index) => (
-                          <Button
-                            key={`${artifact.url}-${index}`}
-                            variant="ghost"
-                            size="sm"
-                            justifyContent="flex-start"
-                            leftIcon={<ExternalLinkIcon />}
-                            onClick={() => api.openExternal(artifact.url)}
-                          >
-                            {artifact.label}
-                          </Button>
-                        ))}
-                      </VStack>
-                    )}
-                    {task.executionSummary.remainingWork && (
-                      <Text fontSize="xs" color="orange.700">
-                        Remaining: {task.executionSummary.remainingWork}
-                      </Text>
-                    )}
-                    <Text fontSize="xs" color={labelColor}>
-                      Approved by {task.executionSummary.approvedBy || 'the user'} · {formatRelativeTime(task.executionSummary.updatedAt)}
-                    </Text>
-                  </VStack>
+                  <ExecutionSummaryCard summary={task.executionSummary} />
                 </Section>
               )}
 

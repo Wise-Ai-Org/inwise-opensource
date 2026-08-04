@@ -16,6 +16,7 @@ import {
 import { getMcpPrefs } from './config';
 import {
   appendExecutionOutcome,
+  buildActionExecutionSummary,
   createActionExecution,
   getActionExecution,
   listActionExecutionsByActionItem,
@@ -447,16 +448,7 @@ export async function startActionExecutionHandler(args: StartActionExecutionArgs
       },
       idempotencyKey: args.idempotencyKey.trim(),
     });
-    const projection = {
-      executionId: result.execution._id,
-      status: result.execution.status,
-      objective: result.execution.objective,
-      latestOutcomeSummary: null,
-      artifacts: [],
-      remainingWork: null,
-      approvedBy: result.execution.approval.approvedBy,
-      updatedAt: result.execution.updatedAt,
-    };
+    const projection = buildActionExecutionSummary(result.execution);
     await updateTask(task._id, { executionSummary: projection, updatedAt: result.execution.updatedAt });
     return {
       execution: toPublicExecution(result.execution),
@@ -492,16 +484,7 @@ export async function appendActionOutcomeHandler(args: AppendActionOutcomeArgs):
       remainingWork: args.remainingWork?.trim() || null,
       client: args.client.trim(),
     });
-    const projection = {
-      executionId: result.execution._id,
-      status: result.execution.status,
-      objective: result.execution.objective,
-      latestOutcomeSummary: result.outcome.summary,
-      artifacts: result.outcome.artifacts,
-      remainingWork: result.outcome.remainingWork,
-      approvedBy: result.execution.approval.approvedBy,
-      updatedAt: result.execution.updatedAt,
-    };
+    const projection = buildActionExecutionSummary(result.execution);
     await updateTask(result.execution.actionItemId, {
       executionSummary: projection,
       updatedAt: result.execution.updatedAt,
@@ -586,17 +569,11 @@ export async function updateActionStatusHandler(args: UpdateActionStatusArgs): P
       idempotencyKey: args.idempotencyKey.trim(),
     });
     const now = recorded.execution.updatedAt;
-    const priorProjection = task.executionSummary || {};
     const updated = await updateTask(task._id, {
       status: args.status,
       likelyDone: false,
       updatedAt: now,
-      executionSummary: {
-        ...priorProjection,
-        executionId: recorded.execution._id,
-        status: recorded.execution.status,
-        updatedAt: now,
-      },
+      executionSummary: buildActionExecutionSummary(recorded.execution),
     });
     return {
       actionItem: {
