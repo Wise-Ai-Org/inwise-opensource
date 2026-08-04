@@ -332,14 +332,24 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
   const hasExternalTools = (summary.proposedTools?.length || 0) > 0 || (summary.approvedTools?.length || 0) > 0;
   const isAwaitingReview = summary.status === 'running' && hasOutcome && !!summary.remainingWork;
   const state = summary.status === 'completed'
-    ? { label: 'Completed', color: 'green', heading: 'Action completed' }
+    ? { label: 'Completed', color: 'green', heading: 'Action completed', mark: '✓', outcomeLabel: 'Verified outcome' }
     : summary.status === 'failed'
-      ? { label: 'Needs attention', color: 'red', heading: 'Execution needs attention' }
+      ? { label: 'Needs attention', color: 'red', heading: 'Execution needs attention', mark: '!', outcomeLabel: 'What happened' }
       : summary.status === 'cancelled'
-        ? { label: 'Cancelled', color: 'gray', heading: 'Execution cancelled' }
+        ? { label: 'Cancelled', color: 'gray', heading: 'Execution cancelled', mark: '×', outcomeLabel: 'Latest update' }
         : isAwaitingReview
-          ? { label: 'Awaiting review', color: 'orange', heading: outcome.draft ? 'Draft ready for review' : 'Progress ready for review' }
-          : { label: 'In progress', color: 'blue', heading: 'Approved plan in progress' };
+          ? { label: 'Awaiting review', color: 'orange', heading: outcome.draft ? 'Draft ready for review' : 'Progress ready for review', mark: '✦', outcomeLabel: 'Ready for your review' }
+          : { label: 'In progress', color: 'blue', heading: 'Approved plan in progress', mark: '↻', outcomeLabel: 'Latest update' };
+
+  const visual = state.color === 'orange'
+    ? { border: 'orange.200', accent: 'linear(to-r, orange.400, yellow.300, orange.100)', header: 'linear(to-br, orange.50, white, gray.50)', markBg: 'orange.100', markColor: 'orange.700', outcomeBg: 'orange.50', outcomeBorder: 'orange.200' }
+    : state.color === 'red'
+      ? { border: 'red.200', accent: 'linear(to-r, red.400, pink.300, red.100)', header: 'linear(to-br, red.50, white, gray.50)', markBg: 'red.100', markColor: 'red.700', outcomeBg: 'red.50', outcomeBorder: 'red.200' }
+      : state.color === 'blue'
+        ? { border: 'blue.200', accent: 'linear(to-r, blue.400, teal.300, teal.100)', header: 'linear(to-br, blue.50, white, gray.50)', markBg: 'blue.100', markColor: 'blue.700', outcomeBg: 'blue.50', outcomeBorder: 'blue.100' }
+        : state.color === 'gray'
+          ? { border: 'gray.300', accent: 'linear(to-r, gray.500, gray.300, gray.100)', header: 'linear(to-br, gray.50, white)', markBg: 'gray.100', markColor: 'gray.700', outcomeBg: 'gray.50', outcomeBorder: 'gray.200' }
+          : { border: 'teal.200', accent: 'linear(to-r, teal.400, teal.300, teal.100)', header: 'linear(to-br, teal.50, white, gray.50)', markBg: 'teal.100', markColor: 'teal.700', outcomeBg: 'teal.50', outcomeBorder: 'teal.100' };
 
   const copyDraft = async () => {
     if (!outcome.draft || !navigator.clipboard?.writeText) {
@@ -351,22 +361,23 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
   };
 
   return (
-    <Box border="1px solid" borderColor="gray.200" borderRadius="12px" overflow="hidden" bg="white">
-      <Box px={4} py={3.5} bg="gray.50" borderBottom="1px solid" borderColor="gray.100">
+    <Box border="1px solid" borderColor={visual.border} borderRadius="14px" overflow="hidden" bg="white" boxShadow="0 12px 30px -24px rgba(15, 118, 110, 0.75), 0 2px 6px rgba(15, 23, 42, 0.04)">
+      <Box h="3px" bgGradient={visual.accent} />
+      <Box px={4} py={3.5} bgGradient={visual.header} borderBottom="1px solid" borderColor="gray.100">
         <HStack justify="space-between" align="start" spacing={3}>
           <HStack spacing={3} align="start" minW={0}>
-            <Flex w="34px" h="34px" borderRadius="10px" bg="teal.100" align="center" justify="center" flexShrink={0}>
-              <Icon as={MdSync} color="teal.700" boxSize={4} />
+            <Flex w="36px" h="36px" borderRadius="11px" bg={visual.markBg} align="center" justify="center" flexShrink={0} boxShadow="inset 0 0 0 1px rgba(15, 23, 42, 0.03)">
+              <Text color={visual.markColor} fontSize="md" fontWeight="800">{state.mark}</Text>
             </Flex>
             <VStack align="start" spacing={0.5} minW={0}>
-              <Text fontSize="sm" fontWeight="700" color="gray.800">{state.heading}</Text>
+              <Text fontSize="sm" fontWeight="800" color="gray.800" letterSpacing="-0.01em">{state.heading}</Text>
               <Text fontSize="xs" color="gray.500">
-                {clientLabel(summary.client)} · {formatRelativeTime(summary.outcomeCreatedAt || summary.updatedAt)}
+                Run by {clientLabel(summary.client)} · saved {formatRelativeTime(summary.outcomeCreatedAt || summary.updatedAt)}
               </Text>
             </VStack>
           </HStack>
-          <Badge colorScheme={state.color} borderRadius="full" px={2.5} py={1} fontSize="10px" flexShrink={0}>
-            {state.label}
+          <Badge colorScheme={state.color} variant="subtle" borderRadius="full" px={2.5} py={1} fontSize="10px" flexShrink={0}>
+            ●&nbsp; {state.label}
           </Badge>
         </HStack>
       </Box>
@@ -380,18 +391,16 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
           ].map((step, index, steps) => (
             <React.Fragment key={step.label}>
               <VStack spacing={1} minW="72px">
-                <Flex
-                  w="20px" h="20px" borderRadius="full" align="center" justify="center"
-                  bg={step.done ? 'teal.500' : 'gray.100'}
-                  border="1px solid" borderColor={step.done ? 'teal.500' : 'gray.200'}
-                >
+                <Flex w="22px" h="22px" borderRadius="full" align="center" justify="center"
+                  bg={step.done ? 'teal.500' : 'white'} border="2px solid" borderColor={step.done ? 'teal.400' : 'gray.200'}
+                  boxShadow={step.done ? '0 3px 8px -4px rgba(13, 148, 136, 0.9)' : 'none'}>
                   {step.done ? <CheckIcon color="white" boxSize="9px" /> : <Box w="5px" h="5px" bg="gray.300" borderRadius="full" />}
                 </Flex>
                 <Text fontSize="9px" color={step.done ? 'gray.700' : 'gray.400'} textAlign="center" lineHeight="short">
                   {step.label}
                 </Text>
               </VStack>
-              {index < steps.length - 1 && <Box h="1px" flex={1} bg={step.done && steps[index + 1].done ? 'teal.300' : 'gray.200'} mb="17px" />}
+              {index < steps.length - 1 && <Box h="2px" flex={1} bg={step.done && steps[index + 1].done ? 'teal.200' : 'gray.200'} borderRadius="full" mb="17px" />}
             </React.Fragment>
           ))}
         </Flex>
@@ -406,9 +415,13 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
         )}
 
         {outcome.update && (
-          <Text fontSize="12px" color="gray.600" lineHeight="1.55" mb={outcome.draft ? 3 : 0}>
-            {outcome.update}
-          </Text>
+          <Box px={3} py={2.5} bg={visual.outcomeBg} border="1px solid" borderColor={visual.outcomeBorder} borderRadius="10px" mb={3}>
+            <HStack spacing={1.5} mb={1}>
+              <Flex w="15px" h="15px" borderRadius="full" bg={visual.markColor} color="white" align="center" justify="center" fontSize="8px" fontWeight="800">{state.mark}</Flex>
+              <Text fontSize="9px" fontWeight="800" color={visual.markColor} textTransform="uppercase" letterSpacing="0.075em">{state.outcomeLabel}</Text>
+            </HStack>
+            <Text fontSize="12px" fontWeight="500" color="gray.800" lineHeight="1.55">{outcome.update}</Text>
+          </Box>
         )}
 
         {outcome.draft && (
@@ -431,17 +444,25 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
         )}
 
         {(summary.artifacts?.length ?? 0) > 0 && (
-          <VStack align="stretch" spacing={1} mb={3}>
+          <VStack align="stretch" spacing={1.5} mb={3}>
             {summary.artifacts!.map((artifact, index) => (
               <Button
                 key={`${artifact.url}-${index}`}
                 variant="outline"
-                size="sm"
+                h="auto"
+                py={2.5}
+                px={3}
                 justifyContent="flex-start"
-                leftIcon={<ExternalLinkIcon />}
+                borderColor="teal.200"
+                bg="teal.50"
+                _hover={{ bg: 'teal.100', borderColor: 'teal.300', transform: 'translateY(-1px)' }}
+                leftIcon={<Flex w="28px" h="28px" borderRadius="8px" bg="teal.100" color="teal.700" align="center" justify="center"><ExternalLinkIcon boxSize="12px" /></Flex>}
                 onClick={() => api.openExternal(artifact.url)}
               >
-                {artifact.label}
+                <VStack align="start" spacing={0} minW={0}>
+                  <Text fontSize="11px" fontWeight="700" color="teal.700" noOfLines={1}>{artifact.label}</Text>
+                  <Text fontSize="9px" fontWeight="500" color="gray.500">{artifact.type || 'Artifact'} · Open verified output</Text>
+                </VStack>
               </Button>
             ))}
           </VStack>
@@ -457,17 +478,26 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
         )}
       </Box>
 
-      <Box px={4} pb={3.5}>
-        <Button
-          variant="ghost"
-          size="xs"
-          px={0}
-          color="gray.600"
-          rightIcon={showDetails ? <ChevronDownIcon /> : <ChevronRightIcon />}
-          onClick={() => setShowDetails(value => !value)}
-        >
-          Execution details
-        </Button>
+      <Box px={4} py={2.5} bg="gray.50" borderTop="1px solid" borderColor="gray.100">
+        <HStack justify="space-between" spacing={3}>
+          <Button
+            variant="ghost"
+            size="xs"
+            px={0}
+            color="gray.600"
+            _hover={{ color: 'teal.700', bg: 'transparent' }}
+            rightIcon={showDetails ? <ChevronDownIcon /> : <ChevronRightIcon />}
+            onClick={() => setShowDetails(value => !value)}
+          >
+            Execution details
+          </Button>
+          <HStack spacing={1.5} color="gray.400">
+            <Flex w="15px" h="15px" borderRadius="full" bg="teal.50" color="teal.700" align="center" justify="center">
+              <CheckIcon boxSize="7px" />
+            </Flex>
+            <Text fontSize="9px" whiteSpace="nowrap">Approved by {summary.approvedBy || 'the user'}</Text>
+          </HStack>
+        </HStack>
 
         {showDetails && (
           <VStack align="stretch" spacing={3} mt={2} pt={3} borderTop="1px solid" borderColor="gray.100">
@@ -510,9 +540,11 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
           </VStack>
         )}
 
-        <Text fontSize="10px" color="gray.400" mt={3}>
-          Approved by {summary.approvedBy || 'the user'} · {formatRelativeTime(summary.approvedAt || summary.updatedAt)}
-        </Text>
+        {showDetails && (
+          <Text fontSize="9px" color="gray.400" mt={2}>
+            Approved {formatRelativeTime(summary.approvedAt || summary.updatedAt)}
+          </Text>
+        )}
       </Box>
     </Box>
   );

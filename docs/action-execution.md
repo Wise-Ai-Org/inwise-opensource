@@ -47,13 +47,13 @@ work, and clickable artifacts.
 These screenshots come from a packaged Windows build using an isolated synthetic
 Project Aurora profile. Windows and macOS share this same Electron renderer.
 
-![The source action item in the Inwise task list](./screenshots/action-layer/01-action-in-task-list.png)
+![The source action item in the Inwise task list](./screenshots/action-layer/01-action-in-task-list-v3.png)
 
-![A locally created draft awaiting human review](./screenshots/action-layer/02-draft-awaiting-review-v2.png)
+![A locally created draft awaiting human review](./screenshots/action-layer/02-draft-awaiting-review-v3.png)
 
-![The approved plan, scope, and tool boundary recorded in Inwise](./screenshots/action-layer/03-approved-plan-and-scope-v2.png)
+![The approved plan, scope, and tool boundary recorded in Inwise](./screenshots/action-layer/03-approved-plan-and-scope-v3.png)
 
-![A completed action with its verified artifact linked back to Inwise](./screenshots/action-layer/04-completed-with-artifact-v2.png)
+![A completed action with its verified artifact linked back to Inwise](./screenshots/action-layer/04-completed-with-artifact-v3.png)
 
 ## Approval contract
 

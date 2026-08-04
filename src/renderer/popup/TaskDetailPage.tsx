@@ -33,14 +33,14 @@ function ExecutionCard({ summary }: { summary: any }) {
   const hasExternalTools = (summary.proposedTools?.length || 0) > 0 || (summary.approvedTools?.length || 0) > 0;
   const awaitingReview = summary.status === 'running' && hasOutcome && !!summary.remainingWork;
   const state = summary.status === 'completed'
-    ? { label: 'Completed', tone: 'teal', heading: 'Action completed' }
+    ? { label: 'Completed', tone: 'teal', heading: 'Action completed', mark: '✓', outcomeLabel: 'Verified outcome' }
     : summary.status === 'failed'
-      ? { label: 'Needs attention', tone: 'amber', heading: 'Execution needs attention' }
+      ? { label: 'Needs attention', tone: 'red', heading: 'Execution needs attention', mark: '!', outcomeLabel: 'What happened' }
       : summary.status === 'cancelled'
-        ? { label: 'Cancelled', tone: '', heading: 'Execution cancelled' }
+        ? { label: 'Cancelled', tone: 'slate', heading: 'Execution cancelled', mark: '×', outcomeLabel: 'Latest update' }
         : awaitingReview
-          ? { label: 'Awaiting review', tone: 'amber', heading: outcome.draft ? 'Draft ready for review' : 'Progress ready for review' }
-          : { label: 'In progress', tone: '', heading: 'Approved plan in progress' };
+          ? { label: 'Awaiting review', tone: 'amber', heading: outcome.draft ? 'Draft ready for review' : 'Progress ready for review', mark: '✦', outcomeLabel: 'Ready for your review' }
+          : { label: 'In progress', tone: 'blue', heading: 'Approved plan in progress', mark: '↻', outcomeLabel: 'Latest update' };
 
   const copyDraft = async () => {
     if (!outcome.draft || !navigator.clipboard?.writeText) return;
@@ -50,14 +50,16 @@ function ExecutionCard({ summary }: { summary: any }) {
   };
 
   return (
-    <div className="pp-exec-card">
+    <div className={`pp-exec-card pp-exec-${state.tone}`}>
+      <div className="pp-exec-accent" />
       <div className="pp-exec-head">
-        <div className="pp-exec-mark">AI</div>
+        <div className="pp-exec-mark" aria-hidden="true">{state.mark}</div>
         <div className="pp-grow">
           <div className="pp-exec-heading">{state.heading}</div>
-          <div className="pp-meta">{executionClientLabel(summary.client)} · saved to Inwise</div>
+          <div className="pp-meta">Run by {executionClientLabel(summary.client)} · saved to Inwise</div>
         </div>
-        <span className={`pp-chip ${state.tone === 'teal' ? 'pp-teal' : state.tone === 'amber' ? 'pp-amber' : ''}`}>
+        <span className={`pp-exec-status pp-exec-status-${state.tone}`}>
+          <span className="pp-exec-status-dot" />
           {state.label}
         </span>
       </div>
@@ -87,7 +89,12 @@ function ExecutionCard({ summary }: { summary: any }) {
         </div>
       )}
 
-      {outcome.update && <div className="pp-exec-update">{outcome.update}</div>}
+      {outcome.update && (
+        <div className="pp-exec-outcome">
+          <div className="pp-exec-eyebrow"><span>{state.mark}</span>{state.outcomeLabel}</div>
+          <div className="pp-exec-update">{outcome.update}</div>
+        </div>
+      )}
 
       {outcome.draft && (
         <div className="pp-exec-draft">
@@ -102,8 +109,13 @@ function ExecutionCard({ summary }: { summary: any }) {
       {(summary.artifacts?.length || 0) > 0 && (
         <div className="pp-exec-artifacts">
           {summary.artifacts.map((artifact: any, index: number) => (
-            <button key={`${artifact.url}-${index}`} className="pp-link" onClick={() => api().openExternal?.(artifact.url)}>
-              ↗ {artifact.label}
+            <button key={`${artifact.url}-${index}`} className="pp-exec-artifact" onClick={() => api().openExternal?.(artifact.url)}>
+              <span className="pp-exec-artifact-icon">↗</span>
+              <span className="pp-exec-artifact-copy">
+                <strong>{artifact.label}</strong>
+                <small>{artifact.type || 'Artifact'} · Open verified output</small>
+              </span>
+              <span className="pp-exec-artifact-arrow">→</span>
             </button>
           ))}
         </div>
@@ -116,9 +128,12 @@ function ExecutionCard({ summary }: { summary: any }) {
         </div>
       )}
 
-      <button className="pp-exec-toggle" onClick={() => setExpanded(value => !value)}>
-        Execution details <span>{expanded ? '⌄' : '›'}</span>
-      </button>
+      <div className="pp-exec-footer">
+        <button className="pp-exec-toggle" onClick={() => setExpanded(value => !value)}>
+          Execution details <span>{expanded ? '⌃' : '›'}</span>
+        </button>
+        <div className="pp-exec-approved"><span>✓</span> Approved by {summary.approvedBy || 'the user'}</div>
+      </div>
 
       {expanded && (
         <div className="pp-exec-details">
@@ -146,7 +161,6 @@ function ExecutionCard({ summary }: { summary: any }) {
         </div>
       )}
 
-      <div className="pp-exec-approved">Approved by {summary.approvedBy || 'the user'}</div>
     </div>
   );
 }
