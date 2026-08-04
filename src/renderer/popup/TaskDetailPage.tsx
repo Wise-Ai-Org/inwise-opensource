@@ -80,10 +80,12 @@ function ExecutionCard({ summary }: { summary: any }) {
         ))}
       </div>
 
-      <div className={`pp-exec-safety ${hasExternalTools ? 'pp-scope' : ''}`}>
-        <span>✓</span>
-        <span>{hasExternalTools ? 'External access stayed within the approved scope.' : 'Draft only · No external tools used · Nothing sent'}</span>
-      </div>
+      {hasExternalTools && (
+        <div className="pp-exec-safety pp-scope">
+          <span>✓</span>
+          <span>External access stayed within the approved scope.</span>
+        </div>
+      )}
 
       {outcome.update && <div className="pp-exec-update">{outcome.update}</div>}
 

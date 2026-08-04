@@ -396,14 +396,14 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
           ))}
         </Flex>
 
-        <HStack spacing={2} px={3} py={2} bg={hasExternalTools ? 'orange.50' : 'green.50'} borderRadius="8px" mb={3} align="start">
-          <CheckIcon boxSize="11px" mt="3px" color={hasExternalTools ? 'orange.600' : 'green.600'} flexShrink={0} />
-          <Text fontSize="11px" color={hasExternalTools ? 'orange.800' : 'green.800'} lineHeight="short">
-            {hasExternalTools
-              ? 'External tool access was limited to the approved scope shown below.'
-              : 'Draft only · No external tools used · Nothing sent'}
-          </Text>
-        </HStack>
+        {hasExternalTools && (
+          <HStack spacing={2} px={3} py={2} bg="orange.50" borderRadius="8px" mb={3} align="start">
+            <CheckIcon boxSize="11px" mt="3px" color="orange.600" flexShrink={0} />
+            <Text fontSize="11px" color="orange.800" lineHeight="short">
+              External tool access was limited to the approved scope shown below.
+            </Text>
+          </HStack>
+        )}
 
         {outcome.update && (
           <Text fontSize="12px" color="gray.600" lineHeight="1.55" mb={outcome.draft ? 3 : 0}>
