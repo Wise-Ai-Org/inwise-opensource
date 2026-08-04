@@ -8,25 +8,25 @@ import {
   setZoomTokens,
   clearZoomCredentials,
 } from './database';
+import {
+  buildZoomAuthorizationUrl,
+  parseZoomOAuthCallback,
+  ZOOM_OAUTH_PORT,
+  ZOOM_OAUTH_TIMEOUT_MS,
+  ZOOM_REDIRECT_URI,
+} from './zoom-oauth-config';
 
-const ZOOM_OAUTH_PORT = 17292;
-// Zoom's redirect allowlist rejects the literal hostname "localhost" — it
-// requires 127.0.0.1 (or [::1]). Must stay byte-identical to the value
-// registered in the Zoom app, or the token exchange fails with invalid_grant.
-const ZOOM_REDIRECT_URI = `http://127.0.0.1:${ZOOM_OAUTH_PORT}/callback`;
-const ZOOM_AUTH_URL = 'https://zoom.us/oauth/authorize';
 const ZOOM_TOKEN_URL = 'https://zoom.us/oauth/token';
 
 // Public client ids of the Inwise Zoom Marketplace app. Safe to ship in MIT
 // source: they are public by design — PKCE replaces the client secret, so
-// there is no secret in this flow at all. The dev id authorizes while the
-// Marketplace app is unpublished; switch the default to the production id
-// once Zoom publishes the app. Forks can point at their own Zoom app via
-// INWISE_ZOOM_PUBLIC_CLIENT_ID or the BYO-credentials path in Settings.
-const ZOOM_PUBLIC_CLIENT_ID_DEV = 'pq0Gg4OSFa89B3miW92fA';
+// there is no secret in this flow at all. The Marketplace app is published,
+// so the production id is the default. Forks can point at their own Zoom app
+// via INWISE_ZOOM_PUBLIC_CLIENT_ID or the BYO-credentials path in Settings.
+export const ZOOM_PUBLIC_CLIENT_ID_DEV = 'pq0Gg4OSFa89B3miW92fA';
 export const ZOOM_PUBLIC_CLIENT_ID_PROD = 'M9fK63XqSCa6nZGUXPAqPg';
 const ZOOM_PUBLIC_CLIENT_ID =
-  process.env.INWISE_ZOOM_PUBLIC_CLIENT_ID || ZOOM_PUBLIC_CLIENT_ID_DEV;
+  process.env.INWISE_ZOOM_PUBLIC_CLIENT_ID || ZOOM_PUBLIC_CLIENT_ID_PROD;
 
 export const ZOOM_REDIRECT_URI_DISPLAY = ZOOM_REDIRECT_URI;
 
@@ -48,20 +48,26 @@ export async function connectZoom(): Promise<{ ok: boolean; error?: string }> {
 
   return new Promise((resolve) => {
     const server = http.createServer(async (req, res) => {
-      if (!req.url?.startsWith('/callback')) {
+      const callback = parseZoomOAuthCallback(req.url, state);
+      if (callback.kind === 'not-callback') {
         res.writeHead(404); res.end(); return;
       }
 
-      const url = new URL(req.url, 'http://localhost');
-      const code = url.searchParams.get('code');
-      const returnedState = url.searchParams.get('state');
-
-      if (!code || returnedState !== state) {
+      // Browsers may retry an old refused loopback redirect. Reject stale state
+      // without closing the current listener so it cannot cancel a fresh flow.
+      if (callback.kind === 'state-mismatch') {
         res.writeHead(400); res.end('Invalid OAuth callback');
-        server.close();
-        resolve({ ok: false, error: 'OAuth state mismatch or missing code' });
         return;
       }
+
+      if (callback.kind === 'oauth-error') {
+        res.writeHead(400); res.end('Zoom authorization was not completed');
+        server.close();
+        resolve({ ok: false, error: callback.error });
+        return;
+      }
+
+      const code = callback.code;
 
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end('<html><body style="font-family:system-ui;text-align:center;padding:60px"><h2>Zoom Connected!</h2><p>You can close this tab and return to Inwise.</p></body></html>');
@@ -118,14 +124,11 @@ export async function connectZoom(): Promise<{ ok: boolean; error?: string }> {
     });
 
     server.listen(ZOOM_OAUTH_PORT, () => {
-      let authUrl =
-        `${ZOOM_AUTH_URL}?response_type=code` +
-        `&client_id=${encodeURIComponent(clientId)}` +
-        `&redirect_uri=${encodeURIComponent(ZOOM_REDIRECT_URI)}` +
-        `&state=${state}`;
-      if (!byo) {
-        authUrl += `&code_challenge=${codeChallenge}&code_challenge_method=S256`;
-      }
+      const authUrl = buildZoomAuthorizationUrl({
+        clientId,
+        state,
+        codeChallenge: byo ? undefined : codeChallenge,
+      });
       shell.openExternal(authUrl);
       log('info', 'zoom:oauth-started', `opened browser for authorization (${byo ? 'byo app' : 'public client'})`);
     });
@@ -133,7 +136,7 @@ export async function connectZoom(): Promise<{ ok: boolean; error?: string }> {
     setTimeout(() => {
       server.close();
       resolve({ ok: false, error: 'OAuth timed out — please try again' });
-    }, 5 * 60 * 1000);
+    }, ZOOM_OAUTH_TIMEOUT_MS);
   });
 }
 

@@ -22,6 +22,8 @@ async function run(): Promise<void> {
     assert.equal(parseTimestampMs('00:00:04.159'), 4159, 'fractional milliseconds');
     assert.equal(parseTimestampMs('00:00:09.959'), 9959, 'fractional ms 2');
     assert.equal(parseTimestampMs('00:00:21.500'), 21500, 'fractional ms 3');
+    assert.equal(parseTimestampMs('-00:00:01.250'), -1250, 'negative Teams offset');
+    assert.equal(parseTimestampMs('00:00:01,500'), 1500, 'comma decimal separator');
   }
 
   // ── parseZoomVtt: fixture file ──────────────────────────────────────────────

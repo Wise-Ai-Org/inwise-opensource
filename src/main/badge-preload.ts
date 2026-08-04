@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   },
   openInwise: () => ipcRenderer.send('pill:open-inwise'),
   pillCancelled: () => ipcRenderer.send('pill:cancelled'),
+  notifyRecordingSilence: (payload: { title: string; silenceMs: number }) => {
+    ipcRenderer.send('recording:silence-check-in', payload);
+  },
 });
 
 contextBridge.exposeInMainWorld('electronAPI', {

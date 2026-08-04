@@ -1,15 +1,17 @@
 # Inwise — Local-First Meeting Intelligence
 
-AI-powered meeting recorder that runs entirely on your machine. Your audio, your transcripts, your action items — none of it leaves your computer except to your Jira or LLM of choice, and only with your key.
+AI-powered meeting recorder that runs primarily on your machine. Your audio and transcripts stay local; extracted work can leave the app only through integrations you explicitly connect, such as your LLM, Jira, Zoom, or Slack.
 
 - **Local transcription** via [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — no audio ever leaves your device
 - **Local speaker voiceprints** via MFCC — identifies who said what, then auto-names it next time
 - **Local storage** — NeDB single-file databases, all in your user profile directory
 - **Your own LLM key** — Claude (Anthropic) or OpenAI for action-item extraction, transcript summaries, and insights
 - **Your own calendars** via ICS feed — Google, Outlook, or any provider that exposes a secret ICS URL
+- **Native transcript imports** — manually pull completed Zoom, Microsoft Teams, or Google Meet transcripts with your own provider credentials
 - **Welcome-back screen** — when you return after a gap, the app tells you what it handled for you instead of piling work on you
 - **Jira integration** — auto-push action items to stories, optional daily pull
-- **Local AI access** — connect OpenWorker or another MCP client to search meetings, prepare agendas, and follow up on action items without uploading an Inwise database; optionally write approved execution outcomes back to the originating task
+- **Slack integration** — one-click browser authorization, local channel ingestion, and explicit recap sharing
+- **Local AI access** — connect Claude, Codex, OpenWorker, or another MCP client to search meetings, prepare agendas, and follow up on action items without uploading an Inwise database; optionally write approved execution outcomes back to the originating task
 
 ---
 
@@ -24,6 +26,17 @@ AI-powered meeting recorder that runs entirely on your machine. Your audio, your
 ---
 
 ## Install
+
+### Download the desktop app
+
+- [Download Inwise for Windows](https://github.com/Wise-Ai-Org/inwise-opensource/releases/latest/download/Inwise-Setup-Windows.exe)
+- [Download the latest macOS build](https://github.com/Wise-Ai-Org/inwise-opensource/releases/latest)
+
+The packaged app supports Windows 10/11 and macOS 13 or later. The repository release
+page includes versioned Windows, Apple Silicon, and Intel artifacts when they are
+available for the current release.
+
+### Build from source
 
 ```shell
 git clone https://github.com/Wise-Ai-Org/inwise-opensource.git
@@ -52,6 +65,19 @@ The Windows app downloads its whisper.cpp runtime on first use. The macOS runtim
 The shared TypeScript package is vendored in `src/shared`, so a normal clone contains everything required to install, test, and build the app.
 
 To use Inwise from OpenWorker, follow the [OpenWorker setup guide](./docs/openworker.md). The connection stays on this computer. The original tool set is read-only; development builds can separately opt into [approval-aware action execution](./docs/action-execution.md).
+
+### Close the Loop with Claude, Codex, or OpenWorker
+
+Open an action item in your AI client, review the source-grounded plan, and approve its
+exact scope. The client performs any approved external work and writes the verified
+outcome, artifacts, and status back to the originating Inwise task. Inwise keeps the
+approval and execution history locally; action writeback is off until you enable it.
+
+![An approved AI execution and its exact scope in Inwise](./docs/screenshots/action-layer/03-approved-plan-and-scope-v3.png)
+
+![A completed action with the verified artifact attached](./docs/screenshots/action-layer/04-completed-with-artifact-v3.png)
+
+To import provider-generated transcripts without running the local recorder, follow the [Teams and Google Meet setup guide](./docs/setup-teams-meet-transcripts.md). Zoom setup is available directly in Settings.
 
 ---
 
@@ -85,6 +111,23 @@ On first launch, you'll walk through:
    - **Outlook**: Settings → View all Outlook settings → Calendar → Shared calendars → Publish a calendar → ICS
 5. **Enroll your voice** (optional but recommended for 1:1s) — record a 10-second clip in Settings → Voiceprints
 6. **Record your first meeting** — join a Zoom/Teams/Meet call, click Record Meeting in the sidebar (or let the calendar-watcher auto-prompt you when the event starts)
+
+---
+
+## Optional Slack integration
+
+Open **Settings → Integrations → Slack** and click **Connect Slack**. Choose a workspace in the browser,
+review Slack's permission screen, and click **Allow**. There is no Slack app to create and no token to paste.
+After authorization, select the channels Inwise may read and the channels available for explicit recap sharing.
+
+The managed Inwise Slack app uses Slack's standard web OAuth exchange, keeping its client secret out of the
+open-source desktop. The default flow therefore uses Inwise's hosted broker only for that exchange. The desktop
+supplies a one-time RSA public key; the broker stores only an
+encrypted, ten-minute handoff and deletes it when claimed. The resulting `xoxp` token is stored in the desktop's
+local config. Raw transcripts are never sent through the broker.
+
+Self-hosted forks can either set `INWISE_SLACK_OAUTH_BROKER_URL` to their broker or expand
+**Advanced: use your own Slack app or token** and provide an `xoxp` user token directly.
 
 ---
 
@@ -125,7 +168,9 @@ Until the diagnostic bundle ships, please attach:
 
 ## Where your data lives
 
-Everything is on your machine. No server round-trips except to your chosen LLM API and optional Jira.
+Meeting data remains on your machine. Network calls occur only for services you explicitly configure: your chosen
+LLM, Jira, Zoom, Microsoft, Google, or Slack. Managed Slack OAuth additionally uses the short-lived token broker
+described above.
 
 The data directory is `%APPDATA%/inwise-opensource/` on Windows and `~/Library/Application Support/inwise-opensource/` on macOS.
 
@@ -158,7 +203,7 @@ The app ships with no pre-bundled AI models. On first use, Whisper model binarie
 - **Audio** never leaves your machine. whisper.cpp runs as a local subprocess
 - **Transcripts** are sent to your LLM of choice (Claude or OpenAI) *only* when you approve insights extraction, and only with your API key
 - **Voiceprints** are MFCC vectors (~1 KB per person) stored in your local NeDB; they aren't audio samples and can't be used to reproduce anyone's voice
-- **Calendar events** come from ICS URLs you paste; we don't OAuth your Google/Microsoft account
+- **Calendar events** normally come from ICS URLs you paste. Teams/Meet OAuth is used only if you explicitly enable native transcript imports
 - **Jira** integration uses OAuth stored in your config; tokens never leave your machine except in direct calls to your Jira instance
 - **Keys and tokens at rest**: API keys and integration tokens are stored unencrypted in your user profile (`config.json` / `credentials.db`), protected by your OS user account's file permissions — the standard local-first tradeoff. Treat the app's data directory like you'd treat `~/.ssh`
 - **Local MCP server** (Settings → Connect to AI): serves meetings, action items, people, and meeting-prep context to AI clients on this machine at `127.0.0.1:43117`. Ten tools are read-only. Three default-off tools can record a user-approved execution, outcome/artifact links, and a local task-status change; the connected AI client still owns all external tool calls. Meeting details return only a short transcript excerpt; full transcripts require a separate paginated tool call. Loopback-only with DNS-rebinding guards, but on a shared multi-user machine other OS accounts can reach loopback ports — turn it off in Settings there. See the [OpenWorker data-boundary notes](./docs/openworker.md#understand-the-data-boundary) and [action-execution test flow](./docs/action-execution.md).
@@ -177,6 +222,7 @@ What's shipped:
 - Simultaneous-meeting conflict modal
 - Jira auto-push and daily pull
 - Action-item completion inference from transcripts (soft flag, never auto-closes)
+- Manual native transcript import from Zoom, Microsoft Teams, and Google Meet
 
 What's next:
 - **Auto-updater** (electron-updater against GitHub releases)

@@ -15,6 +15,7 @@ interface Config {
   jiraClientSecret: string;
   jiraAutoPush: boolean;
   jiraDefaultProject: string;
+  slackUserToken?: string;
   slackBotToken: string;
   slackReadChannels: string[];
   slackWriteChannels: string[];
@@ -670,11 +671,16 @@ interface SlackChannel {
 
 function SlackSettings() {
   const [token, setToken] = useState('');
-  const [status, setStatus] = useState<{ connected: boolean } | null>(null);
+  const [status, setStatus] = useState<{
+    connected: boolean;
+    tokenType?: 'user' | 'bot' | 'unknown' | 'none';
+    threadCapable?: boolean;
+  } | null>(null);
+  const [oauthConnecting, setOauthConnecting] = useState(false);
   const [validating, setValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [teamName, setTeamName] = useState<string | undefined>();
-  const [botName, setBotName] = useState<string | undefined>();
+  const [slackUserName, setSlackUserName] = useState<string | undefined>();
 
   // Channel + inactivity settings (shown when connected)
   const [channels, setChannels] = useState<SlackChannel[]>([]);
@@ -702,22 +708,47 @@ function SlackSettings() {
       const result = await (window as any).inwiseAPI.slackListChannels?.();
       if (result?.ok) {
         setChannels(result.channels ?? []);
+        setError(null);
+      } else {
+        setError(result?.error ?? 'Could not load Slack channels');
       }
+    } catch (e: any) {
+      setError(e.message);
     } finally {
       setLoadingChannels(false);
     }
   };
 
-  const connect = async () => {
+  const connectOAuth = async () => {
+    setOauthConnecting(true);
+    setError(null);
+    try {
+      const result = await (window as any).inwiseAPI.slackConnectOAuth?.();
+      if (result?.ok) {
+        setStatus({ connected: true, tokenType: result.tokenType, threadCapable: true });
+        setTeamName(result.teamName);
+        setSlackUserName(result.userName);
+        await loadChannels();
+      } else {
+        setError(result?.error ?? 'Slack authorization failed');
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setOauthConnecting(false);
+    }
+  };
+
+  const connectWithToken = async () => {
     if (!token.trim()) return;
     setValidating(true);
     setError(null);
     try {
       const result = await (window as any).inwiseAPI.slackConnect?.(token.trim());
       if (result?.ok) {
-        setStatus({ connected: true });
+        setStatus({ connected: true, tokenType: result.tokenType, threadCapable: true });
         setTeamName(result.teamName);
-        setBotName(result.botName);
+        setSlackUserName(result.userName);
         setToken('');
         loadChannels();
       } else {
@@ -732,9 +763,9 @@ function SlackSettings() {
 
   const disconnect = async () => {
     await (window as any).inwiseAPI.slackDisconnect?.();
-    setStatus({ connected: false });
+    setStatus({ connected: false, tokenType: 'none', threadCapable: false });
     setTeamName(undefined);
-    setBotName(undefined);
+    setSlackUserName(undefined);
     setChannels([]);
   };
 
@@ -756,8 +787,9 @@ function SlackSettings() {
   return (
     <div>
       <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16, lineHeight: 1.6 }}>
-        Connect Slack by pasting a bot token. The token is stored locally and never sent to any server.
-        Create a bot at <strong>api.slack.com/apps</strong>, add it to your workspace, and copy the Bot User OAuth Token.
+        Connect in your browser, choose a workspace, and review the permissions Slack displays. There is
+        nothing to create or paste. Your workspace token is handed securely to this app and stored only on
+        this computer.
       </p>
 
       {status?.connected ? (
@@ -765,10 +797,17 @@ function SlackSettings() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--green-500, #22c55e)', display: 'inline-block' }} />
             <span style={{ fontSize: 13, color: 'var(--slate-700)' }}>
-              Connected{teamName ? ` to ${teamName}` : ''}{botName ? ` as ${botName}` : ''}
+              Connected{teamName ? ` to ${teamName}` : ''}{slackUserName ? ` as ${slackUserName}` : ''}
             </span>
             <button className="btn btn-secondary" style={{ marginLeft: 'auto' }} onClick={disconnect}>Disconnect</button>
           </div>
+
+          {status.threadCapable === false && (
+            <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 16, lineHeight: 1.5 }}>
+              This is a legacy bot-token connection. Disconnect it and reconnect with an xoxp User OAuth Token
+              before enabling read channels; Slack blocks bot tokens from reading channel thread replies.
+            </div>
+          )}
 
           <div className="form-group">
             <label className="form-label">
@@ -802,6 +841,9 @@ function SlackSettings() {
 
           <div className="form-group">
             <label className="form-label">Write channels</label>
+            <span style={{ fontSize: 12, color: 'var(--slate-500)', display: 'block', marginBottom: 6 }}>
+              Meeting detail pages can post an explicit Wiser recap only to the channels selected here.
+            </span>
             {channels.length > 0 ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
                 {channels.map(ch => (
@@ -820,24 +862,29 @@ function SlackSettings() {
             )}
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Inactivity window (minutes)</label>
-            <input
-              type="number"
-              className="form-input"
-              min={1}
-              max={1440}
-              style={{ width: 100 }}
-              value={inactivityWindowMin}
-              onChange={e => {
-                setInactivityWindowMin(parseInt(e.target.value, 10) || 60);
-                setSettingsSaved(false);
-              }}
-            />
-            <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
-              A thread is only processed after this many minutes of silence. Default: 60.
-            </span>
-          </div>
+          <details style={{ marginBottom: 16 }}>
+            <summary style={{ fontSize: 12, color: 'var(--slate-500)', cursor: 'pointer' }}>
+              Advanced sync timing
+            </summary>
+            <div className="form-group" style={{ marginTop: 10 }}>
+              <label className="form-label">Thread inactivity window (minutes)</label>
+              <input
+                type="number"
+                className="form-input"
+                min={1}
+                max={1440}
+                style={{ width: 100 }}
+                value={inactivityWindowMin}
+                onChange={e => {
+                  setInactivityWindowMin(parseInt(e.target.value, 10) || 60);
+                  setSettingsSaved(false);
+                }}
+              />
+              <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
+                Threads are imported after this much silence. The default is 60 minutes.
+              </span>
+            </div>
+          </details>
 
           <button className="btn btn-primary" onClick={saveSettings}>
             {settingsSaved ? 'Saved!' : 'Save Slack Settings'}
@@ -845,27 +892,47 @@ function SlackSettings() {
         </div>
       ) : (
         <div>
-          <div className="form-group">
-            <label className="form-label">Bot Token</label>
-            <input
-              type="password"
-              className="form-input"
-              value={token}
-              onChange={e => setToken(e.target.value)}
-              placeholder="xoxb-…"
-              style={{ fontFamily: 'monospace' }}
-            />
-          </div>
           {error && (
-            <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 8 }}>&#x2715; {error}</div>
+            <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 12 }}>&#x2715; {error}</div>
           )}
           <button
             className="btn btn-primary"
-            disabled={validating || !token.trim()}
-            onClick={connect}
+            disabled={oauthConnecting}
+            onClick={connectOAuth}
           >
-            {validating ? 'Validating…' : 'Connect Slack'}
+            {oauthConnecting ? 'Waiting for Slack…' : 'Connect Slack'}
           </button>
+
+          <details style={{ marginTop: 16 }}>
+            <summary style={{ fontSize: 12, color: 'var(--slate-500)', cursor: 'pointer' }}>
+              Advanced: use your own Slack app or token
+            </summary>
+            <p style={{ fontSize: 12, color: 'var(--slate-500)', lineHeight: 1.55, margin: '12px 0' }}>
+              For self-hosted forks, create a Slack app with these User Token Scopes, install it, and paste its
+              <strong> xoxp-</strong> token:
+              <code style={{ display: 'block', marginTop: 6, whiteSpace: 'normal' }}>
+                channels:read, groups:read, channels:history, groups:history, users:read, chat:write
+              </code>
+            </p>
+            <div className="form-group">
+              <label className="form-label">User OAuth Token</label>
+              <input
+                type="password"
+                className="form-input"
+                value={token}
+                onChange={e => setToken(e.target.value)}
+                placeholder="xoxp-…"
+                style={{ fontFamily: 'monospace' }}
+              />
+            </div>
+            <button
+              className="btn btn-secondary"
+              disabled={validating || !token.trim() || oauthConnecting}
+              onClick={connectWithToken}
+            >
+              {validating ? 'Validating…' : 'Connect with token'}
+            </button>
+          </details>
         </div>
       )}
     </div>
@@ -1568,6 +1635,342 @@ function ZoomSettings() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+interface NativeMeetingItem {
+  title: string;
+  startedAt: string;
+  [key: string]: any;
+}
+
+function NativeTranscriptPicker({
+  platform,
+  listMeetings,
+  fetchTranscript,
+  itemKey,
+}: {
+  platform: string;
+  listMeetings: () => Promise<any>;
+  fetchTranscript: (meeting: NativeMeetingItem) => Promise<any>;
+  itemKey: (meeting: NativeMeetingItem) => string;
+}) {
+  const [state, setState] = useState<FetchFlowState>('idle');
+  const [meetings, setMeetings] = useState<NativeMeetingItem[]>([]);
+  const [message, setMessage] = useState('');
+
+  const reset = () => {
+    setState('idle');
+    setMeetings([]);
+    setMessage('');
+  };
+
+  const list = async () => {
+    setState('listing');
+    setMessage('');
+    let result: any;
+    try {
+      result = await listMeetings();
+    } catch (error: any) {
+      setState('error');
+      setMessage(error?.message || `Failed to list ${platform} meetings`);
+      return;
+    }
+    if (!result?.ok) {
+      setState('error');
+      setMessage(result?.error || `Failed to list ${platform} meetings`);
+      return;
+    }
+    if (!result.meetings?.length) {
+      setState('error');
+      setMessage(`No completed ${platform} meetings were found in the last 30 days.`);
+      return;
+    }
+    setMeetings(result.meetings);
+    setState('ready');
+  };
+
+  const fetchOne = async (meeting: NativeMeetingItem) => {
+    setState('fetching');
+    setMessage('');
+    let result: any;
+    try {
+      result = await fetchTranscript(meeting);
+    } catch (error: any) {
+      setState('error');
+      setMessage(error?.message || `Failed to fetch the ${platform} transcript`);
+      return;
+    }
+    if (!result?.ok) {
+      setState('error');
+      setMessage(result?.error || `Failed to fetch the ${platform} transcript`);
+      return;
+    }
+    const attributionNote = result.speakerAttributed === false
+      ? ' Speaker attribution was disabled by your Microsoft 365 administrator, so speakers are labeled Unknown speaker.'
+      : '';
+    setMessage(`“${meeting.title}” imported successfully.${attributionNote}`);
+    setState('done');
+  };
+
+  if (state === 'idle') {
+    return <button className="btn btn-primary btn-sm" onClick={list}>Fetch from {platform}</button>;
+  }
+  if (state === 'listing') {
+    return <div style={{ fontSize: 13, color: 'var(--slate-500)' }}>Loading recent meetings…</div>;
+  }
+  if (state === 'fetching') {
+    return <div style={{ fontSize: 13, color: 'var(--slate-500)' }}>Fetching native transcript…</div>;
+  }
+  if (state === 'ready') {
+    return (
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--navy)' }}>
+          Pick a meeting to import:
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflowY: 'auto' }}>
+          {meetings.map(meeting => (
+            <button
+              key={itemKey(meeting)}
+              className="btn btn-secondary btn-sm"
+              style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 12px' }}
+              onClick={() => fetchOne(meeting)}
+            >
+              <span style={{ fontWeight: 600, fontSize: 13 }}>{meeting.title}</span>
+              <span style={{ fontSize: 11, color: 'var(--slate-400)' }}>
+                {new Date(meeting.startedAt).toLocaleString(undefined, {
+                  month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+                })}
+              </span>
+            </button>
+          ))}
+        </div>
+        <button className="btn btn-secondary btn-sm" style={{ marginTop: 10, fontSize: 11 }} onClick={reset}>Cancel</button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ fontSize: 12, color: state === 'done' ? 'var(--green)' : 'var(--red)', fontWeight: state === 'done' ? 600 : 400 }}>
+        {state === 'done' ? '✓' : '✕'} {message}
+      </div>
+      <button
+        className={state === 'done' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+        style={{ width: 'fit-content' }}
+        onClick={reset}
+      >
+        {state === 'done' ? 'Fetch Another' : 'Try Again'}
+      </button>
+    </div>
+  );
+}
+
+function TeamsSettings() {
+  const [clientId, setClientId] = useState('');
+  const [tenant, setTenant] = useState('');
+  const [connected, setConnected] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [redirectUri, setRedirectUri] = useState('http://127.0.0.1:17293/callback');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    (window as any).inwiseAPI.teamsStatus?.().then((status: any) => {
+      setConnected(!!status?.connected);
+      setConfigured(!!status?.configured);
+    });
+    (window as any).inwiseAPI.teamsRedirectUri?.().then((uri: string) => { if (uri) setRedirectUri(uri); });
+  }, []);
+
+  const connect = async () => {
+    setConnecting(true);
+    setError('');
+    if (clientId.trim()) {
+      const saved = await (window as any).inwiseAPI.teamsSaveCredentials(clientId, tenant);
+      if (!saved?.ok) {
+        setError(saved?.error || 'Failed to save Microsoft credentials');
+        setConnecting(false);
+        return;
+      }
+      setConfigured(true);
+    } else if (!configured) {
+      setError('Microsoft application (client) ID is required');
+      setConnecting(false);
+      return;
+    }
+    const result = await (window as any).inwiseAPI.teamsConnect();
+    setConnecting(false);
+    if (result?.ok) {
+      setConnected(true);
+      setClientId('');
+      setTenant('');
+    } else {
+      setError(result?.error || 'Microsoft Teams connection failed');
+    }
+  };
+
+  const disconnect = async () => {
+    await (window as any).inwiseAPI.teamsDisconnect();
+    setConnected(false);
+    setConfigured(false);
+  };
+
+  if (connected) {
+    return (
+      <div>
+        <div style={{ padding: '12px 16px', background: 'var(--slate-50)', borderRadius: 8, border: '1px solid var(--slate-200)', marginBottom: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--navy)' }}>Microsoft Teams Connected</div>
+            <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, color: 'var(--red)' }} onClick={disconnect}>Disconnect</button>
+          </div>
+        </div>
+        <NativeTranscriptPicker
+          platform="Teams"
+          listMeetings={() => (window as any).inwiseAPI.teamsListMeetings()}
+          fetchTranscript={(meeting) => (window as any).inwiseAPI.teamsFetchTranscript(meeting)}
+          itemKey={(meeting) => meeting.eventId}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 14, lineHeight: 1.6 }}>
+        Import transcripts Microsoft Teams produced after meetings. Create a public desktop app in Microsoft Entra,
+        add the loopback redirect below, and enable delegated Calendars.Read, OnlineMeetings.Read, and
+        OnlineMeetingTranscript.Read.All permissions. The transcript permission requires tenant-admin consent.
+      </p>
+      <button className="btn btn-secondary btn-sm" style={{ marginBottom: 14 }}
+        onClick={() => (window as any).inwiseAPI.openExternal('https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade')}>
+        Open Microsoft Entra
+      </button>
+      <div className="form-group" style={{ marginBottom: 12 }}>
+        <label className="form-label">Redirect URI (Mobile and desktop application)</label>
+        <code style={{ fontSize: 12, display: 'block', background: 'var(--slate-100)', padding: '8px 10px', borderRadius: 6, userSelect: 'all' }}>{redirectUri}</code>
+      </div>
+      <div className="form-group" style={{ marginBottom: 12 }}>
+        <label className="form-label">Application (client) ID</label>
+        <input className="form-input" value={clientId} onChange={event => setClientId(event.target.value)}
+          placeholder={configured ? 'Saved locally — enter only to replace' : 'Microsoft Entra application ID'} />
+      </div>
+      <div className="form-group" style={{ marginBottom: 14 }}>
+        <label className="form-label">Tenant ID or domain (optional)</label>
+        <input className="form-input" value={tenant} onChange={event => setTenant(event.target.value)}
+          placeholder="Leave blank for any work or school tenant" />
+      </div>
+      {error && <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 12 }}>✕ {error}</div>}
+      <button className="btn btn-primary btn-sm" onClick={connect} disabled={connecting}>
+        {connecting ? 'Waiting for Microsoft…' : configured && !clientId ? 'Reconnect Teams' : 'Connect Teams'}
+      </button>
+    </div>
+  );
+}
+
+function MeetSettings() {
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [connected, setConnected] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [redirectUri, setRedirectUri] = useState('http://127.0.0.1:17294/callback');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    (window as any).inwiseAPI.meetStatus?.().then((status: any) => {
+      setConnected(!!status?.connected);
+      setConfigured(!!status?.configured);
+    });
+    (window as any).inwiseAPI.meetRedirectUri?.().then((uri: string) => { if (uri) setRedirectUri(uri); });
+  }, []);
+
+  const connect = async () => {
+    setConnecting(true);
+    setError('');
+    if (clientId.trim() || clientSecret.trim()) {
+      if (!clientId.trim() || !clientSecret.trim()) {
+        setError('Enter both the Google Desktop client ID and client secret');
+        setConnecting(false);
+        return;
+      }
+      const saved = await (window as any).inwiseAPI.meetSaveCredentials(clientId, clientSecret);
+      if (!saved?.ok) {
+        setError(saved?.error || 'Failed to save Google credentials');
+        setConnecting(false);
+        return;
+      }
+      setConfigured(true);
+    } else if (!configured) {
+      setError('Google Desktop client ID and client secret are required');
+      setConnecting(false);
+      return;
+    }
+    const result = await (window as any).inwiseAPI.meetConnect();
+    setConnecting(false);
+    if (result?.ok) {
+      setConnected(true);
+      setClientId('');
+      setClientSecret('');
+    } else {
+      setError(result?.error || 'Google Meet connection failed');
+    }
+  };
+
+  const disconnect = async () => {
+    await (window as any).inwiseAPI.meetDisconnect();
+    setConnected(false);
+    setConfigured(false);
+  };
+
+  if (connected) {
+    return (
+      <div>
+        <div style={{ padding: '12px 16px', background: 'var(--slate-50)', borderRadius: 8, border: '1px solid var(--slate-200)', marginBottom: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--navy)' }}>Google Meet Connected</div>
+            <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, color: 'var(--red)' }} onClick={disconnect}>Disconnect</button>
+          </div>
+        </div>
+        <NativeTranscriptPicker
+          platform="Google Meet"
+          listMeetings={() => (window as any).inwiseAPI.meetListMeetings()}
+          fetchTranscript={(meeting) => (window as any).inwiseAPI.meetFetchTranscript(meeting)}
+          itemKey={(meeting) => meeting.name}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 14, lineHeight: 1.6 }}>
+        Enable the Google Meet REST API, create OAuth credentials with application type Desktop app, and add
+        the meetings.space.readonly scope to the consent screen. For a Workspace organization, an Internal
+        consent screen avoids the seven-day refresh-token expiry applied to External apps in Testing mode.
+      </p>
+      <button className="btn btn-secondary btn-sm" style={{ marginBottom: 14 }}
+        onClick={() => (window as any).inwiseAPI.openExternal('https://console.cloud.google.com/apis/credentials')}>
+        Open Google Cloud credentials
+      </button>
+      <div className="form-group" style={{ marginBottom: 12 }}>
+        <label className="form-label">Loopback callback used during sign-in</label>
+        <code style={{ fontSize: 12, display: 'block', background: 'var(--slate-100)', padding: '8px 10px', borderRadius: 6, userSelect: 'all' }}>{redirectUri}</code>
+      </div>
+      <div className="form-group" style={{ marginBottom: 12 }}>
+        <label className="form-label">Desktop client ID</label>
+        <input className="form-input" value={clientId} onChange={event => setClientId(event.target.value)}
+          placeholder={configured ? 'Saved locally — enter only to replace' : 'Client ID ending in apps.googleusercontent.com'} />
+      </div>
+      <div className="form-group" style={{ marginBottom: 14 }}>
+        <label className="form-label">Desktop client secret</label>
+        <input type="password" className="form-input" value={clientSecret} onChange={event => setClientSecret(event.target.value)}
+          placeholder={configured ? 'Saved locally — enter only to replace' : 'Client secret from the downloaded JSON'} />
+      </div>
+      {error && <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 12 }}>✕ {error}</div>}
+      <button className="btn btn-primary btn-sm" onClick={connect} disabled={connecting}>
+        {connecting ? 'Waiting for Google…' : configured && !clientId && !clientSecret ? 'Reconnect Google Meet' : 'Connect Google Meet'}
+      </button>
     </div>
   );
 }
@@ -2584,7 +2987,7 @@ function VoiceEnrollment() {
 // Settings renders just that section (no page header) so it can live inside a
 // narrow drill-down page; with no prop it renders the full legacy scroll.
 export type SettingsSectionOnly =
-  | 'ai' | 'startup' | 'transcription' | 'calendar' | 'jira' | 'zoom' | 'slack'
+  | 'ai' | 'startup' | 'transcription' | 'calendar' | 'jira' | 'zoom' | 'teams' | 'meet' | 'slack'
   | 'ai-connect' | 'integrations' | 'voice' | 'data';
 
 export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) {
@@ -2836,6 +3239,20 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
           <div className="settings-section">
             <div className="settings-section-title">Zoom Integration</div>
             <ZoomSettings />
+          </div>
+          )}
+
+          {show('teams') && (
+          <div className="settings-section">
+            <div className="settings-section-title">Microsoft Teams Integration</div>
+            <TeamsSettings />
+          </div>
+          )}
+
+          {show('meet') && (
+          <div className="settings-section">
+            <div className="settings-section-title">Google Meet Integration</div>
+            <MeetSettings />
           </div>
           )}
 

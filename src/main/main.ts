@@ -85,9 +85,26 @@ import {
 import { listZoomRecordings, getTranscriptDownloadUrl } from './zoom-recordings';
 import { downloadAndParseVtt } from './zoom-vtt-parser';
 import { ingestNormalizedTranscript } from './zoom-transcript-ingestion';
-import { validateToken, isSlackConnected, listChannels as slackListChannels } from './slack-client';
+import {
+  connectTeams, disconnectTeams, getTeamsStatus, saveTeamsCredentials,
+  testTeamsConnection, TEAMS_REDIRECT_URI_DISPLAY,
+} from './teams-oauth';
+import { fetchTeamsTranscriptArtifact, listTeamsMeetings } from './teams-api';
+import { parseTeamsVtt } from './teams-vtt-parser';
+import {
+  connectMeet, disconnectMeet, getMeetStatus, saveMeetCredentials,
+  testMeetConnection, MEET_REDIRECT_URI_DISPLAY,
+} from './meet-oauth';
+import { fetchMeetTranscript, listMeetConferenceRecords } from './meet-api';
+import {
+  validateToken,
+  getSlackConnectionInfo,
+  listChannels as slackListChannels,
+  postWiserNote,
+} from './slack-client';
+import { connectSlackWithOAuth } from './slack-oauth';
 import { normalizeSlackThread } from './slack-normalizer';
-import { startSlackPoller, stopSlackPoller, registerSlackPipeline } from './slack-poller';
+import { startSlackPoller, stopSlackPoller, registerSlackPipeline, runSlackPollNow } from './slack-poller';
 import { startMcpServer, stopMcpServer, getMcpStatus, setUpcomingEventsProvider } from './mcp-server';
 import { computePopupBounds } from './popup-position';
 import { installApplicationMenu } from './application-menu';
@@ -110,6 +127,8 @@ let isRecordingActive = false;
 const AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS = 60 * 1000;
 let lastMicFailureNotifiedAt = 0;
 let lastSysAudioFailureNotifiedAt = 0;
+const RECORDING_SILENCE_NOTIFY_DEBOUNCE_MS = 60 * 1000;
+let lastRecordingSilenceNotifiedAt = 0;
 
 // Meeting conflict detection (US-006)
 const MEETING_CONFLICT_WINDOW_MS = 90 * 1000;
@@ -161,6 +180,26 @@ export function togglePopupWindow(): void {
     positionPopupWindow(mainWindow);
     mainWindow.show();
     mainWindow.focus();
+  }
+}
+
+const VOICE_CAPTURE_SHORTCUT = 'Alt+,';
+
+function openVoiceCapture(): void {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+
+  positionPopupWindow(win);
+  win.show();
+  win.focus();
+
+  const navigate = () => {
+    if (!win.isDestroyed()) win.webContents.send('app:navigate', 'voice-capture');
+  };
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', () => setTimeout(navigate, 100));
+  } else {
+    navigate();
   }
 }
 
@@ -2280,6 +2319,86 @@ ipcMain.handle('zoom:fetchTranscript', async (_e, recording: { meetingId: string
   } catch (e: any) { return { ok: false, error: e.message }; }
 });
 
+// Microsoft Teams native transcripts
+ipcMain.handle('teams:saveCredentials', async (_e, clientId: string, tenant?: string) => {
+  try { await saveTeamsCredentials(clientId, tenant); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('teams:connect', async () => {
+  try { return await connectTeams(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('teams:disconnect', async () => {
+  try { await disconnectTeams(); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('teams:status', async () => {
+  try { return await getTeamsStatus(); }
+  catch { return { connected: false }; }
+});
+ipcMain.handle('teams:test', async () => {
+  try { return await testTeamsConnection(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('teams:redirectUri', () => TEAMS_REDIRECT_URI_DISPLAY);
+ipcMain.handle('teams:listMeetings', async () => {
+  try {
+    if (!(await getTeamsStatus()).connected) {
+      return { ok: false, error: 'Not connected to Microsoft Teams. Connect in Settings first.' };
+    }
+    return { ok: true, meetings: await listTeamsMeetings() };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('teams:fetchTranscript', async (_e, meeting) => {
+  try {
+    const artifact = await fetchTeamsTranscriptArtifact(meeting);
+    const normalized = parseTeamsVtt(artifact);
+    if (normalized.segments.length === 0) {
+      return { ok: false, error: 'Microsoft returned an empty or unsupported Teams transcript.' };
+    }
+    const meetingId = await ingestNormalizedTranscript(normalized, { source: 'teams_transcript' });
+    return { ok: true, meetingId, speakerAttributed: artifact.speakerAttributed };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+
+// Google Meet native transcripts
+ipcMain.handle('meet:saveCredentials', async (_e, clientId: string, clientSecret: string) => {
+  try { await saveMeetCredentials(clientId, clientSecret); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('meet:connect', async () => {
+  try { return await connectMeet(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('meet:disconnect', async () => {
+  try { await disconnectMeet(); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('meet:status', async () => {
+  try { return await getMeetStatus(); }
+  catch { return { connected: false }; }
+});
+ipcMain.handle('meet:test', async () => {
+  try { return await testMeetConnection(); }
+  catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('meet:redirectUri', () => MEET_REDIRECT_URI_DISPLAY);
+ipcMain.handle('meet:listMeetings', async () => {
+  try {
+    if (!(await getMeetStatus()).connected) {
+      return { ok: false, error: 'Not connected to Google Meet. Connect in Settings first.' };
+    }
+    return { ok: true, meetings: await listMeetConferenceRecords() };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('meet:fetchTranscript', async (_e, conference) => {
+  try {
+    const normalized = await fetchMeetTranscript(conference);
+    const meetingId = await ingestNormalizedTranscript(normalized, { source: 'meet_transcript' });
+    return { ok: true, meetingId };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+
 // SoR audit log (US-001)
 ipcMain.handle('sor:listRecent', async (_e, limit?: number, sinceMs?: number) => {
   return sorListRecent(limit ?? 50, sinceMs);
@@ -2453,6 +2572,7 @@ ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string, 
   isRecordingActive = true;
   lastMicFailureNotifiedAt = 0;
   lastSysAudioFailureNotifiedAt = 0;
+  lastRecordingSilenceNotifiedAt = 0;
   return true;
 });
 
@@ -2482,6 +2602,7 @@ ipcMain.on('pill:resize', (e, { width, height }: { width: number; height?: numbe
 // User clicked the pill during preflight/countdown — abort before recording starts.
 ipcMain.on('pill:cancelled', () => {
   isRecordingActive = false;
+  lastRecordingSilenceNotifiedAt = 0;
   updateTrayMenu(mainWindow!, false);
   // Re-arm calendar-free VAD in the main window (it waits for a terminal status).
   mainWindow?.webContents.send('recording:status', { status: 'done' });
@@ -2597,6 +2718,42 @@ ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
       body: next.message || 'System audio lost â€” only your mic will be transcribed for the rest of this meeting.',
     }).show();
   }
+});
+
+ipcMain.on('recording:silence-check-in', (event, payload: { title?: string; silenceMs?: number }) => {
+  if (!isRecordingActive || !Notification.isSupported()) return;
+  if (!overlayWindow || overlayWindow.isDestroyed() || event.sender.id !== overlayWindow.webContents.id) return;
+
+  const now = Date.now();
+  if (now - lastRecordingSilenceNotifiedAt < RECORDING_SILENCE_NOTIFY_DEBOUNCE_MS) return;
+  lastRecordingSilenceNotifiedAt = now;
+
+  const rawTitle = typeof payload?.title === 'string' ? payload.title.trim() : '';
+  const recordingTitle = rawTitle.slice(0, 120) || 'This recording';
+  const notification = new Notification({
+    title: 'Are you still there?',
+    body: `"${recordingTitle}" has been quiet for five minutes. Inwise is still recording.`,
+    actions: [
+      { type: 'button', text: 'Keep recording' },
+      { type: 'button', text: 'Stop & save' },
+    ],
+  });
+
+  const showRecorder = () => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) return;
+    overlayWindow.show();
+    overlayWindow.focus();
+  };
+  notification.on('action', (_event, index) => {
+    if (index === 1 && overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send('recording:stop-request');
+      return;
+    }
+    showRecorder();
+  });
+  notification.on('click', showRecorder);
+  notification.show();
+  log('info', 'recording:silence-check-in', `notified for "${recordingTitle}"`);
 });
 
 ipcMain.handle('audio:health:get', () => latestAudioHealth);
@@ -2750,6 +2907,7 @@ const pendingAudio = new Map<string, { buffers: Buffer[]; title: string; calenda
 ipcMain.on('recording:audio-data', (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   isRecordingActive = false;
+  lastRecordingSilenceNotifiedAt = 0;
   const key = `${title}|${stereo ? 1 : 0}`;
   const entry = pendingAudio.get(key);
   if (entry) {
@@ -2873,6 +3031,7 @@ function startMeetingRecording(event: MeetingEvent): void {
   isRecordingActive = true;
   lastMicFailureNotifiedAt = 0;
   lastSysAudioFailureNotifiedAt = 0;
+  lastRecordingSilenceNotifiedAt = 0;
   mainWindow?.webContents.send('badge:show', event.title);
 }
 
@@ -3153,6 +3312,9 @@ app.whenReady().then(() => {
     });
     if (!normalized) return;
 
+    // Extract first so a transient LLM failure cannot create a partial meeting
+    // that is then mistaken for a successfully consumed Slack batch.
+    const insights = await extractInsights(normalized.transcript);
     const meetingId = await createMeeting({
       title: normalized.title,
       date: normalized.date,
@@ -3160,16 +3322,9 @@ app.whenReady().then(() => {
       source: 'slack_thread',
     });
     await updateMeetingTranscript(meetingId, normalized.transcript, 0);
+    await saveInsights(meetingId, insights);
     mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
-
-    try {
-      const insights = await extractInsights(normalized.transcript);
-      await saveInsights(meetingId, insights);
-      mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
-      log('info', 'slack:pipeline', `Insights saved for thread in #${channelName} (meeting ${meetingId})`);
-    } catch (insightErr: any) {
-      log('error', 'slack:pipeline', `Insight extraction failed for ${meetingId}: ${insightErr.message}`);
-    }
+    log('info', 'slack:pipeline', `Insights saved for thread in #${channelName} (meeting ${meetingId})`);
   });
 
   // Start Slack poller (delayed 10 s to let the main window settle)
@@ -3220,6 +3375,9 @@ app.whenReady().then(() => {
   globalShortcut.register('CommandOrControl+Shift+T', () => {
     createOverlayWindow('Test Meeting');
   });
+  if (!globalShortcut.register(VOICE_CAPTURE_SHORTCUT, openVoiceCapture)) {
+    log('warn', 'shortcut:voice-capture', `Could not register ${VOICE_CAPTURE_SHORTCUT}`);
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -3235,23 +3393,62 @@ app.on('activate', () => {
 ipcMain.handle('slack:connect', async (_e, token: string) => {
   const result = await validateToken(token);
   if (result.ok) {
-    setConfig({ slackBotToken: token } as any);
+    setConfig({ slackUserToken: token, slackBotToken: '' } as any);
+    void runSlackPollNow().catch((error) => log('error', 'slack:poller', `Post-connect poll failed: ${error.message}`));
   }
   return result;
 });
 
+ipcMain.handle('slack:connectOAuth', async () => {
+  try {
+    const connection = await connectSlackWithOAuth();
+    setConfig({ slackUserToken: connection.token, slackBotToken: '' } as any);
+    void runSlackPollNow().catch((error) => log('error', 'slack:poller', `Post-connect poll failed: ${error.message}`));
+    return {
+      ok: true,
+      teamName: connection.teamName,
+      userName: connection.userName,
+      tokenType: connection.tokenType,
+    };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('slack:disconnect', () => {
-  setConfig({ slackBotToken: '' } as any);
+  setConfig({ slackUserToken: '', slackBotToken: '' } as any);
   return true;
 });
 
 ipcMain.handle('slack:status', () => {
-  return { connected: isSlackConnected() };
+  return getSlackConnectionInfo();
 });
 
 ipcMain.handle('slack:listChannels', async () => {
   try { return { ok: true, channels: await slackListChannels() }; }
   catch (e: any) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('slack:listWriteChannels', async () => {
+  try {
+    const allowed = new Set(((getConfig() as any).slackWriteChannels ?? []) as string[]);
+    const channels = (await slackListChannels()).filter((channel) => allowed.has(channel.id));
+    return { ok: true, channels };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('slack:postWiserNote', async (_e, channelId: string, note: string) => {
+  try {
+    if (typeof channelId !== 'string' || typeof note !== 'string') {
+      return { ok: false, error: 'Invalid Slack note request' };
+    }
+    await postWiserNote(channelId, note);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // ── Local MCP server IPC handlers ──────────────────────────────────────────

@@ -3,7 +3,7 @@ import React, { createContext, useCallback, useContext, useMemo, useState } from
 export type Tab = 'meetings' | 'tasks' | 'people';
 
 export type SettingsSectionKey =
-  | 'ai' | 'startup' | 'transcription' | 'calendar' | 'jira' | 'zoom' | 'slack'
+  | 'ai' | 'startup' | 'transcription' | 'calendar' | 'jira' | 'zoom' | 'teams' | 'meet' | 'slack'
   | 'ai-connect' | 'integrations' | 'voice' | 'data';
 
 export type Page =
@@ -63,7 +63,8 @@ export const api = () => (window as any).inwiseAPI;
 // Legacy view names map onto popup navigation via a window event the shell
 // listens for.
 export const POPUP_NAV_EVENT = 'pp-navigate';
-export type LegacyView = 'communications' | 'tasks' | 'people' | 'settings';
+export type LegacyView = 'communications' | 'tasks' | 'people' | 'settings' | 'voice-capture';
+export const VOICE_CAPTURE_TRIGGER_EVENT = 'pp-voice-capture-trigger';
 
 export function requestPopupNav(detail: { view?: LegacyView; meetingId?: string }) {
   window.dispatchEvent(new CustomEvent(POPUP_NAV_EVENT, { detail }));

@@ -46,6 +46,9 @@ interface Config {
   jiraTokens: any | null;
   jiraAutoPush: boolean;
   jiraDefaultProject: string;
+  /** User OAuth token (xoxp) used for channel history and thread replies. */
+  slackUserToken: string;
+  /** @deprecated legacy bot-token storage; retained for migration/status messaging. */
   slackBotToken: string;
   slackReadChannels: string[];
   slackWriteChannels: string[];
@@ -70,8 +73,13 @@ interface Config {
   autostartConfigured: boolean;
 }
 
+// Node-run unit tests import database.ts without an Electron app context. Give
+// them an explicit, task-scoped config directory instead of touching a real
+// user's electron-store fallback directory.
+const testConfigDir = process.env.INWISE_TEST_CONFIG_DIR?.trim();
+
 const store = new Store<Config>({
-  ...storeLocationOptions(),
+  ...(testConfigDir ? { cwd: testConfigDir } : storeLocationOptions()),
   defaults: {
     apiProvider: 'anthropic',
     apiKey: '',
@@ -90,6 +98,7 @@ const store = new Store<Config>({
     jiraTokens: null,
     jiraAutoPush: false,
     jiraDefaultProject: '',
+    slackUserToken: '',
     slackBotToken: '',
     slackReadChannels: [],
     slackWriteChannels: [],

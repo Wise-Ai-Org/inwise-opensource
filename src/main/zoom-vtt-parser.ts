@@ -6,12 +6,17 @@ type FetchFn = typeof fetch;
  * Converts a VTT timestamp string (HH:MM:SS.mmm) to milliseconds.
  */
 export function parseTimestampMs(ts: string): number {
-  const dotIdx = ts.lastIndexOf('.');
-  const fractional = dotIdx !== -1 ? parseInt(ts.slice(dotIdx + 1), 10) : 0;
-  const timePart = dotIdx !== -1 ? ts.slice(0, dotIdx) : ts;
+  const normalized = ts.trim().replace(',', '.');
+  const negative = normalized.startsWith('-');
+  const unsigned = negative ? normalized.slice(1) : normalized;
+  const dotIdx = unsigned.lastIndexOf('.');
+  const fractionalText = dotIdx !== -1 ? unsigned.slice(dotIdx + 1) : '';
+  const fractional = fractionalText ? parseInt(fractionalText.padEnd(3, '0').slice(0, 3), 10) : 0;
+  const timePart = dotIdx !== -1 ? unsigned.slice(0, dotIdx) : unsigned;
   const parts = timePart.split(':').map(Number);
   const [h, m, s] = parts.length === 3 ? parts : [0, ...parts];
-  return (h * 3600 + m * 60 + s) * 1000 + fractional;
+  const result = (h * 3600 + m * 60 + s) * 1000 + fractional;
+  return negative ? -result : result;
 }
 
 /**

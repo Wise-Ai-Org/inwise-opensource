@@ -2,8 +2,7 @@
 
 Inwise 1.4.0 and later includes a local MCP server. OpenWorker can use it to search your
 meeting history, prepare agendas, and review action items while Inwise keeps its database
-on your computer. Newer development builds also offer default-off, approval-aware action
-writeback.
+on your computer. Inwise 1.6.0 adds default-off, approval-aware action writeback.
 
 ## Before you connect
 
@@ -21,7 +20,7 @@ When the Inwise card is available in your OpenWorker build:
 1. Open **Connectors** in OpenWorker.
 2. Select **Inwise** and click **Connect**.
 3. Ask OpenWorker to check the Inwise connection. A successful response includes the
-   Inwise version, ten read tools, and — on a writeback-capable build — three action
+   Inwise version, ten read tools, and — in Inwise 1.6.0 or later — three action
    execution tools whose writes remain blocked until separately enabled in Inwise.
 
 There is no Inwise account or sign-in step. OpenWorker connects directly to
@@ -108,7 +107,8 @@ Open Inwise and confirm **Settings → Connect to AI** is on and still uses port
 
 **OpenWorker says a tool is missing**
 
-Run `get_connection_status` and verify the reported Inwise version is 1.4.0 or later. Then
+Run `get_connection_status` and verify the reported Inwise version is 1.4.0 or later for
+read access, or 1.6.0 or later for action writeback. Then
 restart both applications so OpenWorker refreshes the tool list.
 
 **The morning brief did not run**

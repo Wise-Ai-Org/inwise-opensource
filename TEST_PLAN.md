@@ -116,6 +116,22 @@ Each renders differently. Force each once to exercise the UI:
   - `[Turn on]` → card morphs: *"Done. Inwise will start automatically next time you log in."* `app.getLoginItemSettings().openAtLogin` becomes true. Re-open app → offer no longer appears.
 - **No ask qualifies** → empty-state copy (see "On app start" above).
 
+## Settings → Slack integration
+
+- **One-click connection** → click **Connect Slack**, choose a workspace in the browser, approve the displayed permissions, and return to Inwise. No app creation or token copy is requested; channel lists load automatically.
+- **Cancel consent** → Slack's browser page closes with a cancellation message and Inwise returns to its disconnected state with a retryable error.
+- **One-time handoff** → after a successful connection, replaying the broker poll credentials returns no token. The broker session record contains only RSA/AES ciphertext before claim and is deleted after claim.
+- **Local persistence** → restart Inwise after connecting. Slack remains connected from the locally stored `xoxp` token without calling the broker again.
+- **Advanced manual fallback** → expand **Advanced: use your own Slack app or token**. An `xoxb-` token is rejected; a properly scoped `xoxp-` token connects and loads channels.
+- **Select a private channel the user can access** → its history and thread replies can be read after saving it as a Read channel.
+- **Pagination regression** → post more than 15 top-level messages between polls. Every message appears in the imported loose-message batch, in chronological order; none are skipped when Slack returns `next_cursor`.
+- **Quiet-thread regression** → set inactivity to 1 minute, create a thread, and wait until it goes quiet without posting another top-level channel message. A later poll imports the full parent + replies exactly once.
+- **Restart durability** → quit after the poll first discovers an active thread but before its inactivity window expires. Restart after it is quiet; the pending thread imports without requiring new channel activity.
+- **Failure safety** → temporarily remove the configured LLM key while a loose batch is due. The Slack timestamp cursor does not advance; restoring the key lets the next poll retry the same messages.
+- **Explicit outbound recap** → select a Write channel, open a processed meeting, choose that channel under Share to Slack, and click **Post recap**. Slack receives summary/decisions/action items/blockers with a Wiser header; the raw transcript is absent.
+- **Write allowlist** → remove the destination from Write channels and retry. The post is rejected instead of sending to an unapproved channel.
+- **Rate limit recovery** → when Slack returns 429, `app.log` shows `slack:rate-limited` and the request resumes after `Retry-After` without advancing the history cursor early.
+
 ## Silent checks (tail `app.log`)
 
 These are the signals that previously-broken behavior is fixed:
@@ -127,6 +143,31 @@ These are the signals that previously-broken behavior is fixed:
 - `renderer:unhandled-rejection` entries replace silent swallowed failures in the audio stack.
 - `login-item | openAtLogin=true|false` when the launch-at-startup offer is acted on.
 - `audio-data:received | calendarEventId=...` when a manual Record is linked to a calendar event.
+
+## Settings → Microsoft Teams transcript import
+
+- Register a public-client Entra app with redirect `http://localhost:17293/callback` and the delegated permissions documented in `docs/setup-teams-meet-transcripts.md`.
+- Use an account with an active cloud Exchange Online mailbox; verify an on-premises/inactive mailbox produces the documented actionable error.
+- **Save credentials** → status changes from unconfigured to ready to connect; no secret/token appears in `config.json` or logs.
+- **Connect** → system browser opens, callback completes, and status changes to connected.
+- **Refresh meetings** → recent Teams calendar meetings appear; non-Teams calendar events do not.
+- **Import a transcribed meeting** → meeting appears once with named speakers and source `teams_transcript`.
+- **Import the same transcript again** → clear already-imported message; no duplicate meeting row.
+- **Meeting with speaker attribution disabled** → unattributed fallback imports as `Unknown speaker`, or a clear tenant-policy error appears.
+- **Missing admin consent / transcript disabled / unauthorized meeting** → actionable provider-specific message, no silent failure.
+- **Disconnect** → status returns to disconnected and the local Teams OAuth credential record is cleared.
+
+## Settings → Google Meet transcript import
+
+- Configure a Google OAuth Desktop client and Meet API as documented in `docs/setup-teams-meet-transcripts.md`.
+- **Save credentials** → status changes from unconfigured to ready to connect; secret/token does not appear in logs.
+- **Connect** → system browser opens, callback completes, and status changes to connected.
+- **Refresh meetings** → completed conference records from the last 30 days appear.
+- **Import a transcribed meeting** → meeting appears once with participant names and source `meet_transcript`.
+- **Import the same transcript again** → clear already-imported message; no duplicate meeting row.
+- **No transcript / disabled API / denied scope / expired Testing token** → actionable Google-specific message.
+- Reconnect after invalidating the access token and confirm the refresh token is used successfully.
+- **Disconnect** → Google token revoke is attempted and the local Meet OAuth credential record is cleared.
 
 ## Recovery checks (when something goes wrong)
 

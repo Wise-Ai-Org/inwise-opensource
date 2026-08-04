@@ -6,6 +6,7 @@ import {
   SystemAudioCaptureState,
 } from './audio-probe';
 import { captureSystemAudio } from './system-audio';
+import { RecordingSilenceWatchdog, RECORDING_SILENCE_CHECK_IN_MS } from './recording-silence';
 
 // Compact recorder pill. Collapsed it is a small capsule with four dots that bob
 // with real audio level; hover expands it to show title, timer, and a stop square.
@@ -230,6 +231,7 @@ export default function Badge() {
   const mergerRef = useRef<ChannelMergerNode | null>(null);
   const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const silenceWatchdogRef = useRef(new RecordingSilenceWatchdog());
   const hasStereoRef = useRef(false);
   const stopRecordingRef = useRef<() => void>(() => {});
   const titleRef = useRef<string>('Meeting');
@@ -354,6 +356,7 @@ export default function Badge() {
 
   useEffect(() => {
     if (state.status !== 'recording') return;
+    silenceWatchdogRef.current.reset();
     const id = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
     return () => clearInterval(id);
   }, [state.status]);
@@ -374,6 +377,12 @@ export default function Badge() {
         let sumSq = 0;
         for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
         const rms = Math.sqrt(sumSq / buf.length);
+        if (silenceWatchdogRef.current.observe(rms)) {
+          (window as any).inwiseAPI?.notifyRecordingSilence?.({
+            title: titleRef.current,
+            silenceMs: RECORDING_SILENCE_CHECK_IN_MS,
+          });
+        }
         // fast attack, slow decay — mild motion, capped at 5px lift
         levelRef.current = Math.max(rms, levelRef.current * 0.93);
         const lift = Math.min(5, levelRef.current * 160);
