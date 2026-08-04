@@ -40,6 +40,19 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build:renderer
+      - name: Package unsigned Windows installer
+        if: matrix.platform == 'windows'
+        run: npx electron-builder --win --${{ matrix.target_arch }} --publish never
+      - name: Upload unsigned Windows installer
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Inwise-${{ matrix.label }}-unsigned
+          path: |
+            release-v2/Inwise-Setup-*.exe
+            release-v2/Inwise-Setup-*.exe.blockmap
+          if-no-files-found: error
+          retention-days: 7
       - name: Build and verify native Whisper runtime
         if: matrix.platform == 'macos'
         run: |
