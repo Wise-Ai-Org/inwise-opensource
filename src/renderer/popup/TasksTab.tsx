@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtDueDate, useNav } from './nav';
 import { RepetitionNudge } from './DedupBits';
+import { AiButton } from '../components/AiButton';
 
 type Status = 'todo' | 'inProgress' | 'completed';
 
@@ -294,7 +295,9 @@ export default function TasksTab() {
           </div>
 
           <div className="pp-row" style={{ justifyContent: 'space-between', padding: '0 2px' }}>
-            <button className="pp-link" onClick={() => push({ kind: 'review', focus: 'priorities' })}>Review priorities</button>
+            <AiButton size="sm" tone="light" onClick={() => push({ kind: 'review', focus: 'priorities' })}>
+              Review priorities
+            </AiButton>
             <button className="pp-link" onClick={() => setCreateOpen(true)}>+ New task</button>
           </div>
 

@@ -15,6 +15,7 @@ import TranscriptUploadModal from './views/communications/TranscriptUploadModal'
 import TranscriptReviewModal from './views/communications/TranscriptReviewModal';
 import JiraMappingModal from './views/communications/JiraMappingModal';
 import { FlowModalOverlay, FlowModalContent, FlowModalHeader, FlowModalBody, FlowModalFooter } from './components/modal/FlowModalShell';
+import { AiButton } from './components/AiButton';
 import { api } from './api';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -1106,8 +1107,8 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
 
   // ── AI agenda for upcoming meetings ────────────────────────────────────────
 
-  const fetchMeetingAgenda = async (meeting: Meeting) => {
-    if (meetingAgendas[meeting._id] || loadingAgendaFor === meeting._id) return;
+  const fetchMeetingAgenda = async (meeting: Meeting, force = false) => {
+    if ((!force && meetingAgendas[meeting._id]) || loadingAgendaFor === meeting._id) return;
     setLoadingAgendaFor(meeting._id);
     try {
       const result = await api.generateMeetingAgenda(meeting.title, meeting.attendees);
@@ -1362,14 +1363,21 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
                   </Text>
                   {agenda && <Badge colorScheme="purple" variant="subtle" fontSize="9px" borderRadius="full" px={1.5}>AI</Badge>}
                   {agenda && (
-                    <IconButton
+                    <AiButton
                       aria-label="Regenerate agenda"
-                      icon={<RepeatIcon />}
-                      size="xs"
-                      variant="ghost"
-                      isLoading={isLoadingAgenda}
-                      onClick={e => { e.stopPropagation(); setMeetingAgendas(prev => { const next = { ...prev }; delete next[meeting._id]; return next; }); fetchMeetingAgenda(meeting); }}
-                    />
+                      size="sm"
+                      tone="light"
+                      busy={isLoadingAgenda}
+                      busyLabel="Refreshing…"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setMeetingAgendas(prev => { const next = { ...prev }; delete next[meeting._id]; return next; });
+                        fetchMeetingAgenda(meeting, true);
+                      }}
+                      trailing={<RepeatIcon />}
+                    >
+                      Regenerate
+                    </AiButton>
                   )}
                 </Flex>
                 {isLoadingAgenda && !agenda ? (

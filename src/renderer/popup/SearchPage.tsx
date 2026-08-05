@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { api, useNav } from './nav';
+import { AiButton } from '../components/AiButton';
 
 export default function SearchPage() {
   const { pop } = useNav();
@@ -54,9 +55,16 @@ export default function SearchPage() {
             onKeyDown={e => { if (e.key === 'Enter') run(); }}
             disabled={loading}
           />
-          <button className="pp-link" onClick={run} disabled={loading || !query.trim()}>
-            {loading ? '…' : 'Ask'}
-          </button>
+          <AiButton
+            size="sm"
+            tone="light"
+            onClick={run}
+            disabled={!query.trim()}
+            busy={loading}
+            busyLabel="Reading…"
+          >
+            Ask Wiser
+          </AiButton>
         </div>
 
         {loading && (
