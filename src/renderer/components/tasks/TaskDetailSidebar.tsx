@@ -22,6 +22,26 @@ interface TaskComment {
 interface RelatedTask {
   taskId: string; type: 'dependency' | 'related' | 'blocks' | 'blocked_by'; title?: string;
 }
+interface ExecutionSummary {
+  executionId: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  objective: string;
+  plan?: string[];
+  proposedTools?: Array<{ name: string; purpose: string; target?: string | null; dataShared?: string | null }>;
+  client?: string;
+  latestOutcomeSummary?: string | null;
+  outcomeResult?: 'progress' | 'completed' | 'failed' | null;
+  outcomeCreatedAt?: string | null;
+  artifacts?: Array<{ type: string; label: string; url: string; externalId?: string | null }>;
+  remainingWork?: string | null;
+  approvedBy?: string;
+  approvedAt?: string;
+  approvalScope?: string;
+  approvedTools?: string[];
+  lastStatusNote?: string | null;
+  createdAt?: string;
+  updatedAt: string;
+}
 interface DetailedTask {
   _id: string; title: string; description?: string; status: string; priority: string;
   complexity?: string; estimate?: number; dueDate?: string | null; createdAt: string; updatedAt: string;
@@ -57,6 +77,7 @@ interface DetailedTask {
     slackThreadId?: string | null;
   };
   distillationSessionId?: string;
+  executionSummary?: ExecutionSummary;
 }
 
 interface TaskDetailSidebarProps {
@@ -281,6 +302,250 @@ function Section({ label, icon, children }: { label: string; icon?: any; childre
         <Text fontSize="sm" fontWeight="semibold">{label}</Text>
       </HStack>
       {children}
+    </Box>
+  );
+}
+
+function splitExecutionOutcome(summary?: string | null): { update: string; draft: string | null } {
+  const text = summary?.trim() || '';
+  const match = /\n\s*Full draft:\s*\n/i.exec(text);
+  if (!match || match.index == null) return { update: text, draft: null };
+  return {
+    update: text.slice(0, match.index).trim(),
+    draft: text.slice(match.index + match[0].length).trim() || null,
+  };
+}
+
+function clientLabel(client?: string): string {
+  if (!client) return 'AI client';
+  if (client === 'claude-code') return 'Claude Code';
+  if (client === 'openworker') return 'OpenWorker';
+  if (client === 'codex') return 'Codex';
+  return client.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const toast = useToast();
+  const outcome = splitExecutionOutcome(summary.latestOutcomeSummary);
+  const hasOutcome = !!summary.latestOutcomeSummary;
+  const hasExternalTools = (summary.proposedTools?.length || 0) > 0 || (summary.approvedTools?.length || 0) > 0;
+  const isAwaitingReview = summary.status === 'running' && hasOutcome && !!summary.remainingWork;
+  const state = summary.status === 'completed'
+    ? { label: 'Completed', color: 'green', heading: 'Action completed', mark: '✓', outcomeLabel: 'Verified outcome' }
+    : summary.status === 'failed'
+      ? { label: 'Needs attention', color: 'red', heading: 'Execution needs attention', mark: '!', outcomeLabel: 'What happened' }
+      : summary.status === 'cancelled'
+        ? { label: 'Cancelled', color: 'gray', heading: 'Execution cancelled', mark: '×', outcomeLabel: 'Latest update' }
+        : isAwaitingReview
+          ? { label: 'Awaiting review', color: 'orange', heading: outcome.draft ? 'Draft ready for review' : 'Progress ready for review', mark: '✦', outcomeLabel: 'Ready for your review' }
+          : { label: 'In progress', color: 'blue', heading: 'Approved plan in progress', mark: '↻', outcomeLabel: 'Latest update' };
+
+  const visual = state.color === 'orange'
+    ? { border: 'orange.200', accent: 'linear(to-r, orange.400, yellow.300, orange.100)', header: 'linear(to-br, orange.50, white, gray.50)', markBg: 'orange.100', markColor: 'orange.700', outcomeBg: 'orange.50', outcomeBorder: 'orange.200' }
+    : state.color === 'red'
+      ? { border: 'red.200', accent: 'linear(to-r, red.400, pink.300, red.100)', header: 'linear(to-br, red.50, white, gray.50)', markBg: 'red.100', markColor: 'red.700', outcomeBg: 'red.50', outcomeBorder: 'red.200' }
+      : state.color === 'blue'
+        ? { border: 'blue.200', accent: 'linear(to-r, blue.400, teal.300, teal.100)', header: 'linear(to-br, blue.50, white, gray.50)', markBg: 'blue.100', markColor: 'blue.700', outcomeBg: 'blue.50', outcomeBorder: 'blue.100' }
+        : state.color === 'gray'
+          ? { border: 'gray.300', accent: 'linear(to-r, gray.500, gray.300, gray.100)', header: 'linear(to-br, gray.50, white)', markBg: 'gray.100', markColor: 'gray.700', outcomeBg: 'gray.50', outcomeBorder: 'gray.200' }
+          : { border: 'teal.200', accent: 'linear(to-r, teal.400, teal.300, teal.100)', header: 'linear(to-br, teal.50, white, gray.50)', markBg: 'teal.100', markColor: 'teal.700', outcomeBg: 'teal.50', outcomeBorder: 'teal.100' };
+
+  const copyDraft = async () => {
+    if (!outcome.draft || !navigator.clipboard?.writeText) {
+      toast({ title: 'Copy is not available', status: 'error', duration: 1800 });
+      return;
+    }
+    await navigator.clipboard.writeText(outcome.draft);
+    toast({ title: 'Draft copied', status: 'success', duration: 1600 });
+  };
+
+  return (
+    <Box border="1px solid" borderColor={visual.border} borderRadius="14px" overflow="hidden" bg="white" boxShadow="0 12px 30px -24px rgba(15, 118, 110, 0.75), 0 2px 6px rgba(15, 23, 42, 0.04)">
+      <Box h="3px" bgGradient={visual.accent} />
+      <Box px={4} py={3.5} bgGradient={visual.header} borderBottom="1px solid" borderColor="gray.100">
+        <HStack justify="space-between" align="start" spacing={3}>
+          <HStack spacing={3} align="start" minW={0}>
+            <Flex w="36px" h="36px" borderRadius="11px" bg={visual.markBg} align="center" justify="center" flexShrink={0} boxShadow="inset 0 0 0 1px rgba(15, 23, 42, 0.03)">
+              <Text color={visual.markColor} fontSize="md" fontWeight="800">{state.mark}</Text>
+            </Flex>
+            <VStack align="start" spacing={0.5} minW={0}>
+              <Text fontSize="sm" fontWeight="800" color="gray.800" letterSpacing="-0.01em">{state.heading}</Text>
+              <Text fontSize="xs" color="gray.500">
+                Run by {clientLabel(summary.client)} · saved {formatRelativeTime(summary.outcomeCreatedAt || summary.updatedAt)}
+              </Text>
+            </VStack>
+          </HStack>
+          <Badge colorScheme={state.color} variant="subtle" borderRadius="full" px={2.5} py={1} fontSize="10px" flexShrink={0}>
+            ●&nbsp; {state.label}
+          </Badge>
+        </HStack>
+      </Box>
+
+      <Box px={4} pt={3.5}>
+        <Flex align="center" mb={3}>
+          {[
+            { label: 'Plan approved', done: true },
+            { label: 'Outcome saved', done: hasOutcome },
+            { label: 'Work complete', done: summary.status === 'completed' },
+          ].map((step, index, steps) => (
+            <React.Fragment key={step.label}>
+              <VStack spacing={1} minW="72px">
+                <Flex w="22px" h="22px" borderRadius="full" align="center" justify="center"
+                  bg={step.done ? 'teal.500' : 'white'} border="2px solid" borderColor={step.done ? 'teal.400' : 'gray.200'}
+                  boxShadow={step.done ? '0 3px 8px -4px rgba(13, 148, 136, 0.9)' : 'none'}>
+                  {step.done ? <CheckIcon color="white" boxSize="9px" /> : <Box w="5px" h="5px" bg="gray.300" borderRadius="full" />}
+                </Flex>
+                <Text fontSize="9px" color={step.done ? 'gray.700' : 'gray.400'} textAlign="center" lineHeight="short">
+                  {step.label}
+                </Text>
+              </VStack>
+              {index < steps.length - 1 && <Box h="2px" flex={1} bg={step.done && steps[index + 1].done ? 'teal.200' : 'gray.200'} borderRadius="full" mb="17px" />}
+            </React.Fragment>
+          ))}
+        </Flex>
+
+        {hasExternalTools && (
+          <HStack spacing={2} px={3} py={2} bg="orange.50" borderRadius="8px" mb={3} align="start">
+            <CheckIcon boxSize="11px" mt="3px" color="orange.600" flexShrink={0} />
+            <Text fontSize="11px" color="orange.800" lineHeight="short">
+              External tool access was limited to the approved scope shown below.
+            </Text>
+          </HStack>
+        )}
+
+        {outcome.update && (
+          <Box px={3} py={2.5} bg={visual.outcomeBg} border="1px solid" borderColor={visual.outcomeBorder} borderRadius="10px" mb={3}>
+            <HStack spacing={1.5} mb={1}>
+              <Flex w="15px" h="15px" borderRadius="full" bg={visual.markColor} color="white" align="center" justify="center" fontSize="8px" fontWeight="800">{state.mark}</Flex>
+              <Text fontSize="9px" fontWeight="800" color={visual.markColor} textTransform="uppercase" letterSpacing="0.075em">{state.outcomeLabel}</Text>
+            </HStack>
+            <Text fontSize="12px" fontWeight="500" color="gray.800" lineHeight="1.55">{outcome.update}</Text>
+          </Box>
+        )}
+
+        {outcome.draft && (
+          <Box border="1px solid" borderColor="gray.200" borderRadius="10px" overflow="hidden" mb={3}>
+            <HStack justify="space-between" px={3} py={2} bg="gray.50" borderBottom="1px solid" borderColor="gray.100">
+              <HStack spacing={2}>
+                <Icon as={MdEmail} boxSize={3.5} color="gray.500" />
+                <Text fontSize="10px" color="gray.500" fontWeight="700" textTransform="uppercase" letterSpacing="0.06em">
+                  Email draft
+                </Text>
+              </HStack>
+              <Button size="xs" variant="ghost" colorScheme="teal" h="24px" fontSize="10px" onClick={copyDraft}>
+                Copy draft
+              </Button>
+            </HStack>
+            <Text px={3} py={3} fontSize="12px" color="gray.800" lineHeight="1.6" whiteSpace="pre-wrap">
+              {outcome.draft}
+            </Text>
+          </Box>
+        )}
+
+        {(summary.artifacts?.length ?? 0) > 0 && (
+          <VStack align="stretch" spacing={1.5} mb={3}>
+            {summary.artifacts!.map((artifact, index) => (
+              <Button
+                key={`${artifact.url}-${index}`}
+                variant="outline"
+                h="auto"
+                py={2.5}
+                px={3}
+                justifyContent="flex-start"
+                borderColor="teal.200"
+                bg="teal.50"
+                _hover={{ bg: 'teal.100', borderColor: 'teal.300', transform: 'translateY(-1px)' }}
+                leftIcon={<Flex w="28px" h="28px" borderRadius="8px" bg="teal.100" color="teal.700" align="center" justify="center"><ExternalLinkIcon boxSize="12px" /></Flex>}
+                onClick={() => api.openExternal(artifact.url)}
+              >
+                <VStack align="start" spacing={0} minW={0}>
+                  <Text fontSize="11px" fontWeight="700" color="teal.700" noOfLines={1}>{artifact.label}</Text>
+                  <Text fontSize="9px" fontWeight="500" color="gray.500">{artifact.type || 'Artifact'} · Open verified output</Text>
+                </VStack>
+              </Button>
+            ))}
+          </VStack>
+        )}
+
+        {summary.remainingWork && (
+          <Box px={3} py={2.5} bg="orange.50" borderRadius="8px" borderLeft="3px solid" borderLeftColor="orange.300" mb={3}>
+            <Text fontSize="10px" fontWeight="700" color="orange.700" textTransform="uppercase" letterSpacing="0.06em" mb={1}>
+              Next step
+            </Text>
+            <Text fontSize="11px" color="orange.900" lineHeight="1.5">{summary.remainingWork}</Text>
+          </Box>
+        )}
+      </Box>
+
+      <Box px={4} py={2.5} bg="gray.50" borderTop="1px solid" borderColor="gray.100">
+        <HStack justify="space-between" spacing={3}>
+          <Button
+            variant="ghost"
+            size="xs"
+            px={0}
+            color="gray.600"
+            _hover={{ color: 'teal.700', bg: 'transparent' }}
+            rightIcon={showDetails ? <ChevronDownIcon /> : <ChevronRightIcon />}
+            onClick={() => setShowDetails(value => !value)}
+          >
+            Execution details
+          </Button>
+          <HStack spacing={1.5} color="gray.400">
+            <Flex w="15px" h="15px" borderRadius="full" bg="teal.50" color="teal.700" align="center" justify="center">
+              <CheckIcon boxSize="7px" />
+            </Flex>
+            <Text fontSize="9px" whiteSpace="nowrap">Approved by {summary.approvedBy || 'the user'}</Text>
+          </HStack>
+        </HStack>
+
+        {showDetails && (
+          <VStack align="stretch" spacing={3} mt={2} pt={3} borderTop="1px solid" borderColor="gray.100">
+            <Box>
+              <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Objective</Text>
+              <Text fontSize="11px" color="gray.700" lineHeight="1.5">{summary.objective}</Text>
+            </Box>
+            {(summary.plan?.length || 0) > 0 && (
+              <Box>
+                <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1.5}>Approved plan</Text>
+                <VStack align="stretch" spacing={1.5}>
+                  {summary.plan!.map((step, index) => (
+                    <HStack key={index} spacing={2} align="start">
+                      <Flex w="17px" h="17px" borderRadius="full" bg="gray.100" align="center" justify="center" flexShrink={0}>
+                        <Text fontSize="9px" fontWeight="700" color="gray.500">{index + 1}</Text>
+                      </Flex>
+                      <Text fontSize="11px" color="gray.600" lineHeight="1.45">{step}</Text>
+                    </HStack>
+                  ))}
+                </VStack>
+              </Box>
+            )}
+            <Box>
+              <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Approval scope</Text>
+              <Text fontSize="11px" color="gray.700" lineHeight="1.5">
+                {summary.approvalScope || 'The approved execution scope was recorded by the connected AI client.'}
+              </Text>
+              <Text fontSize="10px" color="gray.500" mt={1}>
+                {(summary.approvedTools?.length || 0) > 0
+                  ? `Approved tools: ${summary.approvedTools!.join(', ')}`
+                  : 'Approved tools: none'}
+              </Text>
+            </Box>
+            {summary.lastStatusNote && (
+              <Box>
+                <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Status note</Text>
+                <Text fontSize="11px" color="gray.700" lineHeight="1.5">{summary.lastStatusNote}</Text>
+              </Box>
+            )}
+          </VStack>
+        )}
+
+        {showDetails && (
+          <Text fontSize="9px" color="gray.400" mt={2}>
+            Approved {formatRelativeTime(summary.approvedAt || summary.updatedAt)}
+          </Text>
+        )}
+      </Box>
     </Box>
   );
 }
@@ -891,6 +1156,13 @@ export default function TaskDetailSidebar({
                   onSave={val => saveField('description', val)}
                   renderValue={val => <Text fontSize="sm" color="gray.700" whiteSpace="pre-wrap">{val}</Text>} />
               </Box>
+
+              {/* ── Approved AI execution writeback ── */}
+              {task.executionSummary && (
+                <Section label="AI execution" icon={MdSync}>
+                  <ExecutionSummaryCard summary={task.executionSummary} />
+                </Section>
+              )}
 
               {/* ── Definition of Done ── */}
               {task.definition && (task.definition.acceptanceCriteria?.length || task.definition.outcome) ? (

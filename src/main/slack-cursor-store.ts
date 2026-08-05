@@ -1,5 +1,7 @@
 /** Persistent Slack timestamp cursors, pending quiet threads, and dedup state. */
 
+import { storeLocationOptions } from './store-location';
+
 export interface SlackPendingThread {
   threadTs: string;
   latestActivityTs: string;
@@ -28,6 +30,7 @@ function activeStore(): SlackStateStore {
   if (!cursorStore) {
     const Store = require('electron-store') as typeof import('electron-store');
     cursorStore = new Store<SlackCursorState>({
+      ...storeLocationOptions(),
       name: 'slack-cursor-state',
       defaults: {
         cursors: {},

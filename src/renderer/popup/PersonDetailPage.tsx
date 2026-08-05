@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api, initials, useNav } from './nav';
+import { AiButton } from '../components/AiButton';
 
 export default function PersonDetailPage({ personId }: { personId: string }) {
   const { pop, push } = useNav();
@@ -110,9 +111,15 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                 </ul>
               </div>
             ) : (
-              <button className="pp-btn pp-ghost" onClick={generateAgenda} disabled={agendaLoading}>
-                {agendaLoading ? 'Thinking…' : 'Draft talking points for next time'}
-              </button>
+              <AiButton
+                size="sm"
+                tone="light"
+                busy={agendaLoading}
+                busyLabel="Wiser is drafting…"
+                onClick={generateAgenda}
+              >
+                Draft talking points for next time
+              </AiButton>
             )}
 
             {openItems.length > 0 && (

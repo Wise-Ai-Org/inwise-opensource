@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
+import { captureSystemAudio } from './system-audio';
+import type { MediaPermissionSnapshot } from './audio-probe';
 
 interface Config {
   apiProvider: 'anthropic' | 'openai';
@@ -341,6 +343,18 @@ function CalendarList() {
   );
 }
 
+function useMediaPermissions() {
+  const [permissions, setPermissions] = useState<MediaPermissionSnapshot | null>(null);
+  const refreshPermissions = useCallback(async () => {
+    const next = await (window as any).inwiseAPI.getMediaPermissions?.();
+    if (next) setPermissions(next);
+    return next as MediaPermissionSnapshot | undefined;
+  }, []);
+
+  useEffect(() => { void refreshPermissions(); }, [refreshPermissions]);
+  return { permissions, refreshPermissions };
+}
+
 function MicTest({ deviceId }: { deviceId: string }) {
   const [status, setStatus] = useState<'idle' | 'testing' | 'transcribing' | 'done' | 'error'>('idle');
   const [level, setLevel] = useState(0);
@@ -348,13 +362,23 @@ function MicTest({ deviceId }: { deviceId: string }) {
   const [errorMsg, setErrorMsg] = useState('');
   const rafRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
-
+  const { permissions, refreshPermissions } = useMediaPermissions();
   const runTest = async () => {
     setStatus('testing');
     setLevel(0);
     setTranscript('');
     setErrorMsg('');
     try {
+      let currentPermissions = await refreshPermissions();
+      if (currentPermissions?.platform === 'darwin' && currentPermissions.microphone === 'not-determined') {
+        await (window as any).inwiseAPI.requestMicrophonePermission?.();
+        currentPermissions = await refreshPermissions();
+      }
+      if (currentPermissions?.platform === 'darwin' && ['denied', 'restricted'].includes(currentPermissions.microphone)) {
+        setErrorMsg('Enable Microphone access for Inwise in System Settings, then try again.');
+        setStatus('error');
+        return;
+      }
       const constraint = deviceId && deviceId !== 'default' ? { deviceId: { exact: deviceId } } : true;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: constraint as any });
       streamRef.current = stream;
@@ -429,6 +453,7 @@ function MicTest({ deviceId }: { deviceId: string }) {
         }
       }, 3000);
     } catch (e: any) {
+      await refreshPermissions().catch(() => null);
       setStatus('error');
       setErrorMsg(e.message || 'Could not access microphone');
     }
@@ -469,7 +494,18 @@ function MicTest({ deviceId }: { deviceId: string }) {
         </div>
       )}
       {status === 'error' && (
-        <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 6 }}>✕ {errorMsg}</div>
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--red)' }}>✕ {errorMsg}</div>
+          {permissions?.platform === 'darwin' && ['denied', 'restricted'].includes(permissions.microphone) && (
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ marginTop: 8 }}
+              onClick={() => (window as any).inwiseAPI.openMediaSettings?.('microphone')}
+            >
+              Open System Settings
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -482,6 +518,7 @@ function SystemAudioTest() {
   const [errorMsg, setErrorMsg] = useState('');
   const rafRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
+  const { permissions, refreshPermissions } = useMediaPermissions();
 
   const runTest = async () => {
     setStatus('testing');
@@ -489,19 +526,13 @@ function SystemAudioTest() {
     setTranscript('');
     setErrorMsg('');
     try {
-      const sourceId = await (window as any).inwiseAPI.getDesktopSourceId();
-      if (!sourceId) {
-        setErrorMsg('System audio capture not available on this device');
+      const currentPermissions = await refreshPermissions();
+      if (currentPermissions?.platform === 'darwin' && ['denied', 'restricted'].includes(currentPermissions.screen)) {
+        setErrorMsg('Enable Screen & System Audio Recording for Inwise in System Settings, then restart the app.');
         setStatus('error');
         return;
       }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } } as any,
-        video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } } as any,
-      });
-      // Drop video tracks
-      stream.getVideoTracks().forEach(t => t.stop());
+      const stream = await captureSystemAudio();
       streamRef.current = stream;
 
       // Level meter
@@ -573,6 +604,7 @@ function SystemAudioTest() {
         }
       }, 5000);
     } catch (e: any) {
+      await refreshPermissions().catch(() => null);
       setStatus('error');
       setErrorMsg(e.message || 'Could not capture system audio');
     }
@@ -613,7 +645,18 @@ function SystemAudioTest() {
         </div>
       )}
       {status === 'error' && (
-        <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 6 }}>✕ {errorMsg}</div>
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--red)' }}>✕ {errorMsg}</div>
+          {permissions?.platform === 'darwin' && ['denied', 'restricted'].includes(permissions.screen) && (
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ marginTop: 8 }}
+              onClick={() => (window as any).inwiseAPI.openMediaSettings?.('screen')}
+            >
+              Open System Settings
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -1978,6 +2021,7 @@ interface McpStatus {
 
 function ConnectToAISection() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [writebackEnabled, setWritebackEnabled] = useState(false);
   const [port, setPort] = useState<number>(43117);
   const [portInput, setPortInput] = useState('43117');
   const [status, setStatus] = useState<McpStatus | null>(null);
@@ -1993,6 +2037,7 @@ function ConnectToAISection() {
     (window as any).inwiseAPI.getConfig?.().then((cfg: any) => {
       if (cfg) {
         setEnabled(cfg.mcpEnabled !== false);
+        setWritebackEnabled(cfg.mcpWritebackEnabled === true);
         const p = typeof cfg.mcpPort === 'number' ? cfg.mcpPort : 43117;
         setPort(p);
         setPortInput(String(p));
@@ -2031,6 +2076,21 @@ function ConnectToAISection() {
     }
   };
 
+  const toggleWriteback = async (next: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await (window as any).inwiseAPI.mcpSetWritebackEnabled?.(next);
+      if (result && result.ok === false) {
+        setError(result.error ?? 'Could not change action writeback access.');
+      } else {
+        setWritebackEnabled(next);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (enabled === null) return null;
 
   const effectivePort = status?.running && status.port ? status.port : port;
@@ -2050,9 +2110,9 @@ function ConnectToAISection() {
     <div className="settings-section">
       <div className="settings-section-title">Connect to AI</div>
       <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16, lineHeight: 1.6 }}>
-        Let Claude Desktop, Claude Code, or Codex answer questions about your meetings.
-        Inwise runs a small server on this machine only (127.0.0.1) — read-only,
-        and nothing ever leaves your computer.
+        Let Claude Desktop, Claude Code, OpenWorker, or Codex use your meeting memory.
+        Inwise listens on this machine only (127.0.0.1). Your connected AI client may
+        send the content it reads to its configured AI provider.
       </p>
 
       <div className="form-group">
@@ -2074,6 +2134,31 @@ function ConnectToAISection() {
             <span style={{ color: 'var(--slate-400)' }}>○ Stopped</span>
           )}
         </div>
+      </div>
+
+      <div className="form-group">
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: enabled ? 'pointer' : 'default' }}>
+          <input
+            type="checkbox"
+            checked={writebackEnabled}
+            disabled={busy || !enabled}
+            onChange={e => toggleWriteback(e.target.checked)}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            <span className="form-label" style={{ margin: 0 }}>Allow approved action writeback</span>
+            <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block', lineHeight: 1.55 }}>
+              Adds three write tools for approved execution plans, outcome summaries and artifact links,
+              and action-item status changes. Inwise never calls external apps itself; your AI client does,
+              and must record your approval before starting each run.
+            </span>
+          </span>
+        </label>
+        {writebackEnabled && (
+          <div style={{ fontSize: 12, marginTop: 8, padding: '8px 10px', borderRadius: 6, background: 'var(--amber-50, #fffbeb)', color: 'var(--amber-800, #92400e)', lineHeight: 1.5 }}>
+            Writeback is enabled. Review every proposed plan, external tool, recipient, and data-sharing scope in your AI client before approving it.
+          </div>
+        )}
       </div>
 
       <div className="form-group">
@@ -2116,6 +2201,7 @@ function ConnectToAISection() {
           <li>"What did we decide in last Tuesday's meeting?"</li>
           <li>"Summarize my most recent meeting with Alex."</li>
           <li>"Which action items from this week are still open?"</li>
+          {writebackEnabled && <li>"Draft a follow-up for this action item. Show me the plan and tools before you act, then save the outcome to Inwise."</li>}
         </ul>
       </div>
     </div>

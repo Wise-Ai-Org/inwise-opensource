@@ -1,8 +1,8 @@
 # Use Inwise with OpenWorker
 
-Inwise 1.4.0 and later includes a local, read-only MCP server. OpenWorker can use it to
-search your meeting history, prepare agendas, and review action items while Inwise keeps
-its database on your computer.
+Inwise 1.4.0 and later includes a local MCP server. OpenWorker can use it to search your
+meeting history, prepare agendas, and review action items while Inwise keeps its database
+on your computer. Inwise 1.6.0 adds default-off, approval-aware action writeback.
 
 ## Before you connect
 
@@ -20,7 +20,8 @@ When the Inwise card is available in your OpenWorker build:
 1. Open **Connectors** in OpenWorker.
 2. Select **Inwise** and click **Connect**.
 3. Ask OpenWorker to check the Inwise connection. A successful response includes the
-   Inwise version and the ten available tools.
+   Inwise version, ten read tools, and — in Inwise 1.6.0 or later — three action
+   execution tools whose writes remain blocked until separately enabled in Inwise.
 
 There is no Inwise account or sign-in step. OpenWorker connects directly to
 `http://127.0.0.1:43117/mcp` on the same computer.
@@ -52,7 +53,10 @@ Add this server entry, preserving any other entries already in `mcpServers`:
         "get_person",
         "list_upcoming_meetings",
         "prepare_meeting",
-        "get_connection_status"
+        "get_connection_status",
+        "start_action_execution",
+        "append_action_outcome",
+        "update_action_status"
       ]
     }
   }
@@ -71,6 +75,8 @@ Useful first requests include:
 - "Prepare my next 1:1 with Priya. Include what we owe each other and link each point to
   the source meeting."
 - "List tomorrow's meetings and flag any overdue work related to the attendees."
+- "For this action item, show me a plan and the exact tools you would use. Wait for my
+  approval, then save the verified outcome back to Inwise."
 
 The OpenWorker catalog integration also includes a **Meeting prep** automation template.
 It runs at 8:00 AM on weekdays, lists the next 24 hours of meetings, prepares an agenda per
@@ -81,7 +87,10 @@ per-meeting calendar trigger, so both apps need to be running when the morning j
 
 - Inwise's MCP server binds only to loopback (`127.0.0.1`) and does not require an online
   Inwise account.
-- Every exposed MCP operation is read-only. It cannot edit or delete your Inwise data.
+- The original ten tools are read-only. The three action-execution write tools remain
+  blocked unless **Allow approved action writeback** is enabled in Inwise. They can store
+  an approved execution, its outcomes/artifacts, and a local action-item status change;
+  they cannot delete Inwise data or call an external service themselves.
 - `get_meeting` returns only a short transcript excerpt. OpenWorker must call
   `get_transcript` separately to retrieve full transcript pages.
 - Content returned to OpenWorker can be sent to the AI provider configured in OpenWorker.
@@ -98,7 +107,8 @@ Open Inwise and confirm **Settings → Connect to AI** is on and still uses port
 
 **OpenWorker says a tool is missing**
 
-Run `get_connection_status` and verify the reported Inwise version is 1.4.0 or later. Then
+Run `get_connection_status` and verify the reported Inwise version is 1.4.0 or later for
+read access, or 1.6.0 or later for action writeback. Then
 restart both applications so OpenWorker refreshes the tool list.
 
 **The morning brief did not run**

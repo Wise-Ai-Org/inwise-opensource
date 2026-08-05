@@ -2,7 +2,10 @@ import * as assert from 'node:assert/strict';
 import * as http from 'node:http';
 import Datastore from '@seald-io/nedb';
 import { __setMeetingsDbForTests, __setPeopleDbForTests, __setTasksDbForTests } from './database';
+import { __setActionExecutionsDbForTests } from './action-execution-log';
 import {
+  appendActionOutcomeHandler,
+  buildActionExecutionRecommendation,
   MCP_PATH,
   TRANSCRIPT_CHUNK_CHARS,
   extractSnippet,
@@ -19,11 +22,14 @@ import {
   listUpcomingMeetingsHandler,
   prepareMeetingHandler,
   searchMeetingsHandler,
+  setMcpWritebackEnabledProvider,
   setUpcomingEventsProvider,
+  startActionExecutionHandler,
   startMcpServer,
   stopMcpServer,
   TOOL_NAMES,
   TRANSCRIPT_EXCERPT_CHARS,
+  updateActionStatusHandler,
 } from './mcp-server';
 
 // ── HTTP helper (raw http.request so we control Host and Accept headers) ─────
@@ -122,12 +128,17 @@ async function run(): Promise<void> {
   const meetingsDb = new Datastore<any>();
   const tasksDb = new Datastore<any>();
   const peopleDb = new Datastore<any>();
+  const actionExecutionsDb = new Datastore<any>();
   await meetingsDb.loadDatabaseAsync();
   await tasksDb.loadDatabaseAsync();
   await peopleDb.loadDatabaseAsync();
+  await actionExecutionsDb.loadDatabaseAsync();
+  await actionExecutionsDb.ensureIndexAsync({ fieldName: 'startIdempotencyKey', unique: true });
   __setMeetingsDbForTests(meetingsDb);
   __setTasksDbForTests(tasksDb);
   __setPeopleDbForTests(peopleDb);
+  __setActionExecutionsDbForTests(actionExecutionsDb);
+  setMcpWritebackEnabledProvider(() => false);
 
   const longTranscript = 'line of discussion. '.repeat(4000); // 80,000 chars > one chunk
   const shortTranscript =
@@ -647,15 +658,140 @@ async function run(): Promise<void> {
   }
 
   // ── get_connection_status ───────────────────────────────────────────────────
+  // Action execution is default-off, approval-aware, idempotent, and visible
+  // through the same action-item detail the client started from.
+  {
+    const recommendation = buildActionExecutionRecommendation({
+      title: 'Send launch follow-up email',
+      description: 'Reply to the product group',
+      source: { type: 'meeting', id: 'm-roadmap' },
+      owner: 'Alex Chen',
+      dueDate: '2026-07-28',
+    });
+    assert.deepEqual(recommendation.suggestedToolCategories, ['email']);
+    assert.ok(recommendation.suggestedSteps[0].includes('linked meeting'));
+
+    const disabled = await startActionExecutionHandler({
+      actionItemId: 't-1',
+      objective: 'Draft and send the billing-plan follow-up',
+      plan: ['Draft the email', 'Send it after approval'],
+      proposedTools: [{ name: 'gmail.send', purpose: 'Send the approved follow-up', target: 'team@example.com', dataShared: 'Action item summary' }],
+      client: 'codex-test',
+      approval: {
+        confirmed: true,
+        approvedBy: 'Test User',
+        approvedAt: new Date().toISOString(),
+        scope: 'Send the reviewed follow-up only to team@example.com',
+        approvedTools: ['gmail.send'],
+      },
+      idempotencyKey: 'mcp-start-disabled-001',
+    });
+    assert.equal(disabled.code, 'WRITEBACK_DISABLED');
+
+    setMcpWritebackEnabledProvider(() => true);
+    const staleApproval = await startActionExecutionHandler({
+      actionItemId: 't-1',
+      objective: 'Draft and send the billing-plan follow-up',
+      plan: ['Draft the email'],
+      client: 'codex-test',
+      approval: {
+        confirmed: true,
+        approvedBy: 'Test User',
+        approvedAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+        scope: 'Draft the email',
+      },
+      idempotencyKey: 'mcp-start-stale-001',
+    });
+    assert.equal(staleApproval.code, 'APPROVAL_REQUIRED');
+
+    const startArgs = {
+      actionItemId: 't-1',
+      objective: 'Draft and send the billing-plan follow-up',
+      plan: ['Draft the email', 'Send it after approval'],
+      proposedTools: [{ name: 'gmail.send', purpose: 'Send the approved follow-up', target: 'team@example.com', dataShared: 'Action item summary' }],
+      client: 'codex-test',
+      approval: {
+        confirmed: true as const,
+        approvedBy: 'Test User',
+        approvedAt: new Date().toISOString(),
+        scope: 'Send the reviewed follow-up only to team@example.com',
+        approvedTools: ['gmail.send'],
+      },
+      idempotencyKey: 'mcp-start-enabled-001',
+    };
+    const started = await startActionExecutionHandler(startArgs);
+    assert.ok(started.execution.executionId);
+    assert.equal(started.execution.status, 'running');
+    assert.equal(started.replayed, false);
+    const startReplay = await startActionExecutionHandler(startArgs);
+    assert.equal(startReplay.replayed, true);
+    assert.equal(startReplay.execution.executionId, started.execution.executionId);
+
+    const justStarted = await getActionItemHandler({ actionItemId: 't-1' });
+    const prematureDone = await updateActionStatusHandler({
+      actionItemId: 't-1',
+      executionId: started.execution.executionId,
+      status: 'completed',
+      expectedUpdatedAt: justStarted.updatedAt,
+      client: 'codex-test',
+      idempotencyKey: 'mcp-status-premature-001',
+    });
+    assert.equal(prematureDone.code, 'COMPLETED_OUTCOME_REQUIRED');
+
+    const outcomeArgs = {
+      executionId: started.execution.executionId,
+      result: 'completed' as const,
+      summary: 'Sent the approved billing-plan follow-up to the product team.',
+      artifacts: [{ type: 'email', label: 'Sent follow-up', url: 'https://mail.example/messages/123', externalId: '123' }],
+      client: 'codex-test',
+      idempotencyKey: 'mcp-outcome-001',
+    };
+    const outcome = await appendActionOutcomeHandler(outcomeArgs);
+    assert.equal(outcome.execution.status, 'completed');
+    assert.equal(outcome.outcome.artifacts[0].label, 'Sent follow-up');
+    assert.equal((await appendActionOutcomeHandler(outcomeArgs)).replayed, true);
+
+    const beforeStatus = await getActionItemHandler({ actionItemId: 't-1' });
+    assert.equal(beforeStatus.executionHistory.length, 1);
+    assert.equal(beforeStatus.executionHistory[0].outcomes.length, 1);
+    assert.equal(beforeStatus.executionRecommendation.source, 'inwise-starter');
+    const statusArgs = {
+      actionItemId: 't-1',
+      executionId: started.execution.executionId,
+      status: 'completed' as const,
+      note: 'The verified email artifact completes the action item.',
+      expectedUpdatedAt: beforeStatus.updatedAt,
+      client: 'codex-test',
+      idempotencyKey: 'mcp-status-001',
+    };
+    const statusUpdate = await updateActionStatusHandler(statusArgs);
+    assert.equal(statusUpdate.actionItem.status, 'completed');
+    assert.equal(statusUpdate.replayed, false);
+    // Retry carries the original expectedUpdatedAt but still succeeds because
+    // idempotency is checked before optimistic-concurrency freshness.
+    const statusReplay = await updateActionStatusHandler(statusArgs);
+    assert.equal(statusReplay.replayed, true);
+
+    const afterStatus = await getActionItemHandler({ actionItemId: 't-1' });
+    assert.equal(afterStatus.status, 'completed');
+    assert.equal(afterStatus.executionHistory[0].status, 'completed');
+  }
+
   {
     const status = getConnectionStatusHandler();
     assert.equal(status.mode, 'local');
-    assert.equal(status.access, 'read-only');
+    assert.equal(status.access, 'read plus approved action writeback');
+    assert.equal(status.actionWriteback.enabled, true);
     assert.ok(typeof status.version === 'string' && status.version.length > 0);
     assert.ok(status.server.startsWith('http://127.0.0.1:'));
     assert.deepEqual(status.capabilities, [...TOOL_NAMES], 'reports the surface this build serves');
     assert.ok(status.privacyNote.includes('get_transcript'), 'says where verbatim text can go');
     assert.equal(status.calendarConnected, false, 'no provider wired at this point in the run');
+
+    setMcpWritebackEnabledProvider(() => false);
+    assert.equal(getConnectionStatusHandler().access, 'read-only');
+    assert.equal(getConnectionStatusHandler().actionWriteback.enabled, false);
+    setMcpWritebackEnabledProvider(() => true);
 
     setUpcomingEventsProvider(() => [
       { id: 'e', title: 'x', startTime: new Date(Date.now() + 3600_000), attendees: [] },
@@ -682,12 +818,13 @@ async function run(): Promise<void> {
     assert.equal(init.status, 200, init.body.slice(0, 300));
     assert.equal(JSON.parse(init.body).result.serverInfo.name, 'inwise-local');
 
-    // tools/list exposes the full read-only surface
+    // tools/list exposes ten reads plus three explicitly annotated writes
     const list = await mcpPost(port, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     assert.equal(list.status, 200, list.body.slice(0, 300));
     const tools = JSON.parse(list.body).result.tools;
     const names = tools.map((t: any) => t.name).sort();
     assert.deepEqual(names, [
+      'append_action_outcome',
       'get_action_item',
       'get_connection_status',
       'get_meeting',
@@ -698,14 +835,23 @@ async function run(): Promise<void> {
       'list_upcoming_meetings',
       'prepare_meeting',
       'search_meetings',
+      'start_action_execution',
+      'update_action_status',
     ]);
     assert.deepEqual(
       names,
       [...TOOL_NAMES].sort(),
       'the advertised list and the registered tools cannot drift apart'
     );
+    const writeNames = new Set(['start_action_execution', 'append_action_outcome', 'update_action_status']);
     for (const t of tools) {
-      assert.equal(t.annotations?.readOnlyHint, true, `${t.name} is annotated read-only`);
+      if (writeNames.has(t.name)) {
+        assert.equal(t.annotations?.readOnlyHint, false, `${t.name} is annotated as a write`);
+        assert.equal(t.annotations?.idempotentHint, true, `${t.name} is retry-safe`);
+        assert.equal(t.annotations?.openWorldHint, false, `${t.name} itself only writes to local Inwise`);
+      } else {
+        assert.equal(t.annotations?.readOnlyHint, true, `${t.name} is annotated read-only`);
+      }
     }
 
     // tools/call round-trips against the fixture store
@@ -727,6 +873,34 @@ async function run(): Promise<void> {
     });
     const whoResult = parseToolResult(who.body);
     assert.equal(whoResult.mode, 'local');
+
+    const wireStart = await mcpPost(port, {
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'tools/call',
+      params: {
+        name: 'start_action_execution',
+        arguments: {
+          actionItemId: 't-owned',
+          objective: 'Prepare the analytics spec outline',
+          plan: ['Create a reviewable outline'],
+          proposedTools: [],
+          client: 'wire-test',
+          approval: {
+            confirmed: true,
+            approvedBy: 'Test User',
+            approvedAt: new Date().toISOString(),
+            scope: 'Create a local outline only; do not publish it',
+            approvedTools: [],
+          },
+          idempotencyKey: 'wire-start-owned-001',
+        },
+      },
+    });
+    assert.equal(wireStart.status, 200, wireStart.body.slice(0, 300));
+    const wireStartResult = parseToolResult(wireStart.body);
+    assert.equal(wireStartResult.execution.actionItemId, 't-owned');
+    assert.equal(wireStartResult.execution.status, 'running');
 
     // Host-header rejection (DNS rebinding defense)
     const rebind = await mcpPost(port, { jsonrpc: '2.0', id: 5, method: 'tools/list', params: {} }, { Host: 'evil.com' });
@@ -755,6 +929,7 @@ async function run(): Promise<void> {
     await new Promise<void>((resolve) => blocker.close(() => resolve()));
   }
 
+  setMcpWritebackEnabledProvider(null);
   console.log('mcp-server: all tests passed');
 }
 

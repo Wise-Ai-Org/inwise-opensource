@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# Ralph runtime state (not infrastructure)
+scripts/ralph/.last-branch
+scripts/ralph/ralph.log
+scripts/ralph/driver.log
+scripts/ralph/archive/

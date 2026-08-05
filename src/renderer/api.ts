@@ -118,6 +118,9 @@ export const api = {
 
   // ── Desktop Capture ──────────────────────────────────────────────────────
   getDesktopSourceId: () => inwiseAPI.getDesktopSourceId(),
+  getMediaPermissions: () => inwiseAPI.getMediaPermissions(),
+  requestMicrophonePermission: () => inwiseAPI.requestMicrophonePermission(),
+  openMediaSettings: (kind: 'microphone' | 'screen') => inwiseAPI.openMediaSettings(kind),
 
   // ── AI Features ──────────────────────────────────────────────────────────
   generatePersonInsights: (personId: string) => inwiseAPI.generatePersonInsights(personId),

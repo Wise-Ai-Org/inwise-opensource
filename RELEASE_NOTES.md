@@ -1,5 +1,46 @@
 # Release Notes
 
+## 1.6.0 — Close the Loop
+
+An action item can now move from meeting evidence to approved AI-assisted execution and
+back into Inwise with a durable outcome. Claude, Codex, OpenWorker, or another MCP host
+still performs any external work; Inwise supplies the source context, enforces the
+approval boundary, and keeps the resulting record attached to the original task.
+
+- Open an action item with its full description, owner, due date, source meeting,
+  source-grounded starter recommendation, and execution history.
+- Review the exact objective, steps, external tools, recipients or systems, and data to
+  be shared before anything can start.
+- Record a time-bounded approval with the approving identity, calling client, scope, and
+  an idempotency key that makes retries safe.
+- Write progress, completion, or failure outcomes back to Inwise, including artifact
+  links, provider IDs, and remaining work.
+- Move the local task to `inProgress`, `done`, `snoozed`, or back to `todo` with an
+  execution-linked reason and optimistic-concurrency protection.
+- See the complete execution as a polished card in the Windows and macOS task detail
+  view, from review through verified completion.
+
+The local MCP surface now reports thirteen capabilities: the original ten read tools
+plus `start_action_execution`, `append_action_outcome`, and `update_action_status`.
+Writeback remains off by default and can be enabled separately under
+**Settings → Connect to AI**. Inwise never calls Gmail, Docs, Calendar, Jira, or another
+external system on the client's behalf.
+
+Setup, approval semantics, screenshots, and the complete test flow are documented in
+[`docs/action-execution.md`](./docs/action-execution.md).
+
+## 1.5.0 — Teams and Google Meet transcripts
+
+Completed transcripts from the meeting tools you already use can now join the same
+local Inwise history as native recordings.
+
+- Manually import completed Microsoft Teams and Google Meet transcripts with your own
+  provider credentials.
+- Keep OAuth credentials and imported transcript data on the local machine.
+- Prevent duplicate imports and preserve provider/source identity for later review.
+- Retain the strengthened Slack ingestion, Zoom handling, and recording-silence checks
+  included in this release line.
+
 ## 1.4.0 — Local MCP meeting intelligence
 
 Inwise can now serve your meeting history to OpenWorker and other local MCP clients from

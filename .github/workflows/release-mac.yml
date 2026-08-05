@@ -1,0 +1,98 @@
+name: Release macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-mac-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-mac:
+    name: Build macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          package_version="$(node -p 'require("./package.json").version')"
+          test "${GITHUB_REF_NAME#v}" = "$package_version"
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:whisper:mac
+      - run: npm run verify:whisper:mac
+      - run: npm run smoke:whisper:mac
+      - run: npm run build:renderer
+      - name: Build, sign, and notarize
+        run: npx electron-builder --mac --${{ matrix.arch }} --publish never -c.forceCodeSigning=true
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Verify packaged Mac runtime and startup
+        run: npm run verify:package:mac
+        env:
+          INWISE_EXPECTED_ARCH: ${{ matrix.arch }}
+      - name: Verify signatures and notarization
+        shell: bash
+        run: |
+          app_path=""
+          for candidate in release-v2/mac*/Inwise.app; do
+            if [ -d "$candidate" ]; then
+              app_path="$candidate"
+              break
+            fi
+          done
+          test -n "$app_path"
+          whisper_path="$app_path/Contents/Resources/whisper/whisper-cli"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          codesign --verify --strict --verbose=2 "$whisper_path"
+          spctl --assess --type execute --verbose "$app_path"
+          xcrun stapler validate "$app_path"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Inwise-mac-${{ matrix.arch }}
+          path: |
+            release-v2/Inwise-*-mac-${{ matrix.arch }}.dmg
+            release-v2/Inwise-*-mac-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-mac
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Inwise-mac-*
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

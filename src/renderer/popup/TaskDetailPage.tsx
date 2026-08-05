@@ -7,6 +7,164 @@ type Status = 'todo' | 'inProgress' | 'completed';
 const STATUS_LABEL: Record<Status, string> = { todo: 'To Do', inProgress: 'In Progress', completed: 'Done' };
 const PRIORITIES = ['low', 'medium', 'high', 'critical'];
 
+function splitExecutionOutcome(summary?: string | null): { update: string; draft: string | null } {
+  const text = summary?.trim() || '';
+  const match = /\n\s*Full draft:\s*\n/i.exec(text);
+  if (!match || match.index == null) return { update: text, draft: null };
+  return {
+    update: text.slice(0, match.index).trim(),
+    draft: text.slice(match.index + match[0].length).trim() || null,
+  };
+}
+
+function executionClientLabel(client?: string): string {
+  if (!client) return 'AI client';
+  if (client === 'claude-code') return 'Claude Code';
+  if (client === 'openworker') return 'OpenWorker';
+  if (client === 'codex') return 'Codex';
+  return client.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function ExecutionCard({ summary }: { summary: any }) {
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const outcome = splitExecutionOutcome(summary.latestOutcomeSummary);
+  const hasOutcome = !!summary.latestOutcomeSummary;
+  const hasExternalTools = (summary.proposedTools?.length || 0) > 0 || (summary.approvedTools?.length || 0) > 0;
+  const awaitingReview = summary.status === 'running' && hasOutcome && !!summary.remainingWork;
+  const state = summary.status === 'completed'
+    ? { label: 'Completed', tone: 'teal', heading: 'Action completed', mark: '✓', outcomeLabel: 'Verified outcome' }
+    : summary.status === 'failed'
+      ? { label: 'Needs attention', tone: 'red', heading: 'Execution needs attention', mark: '!', outcomeLabel: 'What happened' }
+      : summary.status === 'cancelled'
+        ? { label: 'Cancelled', tone: 'slate', heading: 'Execution cancelled', mark: '×', outcomeLabel: 'Latest update' }
+        : awaitingReview
+          ? { label: 'Awaiting review', tone: 'amber', heading: outcome.draft ? 'Draft ready for review' : 'Progress ready for review', mark: '✦', outcomeLabel: 'Ready for your review' }
+          : { label: 'In progress', tone: 'blue', heading: 'Approved plan in progress', mark: '↻', outcomeLabel: 'Latest update' };
+
+  const copyDraft = async () => {
+    if (!outcome.draft || !navigator.clipboard?.writeText) return;
+    await navigator.clipboard.writeText(outcome.draft);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+
+  return (
+    <div className={`pp-exec-card pp-exec-${state.tone}`}>
+      <div className="pp-exec-accent" />
+      <div className="pp-exec-head">
+        <div className="pp-exec-mark" aria-hidden="true">{state.mark}</div>
+        <div className="pp-grow">
+          <div className="pp-exec-heading">{state.heading}</div>
+          <div className="pp-meta">Run by {executionClientLabel(summary.client)} · saved to Inwise</div>
+        </div>
+        <span className={`pp-exec-status pp-exec-status-${state.tone}`}>
+          <span className="pp-exec-status-dot" />
+          {state.label}
+        </span>
+      </div>
+
+      <div className="pp-exec-steps" aria-label="Execution progress">
+        {[
+          { label: 'Plan approved', done: true },
+          { label: 'Outcome saved', done: hasOutcome },
+          { label: 'Work complete', done: summary.status === 'completed' },
+        ].map((step, index, steps) => (
+          <React.Fragment key={step.label}>
+            <div className={`pp-exec-step ${step.done ? 'pp-done' : ''}`}>
+              <span className="pp-exec-dot">{step.done ? '✓' : ''}</span>
+              <span>{step.label}</span>
+            </div>
+            {index < steps.length - 1 && (
+              <span className={`pp-exec-line ${step.done && steps[index + 1].done ? 'pp-done' : ''}`} />
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+
+      {hasExternalTools && (
+        <div className="pp-exec-safety pp-scope">
+          <span>✓</span>
+          <span>External access stayed within the approved scope.</span>
+        </div>
+      )}
+
+      {outcome.update && (
+        <div className="pp-exec-outcome">
+          <div className="pp-exec-eyebrow"><span>{state.mark}</span>{state.outcomeLabel}</div>
+          <div className="pp-exec-update">{outcome.update}</div>
+        </div>
+      )}
+
+      {outcome.draft && (
+        <div className="pp-exec-draft">
+          <div className="pp-exec-draft-head">
+            <span>Email draft</span>
+            <button onClick={copyDraft}>{copied ? 'Copied' : 'Copy draft'}</button>
+          </div>
+          <div className="pp-exec-draft-body">{outcome.draft}</div>
+        </div>
+      )}
+
+      {(summary.artifacts?.length || 0) > 0 && (
+        <div className="pp-exec-artifacts">
+          {summary.artifacts.map((artifact: any, index: number) => (
+            <button key={`${artifact.url}-${index}`} className="pp-exec-artifact" onClick={() => api().openExternal?.(artifact.url)}>
+              <span className="pp-exec-artifact-icon">↗</span>
+              <span className="pp-exec-artifact-copy">
+                <strong>{artifact.label}</strong>
+                <small>{artifact.type || 'Artifact'} · Open verified output</small>
+              </span>
+              <span className="pp-exec-artifact-arrow">→</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {summary.remainingWork && (
+        <div className="pp-exec-next">
+          <div>Next step</div>
+          <span>{summary.remainingWork}</span>
+        </div>
+      )}
+
+      <div className="pp-exec-footer">
+        <button className="pp-exec-toggle" onClick={() => setExpanded(value => !value)}>
+          Execution details <span>{expanded ? '⌃' : '›'}</span>
+        </button>
+        <div className="pp-exec-approved"><span>✓</span> Approved by {summary.approvedBy || 'the user'}</div>
+      </div>
+
+      {expanded && (
+        <div className="pp-exec-details">
+          <div>
+            <label>Objective</label>
+            <p>{summary.objective}</p>
+          </div>
+          {(summary.plan?.length || 0) > 0 && (
+            <div>
+              <label>Approved plan</label>
+              <ol>{summary.plan.map((step: string, index: number) => <li key={index}>{step}</li>)}</ol>
+            </div>
+          )}
+          <div>
+            <label>Approval scope</label>
+            <p>{summary.approvalScope || 'The connected AI client recorded the approved execution scope.'}</p>
+            <small>{(summary.approvedTools?.length || 0) > 0 ? `Approved tools: ${summary.approvedTools.join(', ')}` : 'Approved tools: none'}</small>
+          </div>
+          {summary.lastStatusNote && (
+            <div>
+              <label>Status note</label>
+              <p>{summary.lastStatusNote}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+    </div>
+  );
+}
+
 export default function TaskDetailPage({ taskId }: { taskId: string }) {
   const { pop, push } = useNav();
   const [task, setTask] = useState<any>(null);
@@ -111,6 +269,13 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
             </div>
 
             <MentionThread taskId={taskId} onChanged={() => setReloadKey(k => k + 1)} />
+
+            {task.executionSummary && (
+              <>
+                <div className="pp-seclabel">AI execution</div>
+                <ExecutionCard summary={task.executionSummary} />
+              </>
+            )}
 
             {task.likelyDone && (
               <div className="pp-row" style={{ gap: 8 }}>

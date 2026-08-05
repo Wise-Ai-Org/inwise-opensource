@@ -1,7 +1,5 @@
-// Copies static renderer shells (src/renderer/*.html) into dist/renderer.
-// index.html and badge.html predate this script and live only in dist/ on
-// dev machines; new windows should keep their shell in src/renderer so a
-// clean checkout still builds a complete dist.
+// Copies every renderer shell from source into dist. Keeping all HTML here
+// makes a clean build independent of stale or previously tracked dist output.
 const fs = require('fs');
 const path = require('path');
 

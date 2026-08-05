@@ -29,7 +29,7 @@ import {
   AlertDialogOverlay,
   Modal
 } from '@chakra-ui/react';
-import { AddIcon, RepeatIcon, CheckIcon, CloseIcon, StarIcon, InfoOutlineIcon, DeleteIcon, DragHandleIcon } from '@chakra-ui/icons';
+import { AddIcon, RepeatIcon, CheckIcon, CloseIcon, InfoOutlineIcon, DeleteIcon, DragHandleIcon } from '@chakra-ui/icons';
 import { MdAutoAwesome, MdVideoCall, MdEmail, MdChat, MdLink, MdArchive } from 'react-icons/md';
 import Card from './components/card/Card';
 import CreateTaskModal from './components/tasks/CreateTaskModal';
@@ -63,6 +63,7 @@ import {
   arrayMove
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { AiButton } from './components/AiButton';
 
 /* ─── Priority Review types & components ──────────────────────────────────── */
 
@@ -1336,15 +1337,9 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
             </Tooltip>
           )}
           <Tooltip label="Score tasks and review suggested priority changes" placement="bottom">
-            <Button
-              leftIcon={<StarIcon />}
-              colorScheme="brand"
-              variant="outline"
-              size="sm"
-              onClick={onPriorityReviewOpen}
-            >
-              Review Priorities
-            </Button>
+            <AiButton size="sm" tone="light" onClick={onPriorityReviewOpen}>
+              Review priorities
+            </AiButton>
           </Tooltip>
           <Button leftIcon={<AddIcon />} colorScheme="brand" size="sm" onClick={() => handleAddTask('todo')}>
             New Task
