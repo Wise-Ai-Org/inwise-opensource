@@ -191,6 +191,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   startRecording: (title: string, calendarEventId?: string, attendees?: string[]) =>
     ipcRenderer.invoke('recording:start', title, calendarEventId, attendees),
   stopRecording: () => ipcRenderer.invoke('recording:stop'),
+  getRecordingState: () => ipcRenderer.invoke('recording:state'),
 
   // Whisper setup
   setupWhisper: (model: string) => ipcRenderer.invoke('whisper:setup', model),

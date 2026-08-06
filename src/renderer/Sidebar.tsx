@@ -93,12 +93,20 @@ export default function Sidebar({ activeView, onNavigate }: Props) {
 
   useEffect(() => {
     const handler = ({ status }: { status: string }) => {
-      if (status === 'done' || status === 'error') {
+      if (status === 'recording') {
+        setRecording(true);
+        setReceived(false);
+      } else if (status === 'processing') {
+        setRecording(false);
+      } else if (status === 'done' || status === 'error') {
         setRecording(false);
         setReceived(true);
         setTimeout(() => setReceived(false), 4000);
       }
     };
+    (window as any).inwiseAPI?.getRecordingState?.().then((state: { active?: boolean } | null) => {
+      setRecording(!!state?.active);
+    }).catch(() => {});
     (window as any).inwiseAPI?.on('recording:status', handler);
     return () => (window as any).inwiseAPI?.off('recording:status', handler);
   }, []);

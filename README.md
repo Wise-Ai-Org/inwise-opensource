@@ -101,16 +101,13 @@ If you don't see Inwise listed, launch the app once, trigger the feature that ne
 
 ## Getting started
 
-On first launch, you'll walk through:
+On first launch, three short steps collect the same setup without overwhelming you:
 
-1. **Set your display name** — used as "Speaker 0" on your own recordings
-2. **Add your email aliases** — all addresses that identify "you" across calendars (work + personal). Used to filter you out of attendee lists so you don't show up as someone you're meeting with
-3. **Paste an LLM API key** — Claude (`sk-ant-...`) or OpenAI (`sk-...`). Stored locally; never uploaded
-4. **Add at least one calendar** — Settings → Calendars → Add calendar. Paste your secret ICS URL:
-   - **Google**: Calendar settings → [calendar name] → "Secret address in iCal format"
-   - **Outlook**: Settings → View all Outlook settings → Calendar → Shared calendars → Publish a calendar → ICS
-5. **Enroll your voice** (optional but recommended for 1:1s) — record a 10-second clip in Settings → Voiceprints
-6. **Record your first meeting** — join a Zoom/Teams/Meet call, click Record Meeting in the sidebar (or let the calendar-watcher auto-prompt you when the event starts)
+1. **Make Inwise yours** — add your name, choose local transcription quality, connect your Anthropic or OpenAI key, and optionally record a 10-second voice sample.
+2. **Connect your work** — optionally connect Zoom and Slack in one click, choose Slack read/write channels, or expand Calendar and Jira. Zoom imports only completed transcripts you choose; Slack reads and posts only in approved channels.
+3. **Start with context** — optionally load sample data, review what is connected, and open the local app.
+
+Recordings, transcripts, settings, and imported content are stored locally. Your chosen LLM processes transcript text when Inwise creates notes or recaps; passwords stay with the connected provider.
 
 ---
 
@@ -234,7 +231,7 @@ What's next:
 
 ## Contributing
 
-Small PRs welcome. For bigger changes, please open an issue first so we can align on approach. The codebase uses Electron 43, TypeScript, React 18, Chakra UI, NeDB for storage, and whisper.cpp for transcription. `npm test` runs the main-process suite; `npm run build` typechecks and bundles the full application. A manual test plan lives in [TEST_PLAN.md](./TEST_PLAN.md). macOS signing and release setup is documented in [docs/macos-release.md](./docs/macos-release.md).
+Small PRs welcome. For bigger changes, please open an issue first so we can align on approach. The codebase uses Electron 43, TypeScript, React 18, Chakra UI, NeDB for storage, and whisper.cpp for transcription. `npm test` runs the main-process suite; `npm run build` typechecks and bundles the full application. A manual test plan lives in [TEST_PLAN.md](./TEST_PLAN.md). Release signing is documented for [Windows](./docs/windows-release.md) and [macOS](./docs/macos-release.md).
 
 ---
 

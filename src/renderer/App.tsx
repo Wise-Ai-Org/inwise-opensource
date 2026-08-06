@@ -2,13 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import Onboarding from './Onboarding';
 import PopupShell from './popup/PopupShell';
 import { requestPopupNav, LegacyView } from './popup/nav';
-import FirstTimeUserFlow from './FirstTimeUserFlow';
 import WelcomeBack from './WelcomeBack';
 import { LiveMeetingInfo } from './LiveMeetingBanner';
 import MeetingConflictModal, { ConflictMeeting } from './components/modal/MeetingConflictModal';
 import { startAudioCapture, stopAudioCapture, on as onAudioCapture, SILENCE_STOP_MS } from './audio-capture';
-
-type View = LegacyView;
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -38,7 +35,6 @@ class ErrorBoundary extends React.Component<
 export default function App() {
   const [ready, setReady] = useState(false);
   const [onboarded, setOnboarded] = useState(false);
-  const [showFirstTimeFlow, setShowFirstTimeFlow] = useState(false);
   const [conflict, setConflict] = useState<
     | { active: ConflictMeeting; incoming: ConflictMeeting; autoSelectMs: number }
     | null
@@ -66,14 +62,6 @@ export default function App() {
   useEffect(() => {
     (window as any).inwiseAPI.getConfig().then((cfg: any) => {
       setOnboarded(cfg.onboardingComplete && cfg.apiKey !== '');
-      // Show first time flow if onboarded but seen fewer than 5 times
-      if (cfg.onboardingComplete && cfg.apiKey !== '' && (cfg.firstTimeFlowCount || 0) < 5) {
-        setShowFirstTimeFlow(true);
-        // Increment the count
-        (window as any).inwiseAPI.setConfig({
-          firstTimeFlowCount: (cfg.firstTimeFlowCount || 0) + 1,
-        });
-      }
       setReady(true);
     });
   }, []);
@@ -171,23 +159,17 @@ export default function App() {
     setConflict(null);
   };
 
-  const navigate = (view: View) => requestPopupNav({ view });
+  const navigate = (view: LegacyView) => requestPopupNav({ view });
 
   if (!ready) return null;
-  if (!onboarded) return <Onboarding onComplete={() => { setOnboarded(true); setShowFirstTimeFlow(true); }} />;
+  if (!onboarded) return <Onboarding onComplete={() => setOnboarded(true)} />;
 
   return (
     <>
       <ErrorBoundary>
         <PopupShell />
       </ErrorBoundary>
-      {showFirstTimeFlow && (
-        <FirstTimeUserFlow
-          onNavigate={navigate}
-          onComplete={() => setShowFirstTimeFlow(false)}
-        />
-      )}
-      {welcomeBackVisible && !showFirstTimeFlow && liveMeetingChecked && !liveMeetingSuppressesWelcomeBack && (
+      {welcomeBackVisible && liveMeetingChecked && !liveMeetingSuppressesWelcomeBack && (
         <WelcomeBack
           onNavigate={navigate}
           onDismiss={() => setWelcomeBackVisible(false)}

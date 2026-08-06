@@ -35,6 +35,12 @@ The GitHub workflow must also pass `codesign --verify --deep --strict`, `spctl -
 
 ## On app start
 
+- **Fresh-install onboarding** → exactly three steps appear: **Make Inwise yours**, **Connect your work**, and **You're ready**.
+- **Required setup** → name, transcription model, AI provider, and API key save successfully from step 1; the optional voice sample records and saves without leaving onboarding.
+- **Optional connections** → Zoom and Slack connect from step 2 without asking for provider passwords or copied tokens. Slack channel permissions and inactivity window persist; Calendar and Jira remain available under **More integrations**.
+- **Privacy copy** → the flow states **LLM processes transcripts; recordings remain private.** It never claims that no data leaves the device when an AI provider or integration is connected.
+- **Completion** → the final summary matches the saved configuration, sample data remains optional, and finishing opens the normal tray popup without showing the retired multi-screen flow.
+
 - **Fresh open, no gap > 2 days** → Home view renders, no welcome-back screen.
 - **Open after 2+ days away** → Welcome-back screen appears with wins ("Cleared N tasks", "N Jira stories moved forward", "Calendar in sync — N upcoming this week"). At most one `[Review]` / ask visible.
 - **Open when nothing meaningful changed** → single line: *"Nothing urgent while you were out — everything's where you left it."* Chip row at bottom to navigate.
@@ -49,6 +55,7 @@ The GitHub workflow must also pass `codesign --verify --deep --strict`, `spctl -
 - **No dot when both healthy.**
 - **Click Record Meeting during a scheduled calendar event** → recording auto-attaches that event's `calendarEventId` (visible in `app.log` as `audio-data:received | calendarEventId=...`). Attendees resolve to the event's list; title auto-fills from the event when you haven't typed one.
 - **Click Record Meeting with no active event** → ad-hoc recording works as before (no regression).
+- **Persistent stop control** → while recording, **Stop & save** is visible in the tray sidebar title bar as well as the recorder pill. Clicking either ends the same recording once and enters processing.
 
 ## Simultaneous-meeting conflict
 
@@ -61,6 +68,16 @@ The GitHub workflow must also pass `codesign --verify --deep --strict`, `spctl -
 
 - **Mic or system audio fails mid-recording** → desktop Notification fires once per failure type (debounced 60s): *"System audio lost — only your mic will be transcribed for the rest of this meeting."*
 - **Notification does not fire outside of active recording.**
+- **Five-minute quiet period** → leave both inputs silent for five minutes. Inwise asks **Are you still there?** with **Keep recording** and **Stop & save**; it does not stop automatically.
+- **Quiet-period recovery** → choose **Keep recording**, resume speaking, and confirm the prompt resets instead of immediately firing again.
+
+## Settings → Zoom transcript import
+
+- **One-click connection** → click **Connect Zoom**, approve access in the system browser, and return to Inwise without creating an app or pasting credentials.
+- **Callback recovery** → the loopback callback completes while Inwise is running; a stale, mismatched, or reused callback is rejected with an actionable retry message.
+- **Choose before import** → click **Fetch from Zoom**, review completed cloud recordings from the past 30 days, select one recording, and import only its completed transcript. Audio and video remain in Zoom.
+- **Local result** → the imported meeting appears once in local history with Zoom speaker names. Importing it again reports that it already exists.
+- **No transcript / denied scope / expired token** → each state produces a clear recovery message and never creates a partial meeting.
 
 ## After a meeting ends
 
