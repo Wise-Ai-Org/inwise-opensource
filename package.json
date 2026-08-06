@@ -1,6 +1,6 @@
 {
   "name": "inwise-opensource",
-  "version": "1.6.0",
+  "version": "1.7.0-rc.1",
   "description": "Open-source AI meeting recorder — local transcription, local storage, your own API key",
   "license": "MIT",
   "author": "Inwise.ai",
@@ -20,12 +20,13 @@
     "watch:renderer": "webpack --config webpack.renderer.config.js --watch",
     "test:slack": "ts-node -P tsconfig.main.json src/main/slack-client.test.ts && ts-node -P tsconfig.main.json src/main/slack-oauth.test.ts && ts-node -P tsconfig.main.json src/main/slack-ingestion.test.ts && ts-node -P tsconfig.main.json src/main/slack-cursor-store.test.ts && ts-node -P tsconfig.main.json src/main/slack-poller.test.ts && ts-node -P tsconfig.main.json src/renderer/popup/slack-recap.test.ts",
     "test:zoom": "ts-node -P tsconfig.main.json src/main/zoom-oauth-config.test.ts && ts-node -P tsconfig.main.json src/main/zoom-recordings.test.ts && ts-node -P tsconfig.main.json src/main/zoom-vtt-parser.test.ts && ts-node -P tsconfig.main.json src/main/zoom-transcript-ingestion.test.ts && ts-node -P tsconfig.main.json src/main/zoom-credentials.test.ts",
+    "test:recording-silence": "ts-node -P tsconfig.main.json src/renderer/recording-silence.test.ts",
     "test:native-transcripts": "node scripts/run-native-transcript-tests.js",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win && node scripts/stable-installer.js",
+    "dist:win": "npm run build && electron-builder --win --config.forceCodeSigning=true && node scripts/stable-installer.js",
     "dist:mac": "npm run build:whisper:mac && npm run verify:whisper:mac && npm run build && electron-builder --mac && npm run verify:package:mac",
-    "test": "npm run build:shared && npm run build:main && node scripts/run-tests.js && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types tests/renderer-platform.test.mts"
+    "test": "npm run build:shared && npm run build:main && node scripts/run-tests.js && npm run test:recording-silence && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types tests/renderer-platform.test.mts"
   },
   "build": {
     "appId": "com.inwise.desktop",
@@ -52,8 +53,7 @@
           ]
         }
       ],
-      "icon": "assets/icon.ico",
-      "signExecutable": false
+      "icon": "assets/icon.ico"
     },
     "forceCodeSigning": false,
     "nsis": {

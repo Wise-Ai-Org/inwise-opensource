@@ -2573,6 +2573,7 @@ ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string, 
   lastMicFailureNotifiedAt = 0;
   lastSysAudioFailureNotifiedAt = 0;
   lastRecordingSilenceNotifiedAt = 0;
+  mainWindow?.webContents.send('recording:status', { status: 'recording', title });
   return true;
 });
 
@@ -2582,6 +2583,8 @@ ipcMain.handle('recording:stop', async () => {
   }
   return true;
 });
+
+ipcMain.handle('recording:state', () => ({ active: isRecordingActive }));
 
 // ── Recorder pill ──────────────────────────────────────────────────────────
 
@@ -2908,6 +2911,7 @@ ipcMain.on('recording:audio-data', (_e, { buffer, title, calendarEventId, stereo
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   isRecordingActive = false;
   lastRecordingSilenceNotifiedAt = 0;
+  mainWindow?.webContents.send('recording:status', { status: 'processing', title });
   const key = `${title}|${stereo ? 1 : 0}`;
   const entry = pendingAudio.get(key);
   if (entry) {
@@ -3032,6 +3036,7 @@ function startMeetingRecording(event: MeetingEvent): void {
   lastMicFailureNotifiedAt = 0;
   lastSysAudioFailureNotifiedAt = 0;
   lastRecordingSilenceNotifiedAt = 0;
+  mainWindow?.webContents.send('recording:status', { status: 'recording', title: event.title });
   mainWindow?.webContents.send('badge:show', event.title);
 }
 

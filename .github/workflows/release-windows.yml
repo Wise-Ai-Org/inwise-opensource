@@ -1,0 +1,67 @@
+name: Release Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    name: Build signed Windows x64 installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($tagVersion -ne $packageVersion) {
+            throw "Tag version '$tagVersion' does not match package version '$packageVersion'."
+          }
+      - run: npm ci
+      - run: npm test
+      - name: Build signed Windows installer
+        run: npm run dist:win
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      - name: Verify Authenticode signatures
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-windows-signatures.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Inwise-windows-x64-signed
+          path: |
+            release-v2/Inwise-Setup-*.exe
+            release-v2/Inwise-Setup-*.exe.blockmap
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Inwise-windows-x64-signed
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

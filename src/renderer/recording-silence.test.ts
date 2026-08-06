@@ -1,4 +1,4 @@
-import { RecordingSilenceWatchdog } from './recording-silence';
+import { RECORDING_SILENCE_CHECK_IN_MS, RecordingSilenceWatchdog } from './recording-silence';
 
 function assertEqual(actual: boolean, expected: boolean, message: string): void {
   if (actual !== expected) throw new Error(`${message}: expected ${expected}, got ${actual}`);
@@ -6,6 +6,10 @@ function assertEqual(actual: boolean, expected: boolean, message: string): void 
 
 const timeoutMs = 1_000;
 const watchdog = new RecordingSilenceWatchdog(timeoutMs, 0.01, 0);
+
+if (RECORDING_SILENCE_CHECK_IN_MS !== 5 * 60 * 1000) {
+  throw new Error(`default silence check-in must be five minutes, got ${RECORDING_SILENCE_CHECK_IN_MS}ms`);
+}
 
 assertEqual(watchdog.observe(0, 999), false, 'quiet should not notify before the timeout');
 assertEqual(watchdog.observe(0, 1_000), true, 'quiet should notify at the timeout');

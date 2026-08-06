@@ -259,6 +259,12 @@ export default function Badge() {
     });
 
     api.on('recording:stop-request', () => {
+      if (statusRef.current === 'preflight' || statusRef.current === 'countdown') {
+        runIdRef.current += 1;
+        setState((current) => ({ ...current, status: 'idle' }));
+        api.pillCancelled?.();
+        return;
+      }
       stopRecordingRef.current();
     });
 

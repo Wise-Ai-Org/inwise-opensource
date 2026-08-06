@@ -56,6 +56,27 @@
   cursor: pointer;
 }
 .pp-review-pill:hover { background: #dcfaf5; }
+.pp-stop-recording {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid #fecaca;
+  border-radius: 999px;
+  background: #fef2f2;
+  color: #dc2626;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pp-stop-recording:hover { background: #fee2e2; }
+.pp-stop-recording:disabled { cursor: wait; opacity: 0.65; }
+.pp-stop-recording > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: currentColor;
+}
 .pp-winctl { display: flex; gap: 4px; }
 .pp-winctl button {
   background: none;

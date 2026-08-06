@@ -183,6 +183,43 @@ function ShellInner() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
   const [pipelineError, setPipelineError] = useState<string | null>(null);
+  const [recordingActive, setRecordingActive] = useState(false);
+  const [recordingStopping, setRecordingStopping] = useState(false);
+
+  useEffect(() => {
+    const a = api();
+    let cancelled = false;
+    a.getRecordingState?.()
+      .then((state: { active?: boolean } | null) => {
+        if (!cancelled) setRecordingActive(!!state?.active);
+      })
+      .catch(() => {});
+
+    const onStatus = (payload: { status?: string }) => {
+      if (payload?.status === 'recording') {
+        setRecordingActive(true);
+        setRecordingStopping(false);
+      } else if (payload?.status === 'processing' || payload?.status === 'done' || payload?.status === 'error') {
+        setRecordingActive(false);
+        setRecordingStopping(false);
+      }
+    };
+    a.on?.('recording:status', onStatus);
+    return () => {
+      cancelled = true;
+      a.off?.('recording:status', onStatus);
+    };
+  }, []);
+
+  const stopActiveRecording = async () => {
+    if (recordingStopping) return;
+    setRecordingStopping(true);
+    try {
+      await api().stopRecording?.();
+    } catch {
+      setRecordingStopping(false);
+    }
+  };
 
   // Extraction/pipeline failures were toasted in the old app; surface them as a
   // dismissible banner so a failed recording never dies silently.
@@ -249,6 +286,12 @@ function ShellInner() {
             {review.count > 0 && !onReviewPage && (
               <button className="pp-review-pill" onClick={() => openPage({ kind: 'review' })}>
                 {review.count} to review
+              </button>
+            )}
+            {recordingActive && (
+              <button className="pp-stop-recording" onClick={stopActiveRecording} disabled={recordingStopping}>
+                <span aria-hidden="true" />
+                {recordingStopping ? 'Stopping...' : 'Stop & save'}
               </button>
             )}
           </div>

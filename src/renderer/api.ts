@@ -134,6 +134,7 @@ export const api = {
   // ── Recording (manual) ──────────────────────────────────────────────────
   startRecording: (title: string) => inwiseAPI.startRecording(title),
   stopRecording: () => inwiseAPI.stopRecording(),
+  getRecordingState: () => inwiseAPI.getRecordingState(),
 
   // ── Whisper Setup ────────────────────────────────────────────────────────
   setupWhisper: (model: string) => inwiseAPI.setupWhisper(model),
