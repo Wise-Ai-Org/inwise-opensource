@@ -162,7 +162,15 @@ export default function App() {
   const navigate = (view: LegacyView) => requestPopupNav({ view });
 
   if (!ready) return null;
-  if (!onboarded) return <Onboarding onComplete={() => setOnboarded(true)} />;
+  if (!onboarded) return (
+    <Onboarding
+      onComplete={async () => {
+        setWelcomeBackVisible(false);
+        await (window as any).inwiseAPI?.completeOnboardingTransition?.();
+        setOnboarded(true);
+      }}
+    />
+  );
 
   return (
     <>
