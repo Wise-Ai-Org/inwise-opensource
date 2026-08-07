@@ -212,6 +212,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   // Popup window controls
   pinPopup: (pinned: boolean) => ipcRenderer.invoke('popup:pin', pinned),
   hideWindow: () => ipcRenderer.invoke('window:hide'),
+  completeOnboardingTransition: () => ipcRenderer.invoke('window:completeOnboarding'),
   quitApp: () => ipcRenderer.invoke('app:quit'),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   checkForUpdates: () => ipcRenderer.invoke('app:check-for-updates'),

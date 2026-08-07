@@ -1,4 +1,4 @@
-﻿import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage, powerMonitor, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage, powerMonitor, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -1293,6 +1293,19 @@ ipcMain.handle('media:requestMicrophone', () => requestMicrophonePermission());
 ipcMain.handle('media:openSettings', (_e, kind: 'microphone' | 'screen') => openMediaSettings(kind));
 ipcMain.handle('config:get', () => getConfig());
 ipcMain.handle('config:set', (_e, updates) => { setConfig(updates); return true; });
+ipcMain.handle('window:completeOnboarding', () => {
+  // Finishing setup swaps the onboarding tree for the popup shell. Keep the
+  // window pinned through that render so a transient focus change cannot make
+  // the app appear to vanish at the exact moment the user finishes setup.
+  popupPinned = true;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    positionPopupWindow(mainWindow);
+    mainWindow.show();
+    mainWindow.focus();
+  }
+  setTimeout(() => { popupPinned = false; }, 2500);
+  return true;
+});
 
 ipcMain.handle('seed:demo', async () => {
   try {
