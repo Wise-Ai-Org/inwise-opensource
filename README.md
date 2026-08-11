@@ -128,6 +128,14 @@ Self-hosted forks can either set `INWISE_SLACK_OAUTH_BROKER_URL` to their broker
 
 ---
 
+## Experimental QM integration
+
+The [QM bridge](./integrations/qm/README.md) connects a personal QM sandbox to this app's local MCP server through an outbound laptop connector and a self-hosted, end-to-end encrypted relay. Users verify the pairing keys out of band before any tool call is allowed. It does not require Inwise Cloud and exposes only the ten read-only MCP tools in its initial version.
+
+The bridge is an integration prototype, not yet a built-in desktop feature. Keep it in personal/DM scopes and review its production-readiness checklist before deployment.
+
+---
+
 ## Troubleshooting
 
 ### My transcript has everything attributed to me (the other person's voice is missing)
