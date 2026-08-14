@@ -2,6 +2,8 @@
 
 AI-powered meeting recorder that runs primarily on your machine. Your audio and transcripts stay local; extracted work can leave the app only through integrations you explicitly connect, such as your LLM, Jira, Zoom, or Slack.
 
+**[Download Inwise for Windows](https://github.com/Wise-Ai-Org/inwise-opensource/releases/latest/download/Inwise-Setup-Windows.exe)** · [See the product and screenshots](https://inwise.ai/desktop?utm_source=github&utm_medium=readme&utm_campaign=oss_release) · [Use the hosted workspace](https://inwise.ai/signup?source=github-readme&utm_source=github&utm_medium=readme&utm_campaign=oss_release)
+
 - **Local transcription** via [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — no audio ever leaves your device
 - **Local speaker voiceprints** via MFCC — identifies who said what, then auto-names it next time
 - **Local storage** — NeDB single-file databases, all in your user profile directory
@@ -11,7 +13,7 @@ AI-powered meeting recorder that runs primarily on your machine. Your audio and 
 - **Welcome-back screen** — when you return after a gap, the app tells you what it handled for you instead of piling work on you
 - **Jira integration** — auto-push action items to stories, optional daily pull
 - **Slack integration** — one-click browser authorization, local channel ingestion, and explicit recap sharing
-- **Local AI access** — connect Claude, Codex, OpenWorker, or another MCP client to search meetings, prepare agendas, and follow up on action items without uploading an Inwise database; optionally write approved execution outcomes back to the originating task
+- **Local AI access** — connect Claude, Codex, OpenWorker, or another MCP client to search meetings, prepare agendas, and follow up on action items without uploading an Inwise database; optionally write approved execution outcomes back to the originating task ([setup guide](https://github.com/Wise-Ai-Org/inwise-opensource/blob/v1.7.1/docs/openworker.md))
 
 ---
 
