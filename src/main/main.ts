@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { session } from 'electron';
 import { installDisplayMediaHandler, installSessionPermissionHandlers } from './session-permissions';
+import { buildRecordingSilencePrompt, RECORDING_SILENCE_RESPONSE_MS } from './recording-silence-policy';
 
 import { getConfig, setConfig, getSorJiraPrefs, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, getDailyPlanPrefs, markDailyPlanShown, wasAutostartConfigured, markAutostartConfigured, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
@@ -129,6 +130,8 @@ let lastMicFailureNotifiedAt = 0;
 let lastSysAudioFailureNotifiedAt = 0;
 const RECORDING_SILENCE_NOTIFY_DEBOUNCE_MS = 60 * 1000;
 let lastRecordingSilenceNotifiedAt = 0;
+let recordingSilenceResponseTimer: NodeJS.Timeout | null = null;
+let recordingSilenceNotification: Notification | null = null;
 
 // Meeting conflict detection (US-006)
 const MEETING_CONFLICT_WINDOW_MS = 90 * 1000;
@@ -361,8 +364,13 @@ function createOverlayWindow(title: string, calendarEventId?: string): void {
     return;
   }
   overlayWindow = createPillWindow();
+  const win = overlayWindow;
   overlayWindow.webContents.once('did-finish-load', () => {
     overlayWindow?.webContents.send('recording:start', title, calendarEventId);
+  });
+  win.once('closed', () => {
+    if (overlayWindow === win) overlayWindow = null;
+    clearRecordingSilenceCheckIn();
   });
 }
 
@@ -501,6 +509,27 @@ function maybeCloseOverlay(delayMs = 2500): void {
     if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.close();
     overlayWindow = null;
   }, delayMs);
+}
+
+function clearRecordingSilenceCheckIn(reason?: 'keep' | 'sound' | 'stop' | 'timeout' | 'reset'): void {
+  if (recordingSilenceResponseTimer) {
+    clearTimeout(recordingSilenceResponseTimer);
+    recordingSilenceResponseTimer = null;
+  }
+  if (recordingSilenceNotification) {
+    recordingSilenceNotification.close();
+    recordingSilenceNotification = null;
+  }
+  if (reason && overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('recording:silence-resolved', { reason });
+  }
+}
+
+function stopRecordingAfterSilence(reason: 'stop' | 'timeout'): void {
+  clearRecordingSilenceCheckIn(reason);
+  if (!isRecordingActive || !overlayWindow || overlayWindow.isDestroyed()) return;
+  overlayWindow.webContents.send('recording:stop-request');
+  log('info', 'recording:silence-auto-stop', `reason=${reason}`);
 }
 
 // â”€â”€ Voice auto-enrollment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -2579,6 +2608,7 @@ ipcMain.handle('sor:reject', async (_e, id: string): Promise<{ ok: boolean; erro
 let adHocAttendees: string[] = [];
 
 ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string, attendees?: string[]) => {
+  clearRecordingSilenceCheckIn('reset');
   adHocAttendees = Array.isArray(attendees) ? attendees.filter(Boolean) : [];
   createOverlayWindow(title, calendarEventId);
   updateTrayMenu(mainWindow!, true);
@@ -2591,6 +2621,7 @@ ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string, 
 });
 
 ipcMain.handle('recording:stop', async () => {
+  clearRecordingSilenceCheckIn('stop');
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('recording:stop-request');
   }
@@ -2617,6 +2648,7 @@ ipcMain.on('pill:resize', (e, { width, height }: { width: number; height?: numbe
 
 // User clicked the pill during preflight/countdown — abort before recording starts.
 ipcMain.on('pill:cancelled', () => {
+  clearRecordingSilenceCheckIn('reset');
   isRecordingActive = false;
   lastRecordingSilenceNotifiedAt = 0;
   updateTrayMenu(mainWindow!, false);
@@ -2737,39 +2769,63 @@ ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
 });
 
 ipcMain.on('recording:silence-check-in', (event, payload: { title?: string; silenceMs?: number }) => {
-  if (!isRecordingActive || !Notification.isSupported()) return;
+  if (!isRecordingActive || recordingSilenceResponseTimer) return;
   if (!overlayWindow || overlayWindow.isDestroyed() || event.sender.id !== overlayWindow.webContents.id) return;
 
   const now = Date.now();
   if (now - lastRecordingSilenceNotifiedAt < RECORDING_SILENCE_NOTIFY_DEBOUNCE_MS) return;
   lastRecordingSilenceNotifiedAt = now;
 
-  const rawTitle = typeof payload?.title === 'string' ? payload.title.trim() : '';
-  const recordingTitle = rawTitle.slice(0, 120) || 'This recording';
-  const notification = new Notification({
-    title: 'Are you still there?',
-    body: `"${recordingTitle}" has been quiet for five minutes. Inwise is still recording.`,
-    actions: [
-      { type: 'button', text: 'Keep recording' },
-      { type: 'button', text: 'Stop & save' },
-    ],
-  });
+  const prompt = buildRecordingSilencePrompt(payload?.title, now);
+  const recordingTitle = prompt.title;
+  overlayWindow.webContents.send('recording:silence-prompt', prompt);
+  overlayWindow.show();
+
+  recordingSilenceResponseTimer = setTimeout(() => {
+    recordingSilenceResponseTimer = null;
+    stopRecordingAfterSilence('timeout');
+  }, RECORDING_SILENCE_RESPONSE_MS);
 
   const showRecorder = () => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return;
     overlayWindow.show();
     overlayWindow.focus();
   };
-  notification.on('action', (_event, index) => {
-    if (index === 1 && overlayWindow && !overlayWindow.isDestroyed()) {
-      overlayWindow.webContents.send('recording:stop-request');
-      return;
-    }
-    showRecorder();
-  });
-  notification.on('click', showRecorder);
-  notification.show();
-  log('info', 'recording:silence-check-in', `notified for "${recordingTitle}"`);
+  if (Notification.isSupported()) {
+    const notification = new Notification({
+      title: 'Are you still there?',
+      body: `"${recordingTitle}" has been quiet for five minutes. Inwise will stop and save in 30 seconds.`,
+      actions: [
+        { type: 'button', text: 'Keep recording' },
+        { type: 'button', text: 'Stop & save' },
+      ],
+      timeoutType: 'never',
+    });
+    recordingSilenceNotification = notification;
+    notification.on('action', (_event, index) => {
+      if (index === 1) {
+        stopRecordingAfterSilence('stop');
+        return;
+      }
+      clearRecordingSilenceCheckIn('keep');
+      showRecorder();
+    });
+    notification.on('click', showRecorder);
+    notification.show();
+  }
+  log('info', 'recording:silence-check-in', `prompted for "${recordingTitle}"`);
+});
+
+ipcMain.on('recording:silence-response', (event, response: 'keep' | 'sound' | 'stop') => {
+  if (!overlayWindow || overlayWindow.isDestroyed() || event.sender.id !== overlayWindow.webContents.id) return;
+  if (response === 'stop') {
+    stopRecordingAfterSilence('stop');
+    return;
+  }
+  if (response === 'keep' || response === 'sound') {
+    clearRecordingSilenceCheckIn(response);
+    log('info', 'recording:silence-response', `response=${response}`);
+  }
 });
 
 ipcMain.handle('audio:health:get', () => latestAudioHealth);
@@ -2922,6 +2978,7 @@ const pendingAudio = new Map<string, { buffers: Buffer[]; title: string; calenda
 
 ipcMain.on('recording:audio-data', (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
+  clearRecordingSilenceCheckIn('reset');
   isRecordingActive = false;
   lastRecordingSilenceNotifiedAt = 0;
   mainWindow?.webContents.send('recording:status', { status: 'processing', title });
@@ -3043,6 +3100,7 @@ calendarWatcher.on('meeting-starting', (event: MeetingEvent) => {
 });
 
 function startMeetingRecording(event: MeetingEvent): void {
+  clearRecordingSilenceCheckIn('reset');
   createOverlayWindow(event.title, event.id);
   updateTrayMenu(mainWindow!, true);
   isRecordingActive = true;

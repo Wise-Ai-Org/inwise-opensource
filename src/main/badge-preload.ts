@@ -2,7 +2,16 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('inwiseAPI', {
   on: (channel: string, cb: (...args: any[]) => void) => {
-    const allowed = ['recording:start', 'recording:status', 'recording:stop-request', 'reminder:start', 'pill:switch-mic', 'pipeline:secondary'];
+    const allowed = [
+      'recording:start',
+      'recording:status',
+      'recording:stop-request',
+      'recording:silence-prompt',
+      'recording:silence-resolved',
+      'reminder:start',
+      'pill:switch-mic',
+      'pipeline:secondary',
+    ];
     if (allowed.includes(channel)) {
       ipcRenderer.on(channel, (_event, ...args) => cb(...args));
     }
@@ -24,6 +33,9 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   pillCancelled: () => ipcRenderer.send('pill:cancelled'),
   notifyRecordingSilence: (payload: { title: string; silenceMs: number }) => {
     ipcRenderer.send('recording:silence-check-in', payload);
+  },
+  respondRecordingSilence: (response: 'keep' | 'sound' | 'stop') => {
+    ipcRenderer.send('recording:silence-response', response);
   },
 });
 

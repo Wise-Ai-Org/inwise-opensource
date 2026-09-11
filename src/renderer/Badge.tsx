@@ -6,7 +6,11 @@ import {
   SystemAudioCaptureState,
 } from './audio-probe';
 import { captureSystemAudio } from './system-audio';
-import { RecordingSilenceWatchdog, RECORDING_SILENCE_CHECK_IN_MS } from './recording-silence';
+import {
+  RecordingSilenceWatchdog,
+  RECORDING_SILENCE_CHECK_IN_MS,
+  RECORDING_SOUND_RMS_THRESHOLD,
+} from './recording-silence';
 
 // Compact recorder pill. Collapsed it is a small capsule with four dots that bob
 // with real audio level; hover expands it to show title, timer, and a stop square.
@@ -33,11 +37,18 @@ interface State {
 type JobState = 'transcribing' | 'processing' | 'done' | 'error';
 interface Job { jobId: string; title: string; state: JobState; message?: string }
 
+interface SilencePrompt {
+  title: string;
+  deadlineAt: number;
+}
+
 const INWISE_TEAL = '#0F738C';
 const PILL_H = 72; // window height (44px pill + halo margin)
 const W_COLLAPSED = 240;
 const W_EXPANDED = 470;
 const W_MEDIUM = 340;
+const W_SILENCE_PROMPT = 520;
+const W_COMPLETED = 620;
 
 // Pre-flight check: verify the saved (or default) mic exists and getUserMedia succeeds.
 // Acquires briefly, then releases — startMic() re-acquires for real recording.
@@ -220,6 +231,8 @@ export default function Badge() {
   const sysAudioWarning = systemAudioState !== 'ok';
   const [jobs, setJobs] = useState<Record<string, Job>>({});
   const [test, setTest] = useState<null | { mic: 'pending' | 'ok' | 'fail'; spk: 'pending' | 'ok' | 'fail' }>(null);
+  const [silencePrompt, setSilencePrompt] = useState<SilencePrompt | null>(null);
+  const [silenceSecondsLeft, setSilenceSecondsLeft] = useState(30);
 
   const startRef = useRef(Date.now());
   const mediaRef = useRef<MediaRecorder | null>(null);
@@ -232,6 +245,7 @@ export default function Badge() {
   const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const silenceWatchdogRef = useRef(new RecordingSilenceWatchdog());
+  const silencePromptRef = useRef<SilencePrompt | null>(null);
   const hasStereoRef = useRef(false);
   const stopRecordingRef = useRef<() => void>(() => {});
   const titleRef = useRef<string>('Meeting');
@@ -249,6 +263,8 @@ export default function Badge() {
     const api = (window as any).inwiseAPI;
 
     api.on('recording:start', (title: string, calendarEventId?: string) => {
+      silencePromptRef.current = null;
+      setSilencePrompt(null);
       calendarEventIdRef.current = calendarEventId;
       beginFlowRef.current(title);
     });
@@ -266,6 +282,26 @@ export default function Badge() {
         return;
       }
       stopRecordingRef.current();
+    });
+
+    api.on('recording:silence-prompt', (payload: { title?: string; deadlineAt?: number }) => {
+      if (statusRef.current !== 'recording') return;
+      const prompt: SilencePrompt = {
+        title: typeof payload?.title === 'string' && payload.title.trim()
+          ? payload.title.trim()
+          : titleRef.current,
+        deadlineAt: typeof payload?.deadlineAt === 'number'
+          ? payload.deadlineAt
+          : Date.now() + 30_000,
+      };
+      silencePromptRef.current = prompt;
+      setSilencePrompt(prompt);
+    });
+
+    api.on('recording:silence-resolved', () => {
+      silencePromptRef.current = null;
+      setSilencePrompt(null);
+      silenceWatchdogRef.current.reset();
     });
 
     api.on('pipeline:secondary', (msg: Job) => {
@@ -367,6 +403,16 @@ export default function Badge() {
     return () => clearInterval(id);
   }, [state.status]);
 
+  useEffect(() => {
+    if (!silencePrompt) return;
+    const update = () => {
+      setSilenceSecondsLeft(Math.max(0, Math.ceil((silencePrompt.deadlineAt - Date.now()) / 1000)));
+    };
+    update();
+    const id = setInterval(update, 250);
+    return () => clearInterval(id);
+  }, [silencePrompt]);
+
   // Drive the four dots from real audio level — direct DOM writes, no re-render.
   useEffect(() => {
     if (state.status !== 'recording') {
@@ -383,7 +429,13 @@ export default function Badge() {
         let sumSq = 0;
         for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
         const rms = Math.sqrt(sumSq / buf.length);
-        if (silenceWatchdogRef.current.observe(rms)) {
+        if (silencePromptRef.current && rms >= RECORDING_SOUND_RMS_THRESHOLD) {
+          silencePromptRef.current = null;
+          setSilencePrompt(null);
+          silenceWatchdogRef.current.reset();
+          (window as any).inwiseAPI?.respondRecordingSilence?.('sound');
+        }
+        if (!silencePromptRef.current && silenceWatchdogRef.current.observe(rms)) {
           (window as any).inwiseAPI?.notifyRecordingSilence?.({
             title: titleRef.current,
             silenceMs: RECORDING_SILENCE_CHECK_IN_MS,
@@ -589,6 +641,8 @@ export default function Badge() {
   const stopRecording = async () => {
     const mr = mediaRef.current;
     if (!mr) return;
+    silencePromptRef.current = null;
+    setSilencePrompt(null);
     mediaRef.current = null;
     mr.stop();
     mr.stream.getTracks().forEach(t => t.stop());
@@ -759,7 +813,15 @@ export default function Badge() {
     (window as any).inwiseAPI.pillCancelled?.();
   };
 
+  const respondToSilencePrompt = (response: 'keep' | 'stop') => {
+    silencePromptRef.current = null;
+    setSilencePrompt(null);
+    if (response === 'keep') silenceWatchdogRef.current.reset();
+    (window as any).inwiseAPI.respondRecordingSilence?.(response);
+  };
+
   const onPillClick = () => {
+    if (silencePrompt) return;
     if (state.status === 'countdown' || state.status === 'preflight') { cancelCountdown(); return; }
     if (state.status === 'reminder') { window.close(); return; }
     if (state.status === 'saving') { (window as any).inwiseAPI.openInwise?.(); return; }
@@ -808,12 +870,13 @@ export default function Badge() {
   const doneFlash = !busyJob && !errorJob && jobList.some(j => j.state === 'done');
 
   const wantWidth = (() => {
+    if (silencePrompt && state.status === 'recording') return W_SILENCE_PROMPT;
     if (state.status === 'error') return W_EXPANDED;
     if (test) return W_MEDIUM;
     if (state.status === 'countdown' || state.status === 'preflight') return W_MEDIUM;
     if (state.status === 'reminder') return W_MEDIUM;
     if (state.status === 'recording') return hover ? W_EXPANDED : W_COLLAPSED;
-    if (state.status === 'saving') return doneFlash ? W_MEDIUM : hover ? W_EXPANDED : W_COLLAPSED;
+    if (state.status === 'saving') return doneFlash ? W_COMPLETED : hover ? W_EXPANDED : W_COLLAPSED;
     return W_COLLAPSED;
   })();
 
@@ -849,7 +912,30 @@ export default function Badge() {
 
   let body: React.ReactNode;
 
-  if (test) {
+  if (silencePrompt && state.status === 'recording') {
+    body = (
+      <>
+        {grip}
+        <span style={{ fontSize: 14, flexShrink: 0 }}>?</span>
+        <span style={{ ...styles.label, maxWidth: 120 }}>Are you still there?</span>
+        <span style={{ ...styles.subtext, color: AMBER, minWidth: 72 }}>
+          auto-save in {silenceSecondsLeft}s
+        </span>
+        <button
+          className="pill-btn"
+          onClick={(e) => { e.stopPropagation(); respondToSilencePrompt('keep'); }}
+        >
+          Keep recording
+        </button>
+        <button
+          className="pill-btn pill-btn-ghost"
+          onClick={(e) => { e.stopPropagation(); respondToSilencePrompt('stop'); }}
+        >
+          Stop &amp; save
+        </button>
+      </>
+    );
+  } else if (test) {
     body = (
       <>
         {grip}
@@ -923,13 +1009,13 @@ export default function Badge() {
       : busyJob
         ? `${busyJob.state === 'processing' ? 'Analyzing' : 'Transcribing'} — ${truncate(busyJob.title, 22)}`
         : doneFlash
-          ? 'Saved — open Inwise to see insights'
+          ? 'Transcription complete — open Inwise from the system tray to see insights'
           : 'Saving…';
     body = (
       <>
         {grip}
         {errorJob ? <StatusDot tone="fail" /> : doneFlash ? <StatusDot tone="ok" /> : <span className="pill-spinner" />}
-        <span style={{ ...styles.label, color: errorJob ? '#fca5a5' : doneFlash ? TEAL : '#94a3b8', maxWidth: doneFlash ? 280 : hover ? 300 : 140 }} title={errorJob?.message || label}>
+        <span style={{ ...styles.label, color: errorJob ? '#fca5a5' : doneFlash ? TEAL : '#94a3b8', maxWidth: doneFlash ? 550 : hover ? 300 : 140 }} title={errorJob?.message || label}>
           {label}
         </span>
       </>
