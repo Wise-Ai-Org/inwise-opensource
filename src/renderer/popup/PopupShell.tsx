@@ -141,7 +141,7 @@ function CaptureChooser({ onClose }: { onClose: () => void }) {
           <span className="pp-seticon"><MicGlyph /></span>
           <span className="pp-grow">
             <span className="pp-rowlabel" style={{ display: 'block' }}>Voice note</span>
-            <span className="pp-rowsub" style={{ display: 'block' }}>Tasks, agenda points, or thoughts — Wiser sorts them for you</span>
+            <span className="pp-rowsub" style={{ display: 'block' }}>Tasks, agenda points, or thoughts — Ollie sorts them for you</span>
           </span>
           <span className="pp-chevron">›</span>
         </button>
@@ -228,9 +228,9 @@ function ShellInner() {
     const onPipelineError = (payload: any) => {
       const msg = String(payload?.message || payload?.error || 'Something went wrong processing a recording.');
       if (/api key|401|invalid[_ ]?key|authentication/i.test(msg)) {
-        setPipelineError("Wiser couldn't read that recording — the API key looks invalid. Fix it in Settings › AI provider, then upload the transcript again.");
+        setPipelineError("Ollie couldn't read that recording — the API key looks invalid. Fix it in Settings › AI provider, then upload the transcript again.");
       } else {
-        setPipelineError(`Wiser hit a snag processing a recording: ${msg}`);
+        setPipelineError(`Ollie hit a snag processing a recording: ${msg}`);
       }
     };
     a.on?.('pipeline:error', onPipelineError);

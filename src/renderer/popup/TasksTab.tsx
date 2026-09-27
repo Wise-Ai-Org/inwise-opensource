@@ -222,7 +222,7 @@ function CreateTaskSheet({ onClose, onCreated }: { onClose: () => void; onCreate
             style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', fontSize: 12.5, fontFamily: 'inherit', color: 'var(--navy)', background: 'transparent' }}
           />
         </div>
-        {aiFilled && <div className="pp-meta">Wiser filled in a few fields from the title — change anything that's off.</div>}
+        {aiFilled && <div className="pp-meta">Ollie filled in a few fields from the title — change anything that's off.</div>}
         {pendingDedup && (
           <DedupConfirmCard
             suggestion={pendingDedup.suggestion}

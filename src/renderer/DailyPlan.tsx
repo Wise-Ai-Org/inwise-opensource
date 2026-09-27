@@ -135,17 +135,17 @@ export default function DailyPlan(): JSX.Element {
           ×
         </button>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.8, color: TEAL, textTransform: 'uppercase', marginBottom: 4 }}>
-          Wiser planned your day
+          Ollie planned your day
         </div>
         <div style={{ fontSize: 18, fontWeight: 700, color: SLATE_900 }}>
           {plan ? plan.greeting.title : 'One moment'}
         </div>
         <div style={{ fontSize: 12.5, color: SLATE_600, marginTop: 2 }}>
           {failed
-            ? 'Wiser tripped over a wire fetching your plan. Open Inwise to see today.'
+            ? 'Ollie tripped over a wire fetching your plan. Open Inwise to see today.'
             : plan
               ? plan.greeting.sub
-              : 'Wiser is putting your plan together…'}
+              : 'Ollie is putting your plan together…'}
         </div>
       </div>
 
@@ -180,7 +180,7 @@ export default function DailyPlan(): JSX.Element {
                     }}
                   >
                     <div style={{ fontSize: 10.5, fontWeight: 700, color: TEAL, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 4 }}>
-                      Wiser's draft agenda
+                      Ollie's draft agenda
                     </div>
                     {m.agenda.map((item, i) => (
                       <div key={i} style={{ fontSize: 12.5, color: SLATE_600, display: 'flex', gap: 6, marginBottom: 2 }}>
@@ -196,7 +196,7 @@ export default function DailyPlan(): JSX.Element {
             <SectionTitle style={{ marginTop: 18 }}>Top priorities</SectionTitle>
             {tasks.length === 0 && (
               <div style={{ fontSize: 13, color: SLATE_500 }}>
-                No open tasks — Wiser is as surprised as you are.
+                No open tasks — Ollie is as surprised as you are.
               </div>
             )}
             {tasks.map((t, i) => (

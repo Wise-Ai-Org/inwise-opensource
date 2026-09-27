@@ -89,5 +89,5 @@ Six modules implement the Slack integration pipeline:
 - Never commit a history cursor until all pages are fetched and loose messages are safely processed.
 - Never mark a thread processed with an empty reply set or a failed pipeline.
 - Threads only process after `slackInactivityWindowMin` minutes of silence, including across app restarts.
-- Outbound Wiser notes are explicit user actions and are restricted to configured write channels.
+- Outbound Ollie notes are explicit user actions and are restricted to configured write channels.
 - OAuth handoff private keys and poll secrets are never persisted or exposed through renderer IPC; only the validated `xoxp` token is written to local config.

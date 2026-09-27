@@ -638,11 +638,11 @@ export default function MeetingsTab() {
                 {agenda === 'loading' && (
                   <div className="pp-row" style={{ gap: 8 }}>
                     <span className="pp-pulse" />
-                    <span className="pp-meta">Wiser is drafting an agenda from your history…</span>
+                    <span className="pp-meta">Ollie is drafting an agenda from your history…</span>
                   </div>
                 )}
                 {agenda === 'failed' && (
-                  <div className="pp-meta">Wiser needs a bit more meeting history before drafting this one.</div>
+                  <div className="pp-meta">Ollie needs a bit more meeting history before drafting this one.</div>
                 )}
                 {Array.isArray(agenda) && (
                   <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>

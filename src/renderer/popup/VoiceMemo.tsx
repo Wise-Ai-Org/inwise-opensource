@@ -261,8 +261,8 @@ export function VoiceCapturePage() {
       } else {
         setItems(toReviewItems([{ kind: 'note', text: res.transcript }]));
         setSortNotice(sorted?.error === 'no_api_key'
-          ? 'Connect an AI key in Settings › AI provider and Wiser can sort notes into tasks and agenda points. Kept the whole note for now.'
-          : "Wiser couldn't sort this one — kept the whole note so nothing is lost.");
+          ? 'Connect an AI key in Settings › AI provider and Ollie can sort notes into tasks and agenda points. Kept the whole note for now.'
+          : "Ollie couldn't sort this one — kept the whole note so nothing is lost.");
       }
       setPhase('review');
     } catch (e: any) {
@@ -338,7 +338,7 @@ export function VoiceCapturePage() {
           <div className="vm-sheettitle">Voice note</div>
           <button className="pp-quiet-action" style={{ fontSize: 13 }} onClick={cancel}>Cancel</button>
         </div>
-        <div className="vm-wiser">
+        <div className="vm-ollie">
           <span className="vm-owl">🦉</span>
           <p>Say tasks, agenda points, or stray thoughts in any order — I'll sort them for you to check.</p>
         </div>
@@ -361,7 +361,7 @@ export function VoiceCapturePage() {
             <>
               <span className="pp-pulse" style={{ width: 14, height: 14 }} />
               <div className="pp-meta" style={{ fontSize: 12.5 }}>
-                {phase === 'transcribing' ? 'Transcribing on this computer…' : 'Wiser is sorting what you said…'}
+                {phase === 'transcribing' ? 'Transcribing on this computer…' : 'Ollie is sorting what you said…'}
               </div>
             </>
           )}

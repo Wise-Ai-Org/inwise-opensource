@@ -71,7 +71,7 @@ export default function PeopleTab() {
       <div className="pp-row" style={{ justifyContent: 'space-between', padding: '0 2px' }}>
         {review.suggested.length > 0 ? (
           <button className="pp-link" onClick={() => push({ kind: 'review', focus: 'people' })}>
-            Wiser suggests ({review.suggested.length})
+            Ollie suggests ({review.suggested.length})
           </button>
         ) : <span />}
         <button className="pp-link" onClick={() => setAdding(a => !a)}>+ Add person</button>

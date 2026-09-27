@@ -162,7 +162,7 @@ assert.equal(isSameLocalDay(at(23, 59, -1), at(0, 1)), false);
   assert.ok(morning.title.startsWith('Good morning'), 'morning greeting');
   assert.ok(morning.title.includes('Shrav'), 'greeting uses the name');
   assert.ok(morning.sub.length > 0, 'sub line is never empty');
-  assert.ok(morning.sub.includes('Wiser'), 'sub line is in the Wiser voice');
+  assert.ok(morning.sub.includes('Ollie'), 'sub line is in the Ollie voice');
 
   const evening = buildGreeting(at(19), '');
   assert.equal(evening.title, 'Good evening', 'no trailing comma without a name');

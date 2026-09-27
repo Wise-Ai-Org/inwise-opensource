@@ -62,7 +62,7 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
     setSlackSending(true);
     setSlackResult(null);
     try {
-      const result = await api().slackPostWiserNote?.(
+      const result = await api().slackPostOllieNote?.(
         slackChannelId,
         buildMeetingSlackRecap(meeting),
       );

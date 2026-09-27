@@ -416,7 +416,7 @@ export type VoiceMemoItem =
   | { kind: 'agenda'; text: string; targetMeetingId: string | null }
   | { kind: 'note'; text: string };
 
-const VOICE_MEMO_SYSTEM_PROMPT = `You are Wiser, a note-sorting assistant. The user recorded a spoken voice note. Split it into discrete items and classify each as exactly one of: task, agenda, note.
+const VOICE_MEMO_SYSTEM_PROMPT = `You are Ollie, a note-sorting assistant. The user recorded a spoken voice note. Split it into discrete items and classify each as exactly one of: task, agenda, note.
 
 - task: something someone needs to do.
 - agenda: a point to raise in one of the user's UPCOMING MEETINGS. Only use this when the note clearly refers to discussing or covering something in a meeting; bind it to one of the listed meetings when the match is clear, else leave targetMeetingId null.

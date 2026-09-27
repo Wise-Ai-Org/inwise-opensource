@@ -130,7 +130,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   slackStatus: () => ipcRenderer.invoke('slack:status'),
   slackListChannels: () => ipcRenderer.invoke('slack:listChannels'),
   slackListWriteChannels: () => ipcRenderer.invoke('slack:listWriteChannels'),
-  slackPostWiserNote: (channelId: string, note: string) => ipcRenderer.invoke('slack:postWiserNote', channelId, note),
+  slackPostOllieNote: (channelId: string, note: string) => ipcRenderer.invoke('slack:postOllieNote', channelId, note),
 
   // Jira
   jiraConnect: () => ipcRenderer.invoke('jira:connect'),

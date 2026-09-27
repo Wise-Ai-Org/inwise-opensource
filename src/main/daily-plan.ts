@@ -1,5 +1,5 @@
 /**
- * Pure compute for the once-a-day "Wiser planned your day" popup.
+ * Pure compute for the once-a-day "Ollie planned your day" popup.
  * Kept free of electron imports so it can be unit-tested (same pattern as
  * welcome-back.ts / live-meeting-banner.ts).
  *
@@ -146,11 +146,11 @@ export function buildAgendaBasis(history: AgendaHistoryMeeting[]): string | null
 }
 
 const GREETING_SUBS = [
-  'Wiser was up early planning your day. Here it is.',
-  'Wiser lined everything up while you were away. Coffee first, then this.',
-  'Your day, already sorted. Wiser took care of the thinking.',
-  'Wiser mapped out today so you can just start.',
-  'All set — Wiser did the morning shuffle for you.',
+  'Ollie was up early planning your day. Here it is.',
+  'Ollie lined everything up while you were away. Coffee first, then this.',
+  'Your day, already sorted. Ollie took care of the thinking.',
+  'Ollie mapped out today so you can just start.',
+  'All set — Ollie did the morning shuffle for you.',
 ];
 
 export function buildGreeting(now: Date, userName: string): { title: string; sub: string } {

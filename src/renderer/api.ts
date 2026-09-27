@@ -100,8 +100,8 @@ export const api = {
   slackStatus: () => inwiseAPI.slackStatus(),
   slackConnectOAuth: () => inwiseAPI.slackConnectOAuth(),
   slackListWriteChannels: () => inwiseAPI.slackListWriteChannels(),
-  slackPostWiserNote: (channelId: string, note: string) =>
-    inwiseAPI.slackPostWiserNote(channelId, note),
+  slackPostOllieNote: (channelId: string, note: string) =>
+    inwiseAPI.slackPostOllieNote(channelId, note),
 
   // ── SoR audit log (US-001, US-002) ───────────────────────────────────────
   sorListRecent: (limit?: number, sinceMs?: number) => inwiseAPI.sorListRecent(limit, sinceMs),

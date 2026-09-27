@@ -105,7 +105,7 @@ import {
   validateToken,
   getSlackConnectionInfo,
   listChannels as slackListChannels,
-  postWiserNote,
+  postOllieNote,
 } from './slack-client';
 import { connectSlackWithOAuth } from './slack-oauth';
 import { normalizeSlackThread } from './slack-normalizer';
@@ -435,7 +435,7 @@ function createReminderBadge(title: string): void {
   setTimeout(() => { if (!win.isDestroyed()) win.close(); }, 30_000);
 }
 
-// ── Daily plan ("Wiser planned your day") ────────────────────────────────────
+// ── Daily plan ("Ollie planned your day") ────────────────────────────────────
 
 const DAILY_PLAN_WIDTH = 400;
 const DAILY_PLAN_HEIGHT = 660;
@@ -3723,12 +3723,12 @@ ipcMain.handle('slack:listWriteChannels', async () => {
   }
 });
 
-ipcMain.handle('slack:postWiserNote', async (_e, channelId: string, note: string) => {
+ipcMain.handle('slack:postOllieNote', async (_e, channelId: string, note: string) => {
   try {
     if (typeof channelId !== 'string' || typeof note !== 'string') {
       return { ok: false, error: 'Invalid Slack note request' };
     }
-    await postWiserNote(channelId, note);
+    await postOllieNote(channelId, note);
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e.message };

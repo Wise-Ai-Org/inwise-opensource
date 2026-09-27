@@ -67,8 +67,8 @@ export default function UploadTranscriptSheet({ open, onClose, onUpload, attachT
         </div>
         <div className="pp-meta" style={{ marginTop: -4 }}>
           {attachTo
-            ? `It joins “${attachTo}” and Wiser pulls out the insights.`
-            : 'Paste a transcript from anywhere — Wiser turns it into a meeting with insights.'}
+            ? `It joins “${attachTo}” and Ollie pulls out the insights.`
+            : 'Paste a transcript from anywhere — Ollie turns it into a meeting with insights.'}
         </div>
         {!attachTo && (
           <div className="pp-search">

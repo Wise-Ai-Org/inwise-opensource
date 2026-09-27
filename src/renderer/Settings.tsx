@@ -854,7 +854,7 @@ function SlackSettings() {
               {savedKey === 'write' && <span style={{ marginLeft: 8, color: 'var(--teal)', fontWeight: 500 }}>✓ Saved</span>}
             </label>
             <span style={{ fontSize: 12, color: 'var(--slate-500)', display: 'block', marginBottom: 6 }}>
-              Meeting detail pages can post an explicit Wiser recap only to the channels selected here.
+              Meeting detail pages can post an explicit Ollie recap only to the channels selected here.
             </span>
             {channels.length > 0 ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
@@ -3199,7 +3199,7 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
                 <span className="form-label" style={{ margin: 0 }}>Launch Inwise when you log in</span>
               </label>
               <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
-                Starts quietly in the tray, so Wiser is ready before your first meeting.
+                Starts quietly in the tray, so Ollie is ready before your first meeting.
               </span>
             </div>
             <div className="form-group">
@@ -3212,10 +3212,10 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
                     update('dailyPlanEnabled', value);
                   }}
                 />
-                <span className="form-label" style={{ margin: 0 }}>Daily plan from Wiser {savedKey === 'dailyPlanEnabled' && <span style={{ color: 'var(--teal)' }}>✓ Saved</span>}</span>
+                <span className="form-label" style={{ margin: 0 }}>Daily plan from Ollie {savedKey === 'dailyPlanEnabled' && <span style={{ color: 'var(--teal)' }}>✓ Saved</span>}</span>
               </label>
               <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
-                About 10 minutes after you open your computer, Wiser pops up today's meetings, drafted
+                About 10 minutes after you open your computer, Ollie pops up today's meetings, drafted
                 agendas, and your top priorities. Waits until you're out of any meeting in progress.
               </span>
             </div>
