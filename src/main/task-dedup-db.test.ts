@@ -133,6 +133,28 @@ async function run(): Promise<void> {
     assert.equal(decisions[0].decisionType, 'confirm_new');
   }
 
+  // ── US-011: manual/review createTask uses the same route ───────────────
+  {
+    const { tasks } = await freshDbs();
+    const original: any = await createTask({ title: 'Chase legal on the MSA redline', skipDedup: true });
+
+    llm([{ index: 0, verdict: 'same_task', confidence: 95 }]);
+    const merged: any = await createTask({ title: 'Chase legal on the MSA redline again', source: { type: 'meeting', id: 'm2' } });
+    assert.equal(merged.dedupOutcome, 'auto_merge');
+    assert.equal(await tasks.countAsync({ archivedAt: null }), 1, 'manual/review creation auto-merges before insert');
+
+    llm([{ index: 0, verdict: 'same_task', confidence: 72 }]);
+    const ask: any = await createTask({ title: 'Chase legal on the MSA redline this week', source: 'meeting-review', meetingId: 'm3' });
+    assert.equal(ask.dedupPending, true, 'ask band returns a suggestion to the caller');
+    assert.equal(ask.dedupSuggestion.candidateTaskId, original._id);
+    assert.equal(await tasks.countAsync({ archivedAt: null }), 1, 'ask band inserts nothing before the user resolves it');
+
+    __setLlmForTests(async () => { throw new Error('classifier unavailable'); });
+    const degraded: any = await createTask({ title: 'Still blocked on legal; MSA paperwork needs another review' });
+    assert.ok(degraded._id, 'classifier failure degrades to plain creation');
+    assert.equal(await tasks.countAsync({ archivedAt: null }), 2);
+  }
+
   // ── US-008: "Reopen and merge" is the only path back from done ───────────
   {
     const { tasks, meetings } = await freshDbs();
@@ -163,8 +185,8 @@ async function run(): Promise<void> {
   // ── US-010 + US-011: manual merge → undo/split, and the log aggregates ───
   {
     const { tasks, decisions: decisionsDb } = await freshDbs();
-    const a: any = await createTask({ title: 'Chase legal on the MSA redline' });
-    const b: any = await createTask({ title: 'MSA redline still with legal' });
+    const a: any = await createTask({ title: 'Chase legal on the MSA redline', skipDedup: true });
+    const b: any = await createTask({ title: 'MSA redline still with legal', skipDedup: true });
 
     await mergeTasksManual(a._id, b._id);
     const survivor: any = await tasks.findOneAsync({ _id: a._id });

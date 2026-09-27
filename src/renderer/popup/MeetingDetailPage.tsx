@@ -178,13 +178,22 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               </>
             )}
 
-            {meeting.transcript && (
+            {meeting.transcript && meeting.status === 'processed' && (
               <button
                 className="pp-btn pp-solid"
                 onClick={() => api().openReviewWindow?.(meetingId)}
               >
-                Open full review
+                {meeting.reviewedAt ? 'New items to review' : 'Open full review'}
               </button>
+            )}
+
+            {meeting.status === 'reviewed' && (
+              <div className="pp-row" style={{ justifyContent: 'center', gap: 8, padding: '4px 0' }}>
+                <span className="pp-meta">
+                  Reviewed{meeting.reviewedAt ? ` Â· ${new Date(meeting.reviewedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : ''}
+                </span>
+                <button className="pp-quiet-action" onClick={() => api().openReviewWindow?.(meetingId)}>Review again</button>
+              </div>
             )}
 
             {jiraConnected && (insights.actionItems?.length || 0) > 0 && (

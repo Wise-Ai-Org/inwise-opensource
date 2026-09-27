@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtDueDate, useNav } from './nav';
-import { RepetitionNudge } from './DedupBits';
+import { DedupConfirmCard, DedupSuggestion, RepetitionNudge } from './DedupBits';
 import { AiButton } from '../components/AiButton';
 
 type Status = 'todo' | 'inProgress' | 'completed';
@@ -106,6 +106,7 @@ function CreateTaskSheet({ onClose, onCreated }: { onClose: () => void; onCreate
   const [userName, setUserName] = useState('');
   const [aiFilled, setAiFilled] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pendingDedup, setPendingDedup] = useState<{ suggestion: DedupSuggestion; task: any } | null>(null);
   const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touched = useRef<{ owner: boolean; dueDate: boolean; priority: boolean }>({ owner: false, dueDate: false, priority: false });
 
@@ -141,14 +142,30 @@ function CreateTaskSheet({ onClose, onCreated }: { onClose: () => void; onCreate
     if (!title.trim() || saving) return;
     setSaving(true);
     try {
-      await api().createTask?.({
+      const task = {
         title: title.trim(),
         description: description.trim() || undefined,
         owner: owner || undefined,
         dueDate: dueDate ? new Date(dueDate + 'T12:00:00').toISOString() : undefined,
         priority,
         status: 'todo',
-      });
+      };
+      const result = await api().createTask?.(task);
+      if (result?.dedupPending) {
+        setPendingDedup({ suggestion: result.dedupSuggestion, task: result.pendingTask || task });
+        return;
+      }
+      onCreated();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resolveDedup = async (action: 'same' | 'new' | 'reopen') => {
+    if (!pendingDedup) return;
+    setSaving(true);
+    try {
+      await api().resolveCreateTaskDedup?.(pendingDedup.task, pendingDedup.suggestion, action);
       onCreated();
     } finally {
       setSaving(false);
@@ -206,9 +223,18 @@ function CreateTaskSheet({ onClose, onCreated }: { onClose: () => void; onCreate
           />
         </div>
         {aiFilled && <div className="pp-meta">Wiser filled in a few fields from the title — change anything that's off.</div>}
+        {pendingDedup && (
+          <DedupConfirmCard
+            suggestion={pendingDedup.suggestion}
+            newTitle={pendingDedup.task.title}
+            busy={saving}
+            onSame={() => resolveDedup(pendingDedup.suggestion.wasDone ? 'reopen' : 'same')}
+            onNew={() => resolveDedup('new')}
+          />
+        )}
         <div className="pp-row" style={{ gap: 8 }}>
           <button className="pp-btn pp-ghost" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
-          <button className="pp-btn pp-solid" style={{ flex: 2 }} disabled={!title.trim() || saving} onClick={create}>
+          <button className="pp-btn pp-solid" style={{ flex: 2 }} disabled={!title.trim() || saving || !!pendingDedup} onClick={create}>
             {saving ? 'Creating…' : 'Create task'}
           </button>
         </div>

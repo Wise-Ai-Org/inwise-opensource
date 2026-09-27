@@ -10,6 +10,7 @@ interface PersonRow {
   meetingCount: number;
   actionItemCount: number;
   daysSinceLastContact: number | null;
+  isSelf?: boolean;
 }
 
 export default function PeopleTab() {
@@ -48,6 +49,7 @@ export default function PeopleTab() {
   };
 
   const subtitle = (p: PersonRow): string => {
+    if (p.isSelf) return 'You';
     const bits: string[] = [];
     if (p.role) bits.push(p.role);
     else if (p.company) bits.push(p.company);
@@ -55,6 +57,9 @@ export default function PeopleTab() {
     else if (p.daysSinceLastContact != null) bits.push(`last met ${p.daysSinceLastContact === 0 ? 'today' : `${p.daysSinceLastContact}d ago`}`);
     return bits.join(' · ') || `${p.meetingCount} meeting${p.meetingCount === 1 ? '' : 's'}`;
   };
+
+  const self = people.find(p => p.isSelf);
+  const others = people.filter(p => !p.isSelf);
 
   return (
     <div className="pp-body">
@@ -93,9 +98,24 @@ export default function PeopleTab() {
         </div>
       )}
 
-      {people.length > 0 && (
+      {self && (
+        <div className="pp-listcard" style={{ borderColor: 'var(--pp-teal-line)', background: 'var(--pp-teal-tint)' }}>
+          <button className="pp-setrow" onClick={() => push({ kind: 'person', id: self._id, name: self.name })}>
+            <span className="pp-avatar" style={{ background: 'var(--teal)', color: 'white' }}>{initials(self.name)}</span>
+            <div className="pp-grow">
+              <div className="pp-rowlabel">{self.name || 'Me'}</div>
+              <div className="pp-rowsub">You</div>
+            </div>
+            <span className="pp-chevron">â€º</span>
+          </button>
+        </div>
+      )}
+
+      {others.length > 0 && (
+        <>
+        <div className="pp-seclabel" style={{ padding: '4px 2px 0' }}>People Â· {others.length}</div>
         <div className="pp-listcard">
-          {people.map(p => (
+          {others.map(p => (
             <button key={p._id} className="pp-setrow" onClick={() => push({ kind: 'person', id: p._id, name: p.name })}>
               <span className="pp-avatar">{initials(p.name)}</span>
               <div className="pp-grow">
@@ -106,6 +126,7 @@ export default function PeopleTab() {
             </button>
           ))}
         </div>
+        </>
       )}
 
       {archivedCount > 0 && archived === null && (

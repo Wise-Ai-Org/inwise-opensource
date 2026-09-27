@@ -13,10 +13,12 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
   const [mergeOptions, setMergeOptions] = useState<Array<{ _id: string; name: string; email?: string | null }>>([]);
   const [mergeConfirm, setMergeConfirm] = useState<{ _id: string; name: string } | null>(null);
   const [merging, setMerging] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [renaming, setRenaming] = useState(false);
 
   const openMergePicker = async () => {
     const rows = await api().getPeople?.().catch(() => []);
-    setMergeOptions((rows || []).filter((p: any) => p._id !== personId && p.name));
+    setMergeOptions((rows || []).filter((p: any) => p._id !== personId && !p.isSelf && p.name));
     setMergePicking(true);
   };
 
@@ -44,6 +46,9 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
 
   const openItems: any[] = person?.pendingActionItems || [];
   const meetings: any[] = (person?.communications || []).slice(0, 5);
+  const commitments: any[] = person?.commitments || [];
+  const frequentPeople: any[] = person?.frequentPeople || [];
+  const emailNamed = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(person?.name || '');
 
   const lastMet = person?.lastMeeting
     ? new Date(person.lastMeeting).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
@@ -71,6 +76,18 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
     pop();
   };
 
+  const saveName = async () => {
+    if (!renameValue.trim()) return;
+    setRenaming(true);
+    try {
+      const updated = await api().renamePerson?.(personId, renameValue.trim());
+      if (updated) setPerson(updated);
+      setRenameValue('');
+    } finally {
+      setRenaming(false);
+    }
+  };
+
   return (
     <>
       <div className="pp-drillhead">
@@ -88,15 +105,47 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                 <span className="pp-avatar" style={{ width: 42, height: 42, fontSize: 14 }}>{initials(person.name || '?')}</span>
                 <div className="pp-grow">
                   <div className="pp-title-sm" style={{ fontSize: 15 }}>{person.name}</div>
+                  {person.email && person.email !== person.name && (
+                    <div className="pp-meta" style={{ marginTop: 2 }}>{person.email}</div>
+                  )}
                   <div className="pp-meta" style={{ marginTop: 2 }}>
-                    {[person.role || person.company, lastMet ? `last met ${lastMet}` : null].filter(Boolean).join(' · ')
+                    {person.isSelf ? 'You' : [person.role || person.company, lastMet ? `last met ${lastMet}` : null].filter(Boolean).join(' · ')
                       || `${meetings.length} meeting${meetings.length === 1 ? '' : 's'} together`}
                   </div>
                 </div>
               </div>
+              {((person.altNames || []).length > 0 || (person.altEmails || []).length > 0) && (
+                <div style={{ marginTop: 10 }}>
+                  <div className="pp-meta" style={{ marginBottom: 5 }}>Also known as</div>
+                  <div className="pp-row" style={{ justifyContent: 'flex-start', gap: 5, flexWrap: 'wrap' }}>
+                    {[...(person.altNames || []), ...(person.altEmails || [])].map((alias: string) => (
+                      <span key={alias} className="pp-chip">{alias}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
-            {agenda ? (
+            {emailNamed && (
+              <div className="pp-card" style={{ background: 'var(--pp-teal-tint)', borderColor: 'var(--pp-teal-line)' }}>
+                <div className="pp-title-sm" style={{ fontSize: 13 }}>What do you call them?</div>
+                <div className="pp-row" style={{ marginTop: 8, gap: 8 }}>
+                  <span className="pp-search pp-grow">
+                    <input
+                      value={renameValue}
+                      onChange={e => setRenameValue(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') saveName(); }}
+                      placeholder="Their name"
+                    />
+                  </span>
+                  <button className="pp-btn pp-solid" disabled={!renameValue.trim() || renaming} onClick={saveName}>
+                    {renaming ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!person.isSelf && (agenda ? (
               <div className="pp-card" style={{ background: 'var(--pp-teal-tint)', borderColor: 'var(--pp-teal-line)' }}>
                 <div className="pp-row" style={{ marginBottom: 8 }}>
                   <div className="pp-grow" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--pp-teal-deep)' }}>
@@ -115,16 +164,16 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                 size="sm"
                 tone="light"
                 busy={agendaLoading}
-                busyLabel="Wiser is drafting…"
+                busyLabel="Ollie is drafting…"
                 onClick={generateAgenda}
               >
                 Draft talking points for next time
               </AiButton>
-            )}
+            ))}
 
             {openItems.length > 0 && (
               <>
-                <div className="pp-seclabel">Open items</div>
+                <div className="pp-seclabel">{person.isSelf ? 'Assigned to you' : 'Open items'}</div>
                 <div className="pp-listcard">
                   {openItems.slice(0, 6).map((item: any, i: number) => (
                     <div key={i} className="pp-setrow" style={{ cursor: 'default' }}>
@@ -140,7 +189,38 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
               </>
             )}
 
-            {meetings.length > 0 && (
+            {person.isSelf && commitments.length > 0 && (
+              <>
+                <div className="pp-seclabel">Your commitments</div>
+                <div className="pp-listcard">
+                  {commitments.slice(0, 6).map((item: any, i: number) => (
+                    <div key={i} className="pp-setrow" style={{ cursor: 'default' }}>
+                      <div className="pp-grow">
+                        <div className="pp-rowlabel" style={{ fontSize: 12.5 }}>{item.text}</div>
+                        <div className="pp-rowsub">{[item.meetingTitle, item.deadline].filter(Boolean).join(' Â· ')}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {person.isSelf && frequentPeople.length > 0 && (
+              <>
+                <div className="pp-seclabel">People you met with most Â· 30 days</div>
+                <div className="pp-listcard">
+                  {frequentPeople.map((item: any) => (
+                    <div key={item.name} className="pp-setrow" style={{ cursor: 'default' }}>
+                      <span className="pp-avatar">{initials(item.name)}</span>
+                      <div className="pp-grow pp-rowlabel">{item.name}</div>
+                      <span className="pp-chip">{item.meetingCount}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {!person.isSelf && meetings.length > 0 && (
               <>
                 <div className="pp-seclabel">Recent meetings together</div>
                 <div className="pp-listcard">
@@ -160,7 +240,7 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
               </>
             )}
 
-            {mergePicking && (
+            {!person.isSelf && mergePicking && (
               <>
                 <div className="pp-seclabel">
                   {mergeConfirm ? 'Confirm merge' : `Which person is also ${person.name}?`}
@@ -202,7 +282,7 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
               </>
             )}
 
-            <div className="pp-row" style={{ justifyContent: 'center', gap: 18, paddingTop: 2 }}>
+            {!person.isSelf && <div className="pp-row" style={{ justifyContent: 'center', gap: 18, paddingTop: 2 }}>
               {!mergePicking && (
                 <button className="pp-quiet-action" onClick={openMergePicker}>Same as another person…</button>
               )}
@@ -215,7 +295,7 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
               ) : (
                 <button className="pp-quiet-action" onClick={() => setConfirmArchive(true)}>Archive person</button>
               )}
-            </div>
+            </div>}
           </>
         )}
       </div>

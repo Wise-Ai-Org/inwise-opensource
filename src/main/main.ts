@@ -17,7 +17,7 @@ import { assessTranscriptQuality, normalizeSpeakerLabels } from './transcription
 import { extractInsights, searchMeetings, detectContradictions, generateAgenda, suggestTaskFields, classifyVoiceMemo, VoiceMemoItem } from './extractor';
 import {
   initDatabase,
-  createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus,
+  createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus, reviewMeeting,
   mergeMeetingAttendees,
   findRecentRecordingMeeting, appendMeetingTranscript,
   getMeetings, getMeeting, deleteMeeting, getAllPastDecisions,
@@ -27,7 +27,7 @@ import {
   getSnoozedTasks, snoozeTask, bringBackTask,
   markLikelyDone, confirmLikelyDone, rejectLikelyDone,
   getPeople, getArchivedPeople, getPerson, addPerson, addTrackedPeople,
-  archivePerson, unarchivePerson, getSuggestedPeople, updatePersonProfile,
+  archivePerson, unarchivePerson, getSuggestedPeople, updatePersonProfile, renamePerson,
   dedupePeopleByName, dedupeCalendarSyncMeetings,
   getPersonMergeCandidates, mergePeople, markNotSamePerson,
   getPersonAgendaContext, getMeetingAgendaContext, getRecurringMeetingAgendaContext,
@@ -36,7 +36,7 @@ import {
   renameVoicePrint,
   syncCalendarEventsToDb,
   getAllTasksForDedup, getMeetingsById, appendTaskMention,
-  mergeTasksManual, undoSplitMention, resolvePendingDedup,
+  mergeTasksManual, undoSplitMention, resolvePendingDedup, resolveTaskCreationDedup,
   bumpTaskPriority, dismissTaskNudge,
 } from './database';
 import { decideMention, retrieveCandidates, classifyCandidates, buildMentionThread, providerModelLabel } from './task-dedup';
@@ -1761,7 +1761,10 @@ ipcMain.handle('calendar:active-event', () => {
 ipcMain.handle('db:getMeetings', async () => getMeetings());
 ipcMain.handle('db:getMeeting', async (_e, id) => getMeeting(id));
 ipcMain.handle('db:deleteMeeting', async (_e, id) => { await deleteMeeting(id); return true; });
-ipcMain.handle('db:reviewMeeting', async (_e, id) => { await updateMeetingStatus(id, 'reviewed'); return true; });
+ipcMain.handle('db:reviewMeeting', async (_e, id, reviewedInsights) => {
+  await reviewMeeting(id, reviewedInsights);
+  return true;
+});
 
 ipcMain.handle('db:createMeetingFromTranscript', async (_e, data) => {
   const meeting = await createMeetingFromTranscript(data);
@@ -1816,6 +1819,11 @@ ipcMain.handle('db:getTasks', async () => {
   }));
 });
 ipcMain.handle('db:createTask', async (_e, data) => createTask(data));
+ipcMain.handle('dedup:resolveCreate', async (_e, data, suggestion, action: 'same' | 'new' | 'reopen') => {
+  const result = await resolveTaskCreationDedup(data, suggestion, action);
+  mainWindow?.webContents.send('tasks:mentions-updated');
+  return result;
+});
 ipcMain.handle('db:updateTask', async (_e, id, updates) => {
   const result = await updateTask(id, updates);
 
@@ -1983,6 +1991,7 @@ ipcMain.handle('db:addTrackedPeople', async (_e, names) => addTrackedPeople(name
 ipcMain.handle('db:archivePerson', async (_e, id) => { await archivePerson(id); return true; });
 ipcMain.handle('db:unarchivePerson', async (_e, id) => { await unarchivePerson(id); return true; });
 ipcMain.handle('db:getSuggestedPeople', async () => getSuggestedPeople());
+ipcMain.handle('people:rename', async (_e, id: string, name: string) => renamePerson(id, name));
 
 // AI features
 ipcMain.handle('ai:generatePersonInsights', async (_e, personId: string) => {

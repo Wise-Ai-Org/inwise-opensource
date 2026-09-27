@@ -17,6 +17,7 @@ import {
 } from '@chakra-ui/react';
 import { CheckIcon, CloseIcon } from '@chakra-ui/icons';
 import { api } from '../../api';
+import { MatchAttribution, DedupSuggestion } from '../../popup/DedupBits';
 import {
   FlowModalOverlay,
   FlowModalContent,
@@ -142,6 +143,7 @@ export default function CreateTaskModal({
   const [epics, setEpics] = useState<Epic[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [pendingDedup, setPendingDedup] = useState<{ suggestion: DedupSuggestion; task: any } | null>(null);
 
   // Enrichment
   const [definition, setDefinition] = useState<TaskDefinition | null>(null);
@@ -257,6 +259,7 @@ export default function CreateTaskModal({
     setEpicId(''); setAssigneeId(''); setDefinition(null); setEnrichAttempted(false);
     setEditingField(null); setSuggestionsApplied(false); setAiSuggestedValues({});
     setSuggestions({});
+    setPendingDedup(null);
     if (enrichTimerRef.current) clearTimeout(enrichTimerRef.current);
   };
 
@@ -266,7 +269,7 @@ export default function CreateTaskModal({
     if (!title.trim()) return;
     setIsLoading(true);
     try {
-      await api.createTask({
+      const task = {
         title: title.trim(),
         description: description.trim(),
         priority: priority || 'medium',
@@ -281,11 +284,28 @@ export default function CreateTaskModal({
         source: { type: 'manual' },
         definition: definition || null,
         aiSuggestions: aiSuggestedValues
-      });
+      };
+      const result = await api.createTask(task);
+      if (result?.dedupPending) {
+        setPendingDedup({ suggestion: result.dedupSuggestion, task: result.pendingTask || task });
+        return;
+      }
       handleClose();
       onTaskCreated();
     } catch (err) {
       console.error('Failed to create task:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const resolveDedup = async (action: 'same' | 'new' | 'reopen') => {
+    if (!pendingDedup) return;
+    setIsLoading(true);
+    try {
+      await api.resolveCreateTaskDedup(pendingDedup.task, pendingDedup.suggestion, action);
+      handleClose();
+      onTaskCreated();
     } finally {
       setIsLoading(false);
     }
@@ -526,13 +546,28 @@ export default function CreateTaskModal({
               </SuggestedLabel>
             </motion.div>
           </VStack>
+          {pendingDedup && (
+            <Box mt={4} p={3} border="1px solid" borderColor="#9dd4d9" borderRadius="8px" bg="#f0fafa">
+              <Text fontSize="13px" color="gray.700">
+                Sounds like <b>{pendingDedup.suggestion.candidateTitle}</b> â€” same thing?
+              </Text>
+              <HStack mt={2} spacing={2}>
+                <Button size="xs" colorScheme="teal" onClick={() => resolveDedup('same')}>Same thing</Button>
+                <Button size="xs" variant="outline" onClick={() => resolveDedup('new')}>Keep separate</Button>
+                {pendingDedup.suggestion.wasDone && (
+                  <Button size="xs" variant="ghost" onClick={() => resolveDedup('reopen')}>Reopen it</Button>
+                )}
+              </HStack>
+              <MatchAttribution model={pendingDedup.suggestion.model} />
+            </Box>
+          )}
         </FlowModalBody>
         <FlowModalFooter
           onCancel={handleClose}
           onConfirm={handleSubmit}
           confirmLabel="Create Task"
           isLoading={isLoading}
-          isDisabled={!title.trim()}
+          isDisabled={!title.trim() || !!pendingDedup}
         />
       </FlowModalContent>
     </Modal>

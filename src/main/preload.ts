@@ -28,11 +28,13 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   createMeetingFromTranscript: (data: any) => ipcRenderer.invoke('db:createMeetingFromTranscript', data),
   attachTranscriptToMeeting: (meetingId: string, content: string) =>
     ipcRenderer.invoke('db:attachTranscriptToMeeting', meetingId, content),
-  reviewMeeting: (id: string) => ipcRenderer.invoke('db:reviewMeeting', id),
+  reviewMeeting: (id: string, reviewedInsights?: any) => ipcRenderer.invoke('db:reviewMeeting', id, reviewedInsights),
 
   // Tasks
   getTasks: () => ipcRenderer.invoke('db:getTasks'),
   createTask: (data: any) => ipcRenderer.invoke('db:createTask', data),
+  resolveCreateTaskDedup: (data: any, suggestion: any, action: 'same' | 'new' | 'reopen') =>
+    ipcRenderer.invoke('dedup:resolveCreate', data, suggestion, action),
   updateTask: (id: string, updates: any) => ipcRenderer.invoke('db:updateTask', id, updates),
   deleteTask: (id: string) => ipcRenderer.invoke('db:deleteTask', id),
 
@@ -71,6 +73,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   getPersonMergeCandidates: () => ipcRenderer.invoke('people:mergeCandidates'),
   mergePeople: (keepId: string, dropId: string) => ipcRenderer.invoke('people:merge', keepId, dropId),
   markNotSamePerson: (idA: string, idB: string) => ipcRenderer.invoke('people:notSame', idA, idB),
+  renamePerson: (id: string, name: string) => ipcRenderer.invoke('people:rename', id, name),
 
   // Briefing + Task Scoring
   getBriefing: (dateKey?: string) => ipcRenderer.invoke('briefing:get', dateKey),

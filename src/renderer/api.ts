@@ -30,11 +30,13 @@ export const api = {
   getMeeting: (id: string) => inwiseAPI.getMeeting(id),
   deleteMeeting: (id: string) => inwiseAPI.deleteMeeting(id),
   createMeetingFromTranscript: (data: any) => inwiseAPI.createMeetingFromTranscript(data),
-  reviewMeeting: (id: string) => inwiseAPI.reviewMeeting(id),
+  reviewMeeting: (id: string, reviewedInsights?: any) => inwiseAPI.reviewMeeting(id, reviewedInsights),
 
   // ── Tasks ────────────────────────────────────────────────────────────────
   getTasks: () => inwiseAPI.getTasks(),
   createTask: (data: any) => inwiseAPI.createTask(data),
+  resolveCreateTaskDedup: (data: any, suggestion: any, action: 'same' | 'new' | 'reopen') =>
+    inwiseAPI.resolveCreateTaskDedup(data, suggestion, action),
   updateTask: (id: string, updates: any) => inwiseAPI.updateTask(id, updates),
   deleteTask: (id: string) => inwiseAPI.deleteTask(id),
 
@@ -66,6 +68,7 @@ export const api = {
   archivePerson: (id: string) => inwiseAPI.archivePerson(id),
   unarchivePerson: (id: string) => inwiseAPI.unarchivePerson(id),
   getSuggestedPeople: () => inwiseAPI.getSuggestedPeople(),
+  renamePerson: (id: string, name: string) => inwiseAPI.renamePerson(id, name),
 
   // ── Briefing + Task Scoring ──────────────────────────────────────────────
   getBriefing: (dateKey?: string) => inwiseAPI.getBriefing(dateKey),

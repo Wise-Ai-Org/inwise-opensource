@@ -90,6 +90,33 @@ export async function updateMeetingStatus(id: string, status: string): Promise<v
   await meetingsDb.updateAsync({ _id: id }, { $set: { status } }, {});
 }
 
+export async function reviewMeeting(
+  id: string,
+  reviewedInsights?: { actionItems?: any[]; blockers?: any[]; decisions?: any[] },
+): Promise<void> {
+  const meeting: any = await meetingsDb.findOneAsync({ _id: id });
+  const insights = meeting?.insights || {};
+  const reviewedAt = new Date().toISOString();
+  await meetingsDb.updateAsync(
+    { _id: id },
+    {
+      $set: {
+        status: 'reviewed',
+        reviewedAt,
+        insights: reviewedInsights
+          ? {
+              ...insights,
+              actionItems: reviewedInsights.actionItems ?? insights.actionItems ?? [],
+              blockers: reviewedInsights.blockers ?? insights.blockers ?? [],
+              decisions: reviewedInsights.decisions ?? insights.decisions ?? [],
+            }
+          : insights,
+      },
+    },
+    {},
+  );
+}
+
 /**
  * Find a desktop recording for the same meeting created within `windowMs`,
  * so late-arriving audio segments merge into it instead of becoming fragments.
@@ -168,69 +195,18 @@ export async function saveInsights(meetingId: string, insights: {
     { multi: true }
   );
 
-  // Dedup context for this meeting's mentions (task-dedup PRD US-013): the
-  // source meeting (attendee overlap + recurring-series signals) plus all
-  // candidate tasks and their source meetings.
-  const sourceMeeting: any = await meetingsDb.findOneAsync({ _id: meetingId });
-  const dedupTasks = await getAllTasksForDedup();
-  const meetingsById = await getMeetingsById();
-
   for (const item of insights.actionItems) {
     const now = new Date().toISOString();
-    const mention: TaskMention = {
-      id: uuidv4(),
-      sourceType: 'meeting',
-      sourceId: meetingId,
-      sourceTitle: sourceMeeting?.title || 'Meeting',
-      excerpt: item.text,
-      occurredAt: sourceMeeting?.date || now,
-    };
-
-    // Decide whether this action item is a repeat mention of an existing task.
-    // Any failure here degrades to plain creation — never blocks the task.
-    let decision: Awaited<ReturnType<typeof decideMention>> = { kind: 'none' };
-    try {
-      decision = await decideMention(
-        { title: item.text, description: '' },
-        dedupTasks,
-        { sourceMeeting, meetingsById },
-      );
-    } catch (e: any) {
-      log('error', 'task-dedup:decide-failed', e?.message || String(e));
-    }
-
-    if (decision.kind === 'auto_merge') {
-      await appendTaskMention(decision.taskId, {
-        ...mention,
-        mergedItem: {
-          title: item.text,
-          description: '',
-          owner: item.owner || null,
-          deadline: item.dueDate || null,
-        },
-      });
-      await logMatchDecision({
-        decisionType: 'auto_merge',
-        confidence: decision.confidence,
-        retrievalScore: decision.retrievalScore,
-        candidateTaskId: decision.taskId,
-        taskId: decision.taskId,
-        newItemText: item.text,
-        decidedBy: 'system',
-        surface: 'oss',
-      });
-      continue; // no new task
-    }
-
-    const doc: Record<string, any> = {
-      _id: uuidv4(),
+    const taskId = uuidv4();
+    const task: TaskCreateInput = {
       title: item.text,
       description: '',
-      status: 'todo',
       priority: item.priority || 'medium',
       dueDate: item.dueDate || null,
       owner: item.owner || null,
+      assignee: item.owner || null,
       source: { type: 'meeting', id: meetingId },
+      meetingId,
       aiExtracted: true,
       approval: { status: 'pending' },
       provenance: {
@@ -238,38 +214,11 @@ export async function saveInsights(meetingId: string, insights: {
         extractionMethod: 'transcript_analysis',
         extractedAt: now,
       },
-      taskMentions: [mention],
-      mentionCount: 1,
-      archivedAt: null,
-      createdAt: now,
     };
-
-    if (decision.kind === 'ask') {
-      // Ask-band: the extracted task is already headed for the review surface,
-      // so the classifier result rides along on the pending task instead of a
-      // separate pending-match record (US-007/US-013 binding decision).
-      doc.dedupSuggestion = {
-        candidateTaskId: decision.taskId,
-        candidateTitle: decision.taskTitle,
-        wasDone: decision.wasDone,
-        confidence: decision.confidence,
-        retrievalScore: decision.retrievalScore,
-        model: providerModelLabel(),
-      };
-    } else if (decision.kind === 'new') {
-      await logMatchDecision({
-        decisionType: 'below_ask_new',
-        confidence: decision.confidence,
-        retrievalScore: decision.retrievalScore,
-        candidateTaskId: decision.candidateTaskId,
-        taskId: doc._id,
-        newItemText: item.text,
-        decidedBy: 'system',
-        surface: 'oss',
-      });
-    }
-
-    await tasksDb.insertAsync(doc);
+    const route = await routeTaskCreation(task, taskId, now);
+    if (route.kind === 'merged') continue;
+    if (route.kind === 'ask') task.dedupSuggestion = route.suggestion;
+    await insertTaskDocument(task, taskId, now);
   }
 
 }
@@ -563,37 +512,242 @@ export async function getSnoozedTasks(): Promise<any[]> {
   return sortTasks(tasks);
 }
 
-export async function createTask(data: {
+export interface TaskCreateInput {
   title: string;
   description?: string;
   priority?: string;
-  dueDate?: string;
+  dueDate?: string | null;
   status?: string;
-  owner?: string;
-}): Promise<any> {
-  const now = new Date().toISOString();
-  const doc = await tasksDb.insertAsync({
-    _id: uuidv4(),
+  owner?: string | null;
+  assignee?: string | null;
+  source?: string | { type: string; id?: string | null };
+  meetingId?: string | null;
+  approval?: Record<string, any>;
+  aiExtracted?: boolean;
+  provenance?: Record<string, any> | null;
+  taskMentions?: TaskMention[];
+  skipDedup?: boolean;
+  [key: string]: any;
+}
+
+export interface TaskCreateDedupSuggestion {
+  candidateTaskId: string;
+  candidateTitle: string;
+  wasDone: boolean;
+  confidence: number;
+  retrievalScore: number;
+  model: string;
+}
+
+function normalizeTaskSource(source: TaskCreateInput['source'], meetingId?: string | null): { type: string; id?: string } {
+  if (!source) return { type: 'manual' };
+  if (typeof source === 'object') {
+    const type = source.type || (meetingId ? 'meeting' : 'manual');
+    const id = source.id || (type === 'meeting' ? meetingId : null);
+    return id ? { type, id } : { type };
+  }
+  if (source === 'meeting-review' || source === 'meeting_transcript' || source === 'meeting') {
+    return meetingId ? { type: 'meeting', id: meetingId } : { type: 'meeting' };
+  }
+  if (source === 'voice-note' || source === 'voice_note') return { type: 'voice_memo' };
+  return { type: source };
+}
+
+async function mentionForTask(data: TaskCreateInput, now: string): Promise<TaskMention> {
+  const source = normalizeTaskSource(data.source, data.meetingId);
+  const sourceId = source.id || data.meetingId || null;
+  if (source.type === 'meeting') {
+    const meeting: any = sourceId ? await meetingsDb.findOneAsync({ _id: sourceId }) : null;
+    return {
+      id: uuidv4(),
+      sourceType: 'meeting',
+      sourceId,
+      sourceTitle: meeting?.title || 'Meeting',
+      excerpt: data.title,
+      occurredAt: meeting?.date || now,
+      mergedItem: {
+        title: data.title,
+        description: data.description || '',
+        owner: data.owner || data.assignee || null,
+        deadline: data.dueDate || null,
+      },
+    };
+  }
+  if (source.type === 'voice_memo') {
+    return {
+      id: uuidv4(), sourceType: 'voice_note', sourceId,
+      sourceTitle: 'Voice note', excerpt: data.title, occurredAt: now,
+      mergedItem: {
+        title: data.title, description: data.description || '',
+        owner: data.owner || data.assignee || null, deadline: data.dueDate || null,
+      },
+    };
+  }
+  return {
+    id: uuidv4(), sourceType: 'manual', sourceId: null,
+    sourceTitle: 'Manual entry', excerpt: data.title, occurredAt: now,
+    mergedItem: {
+      title: data.title, description: data.description || '',
+      owner: data.owner || data.assignee || null, deadline: data.dueDate || null,
+    },
+  };
+}
+
+async function insertTaskDocument(data: TaskCreateInput, taskId: string, now: string): Promise<any> {
+  const { skipDedup: _skipDedup, ...persisted } = data;
+  const source = normalizeTaskSource(data.source, data.meetingId);
+  const meetingId = data.meetingId || (source.type === 'meeting' ? source.id || null : null);
+  let taskMentions = Array.isArray(data.taskMentions) ? data.taskMentions : [];
+  if (taskMentions.length === 0 && source.type === 'meeting') {
+    const mention = await mentionForTask({ ...data, source, meetingId }, now);
+    taskMentions = [{ ...mention, mergedItem: undefined }];
+  }
+  const provenance = data.provenance !== undefined
+    ? data.provenance
+    : meetingId
+      ? { meetingId, extractionMethod: 'transcript_review', extractedAt: now }
+      : null;
+  return tasksDb.insertAsync({
+    ...persisted,
+    _id: taskId,
     title: data.title,
     description: data.description || '',
     status: data.status || 'todo',
     priority: data.priority || 'medium',
     dueDate: data.dueDate || null,
-    owner: data.owner || null,
-    source: { type: 'manual' },
-    aiExtracted: false,
-    approval: { status: 'auto_approved' },
-    taskMentions: [],
-    mentionCount: 0,
-    archivedAt: null,
-    snoozedAt: null,
-    snoozedReason: null,
-    lastMentionedAt: null,
-    likelyDone: false,
-    createdAt: now,
+    owner: data.owner || data.assignee || null,
+    assignee: data.assignee || data.owner || null,
+    source,
+    meetingId,
+    aiExtracted: data.aiExtracted === true,
+    approval: data.approval || { status: 'auto_approved' },
+    provenance,
+    taskMentions,
+    mentionCount: taskMentions.length,
+    archivedAt: data.archivedAt || null,
+    snoozedAt: data.snoozedAt || null,
+    snoozedReason: data.snoozedReason || null,
+    lastMentionedAt: taskMentions.length ? taskMentions[taskMentions.length - 1].occurredAt : null,
+    likelyDone: data.likelyDone === true,
+    createdAt: data.createdAt || now,
     updatedAt: now,
   });
-  return doc;
+}
+
+type TaskCreationRoute =
+  | { kind: 'create' }
+  | { kind: 'merged'; task: any }
+  | { kind: 'ask'; suggestion: TaskCreateDedupSuggestion };
+
+/** Single task-creation dedup route used by extraction, review, and manual entry. */
+async function routeTaskCreation(data: TaskCreateInput, proposedTaskId: string, now: string): Promise<TaskCreationRoute> {
+  try {
+    const source = normalizeTaskSource(data.source, data.meetingId);
+    const sourceMeeting: any = source.type === 'meeting' && source.id
+      ? await meetingsDb.findOneAsync({ _id: source.id })
+      : null;
+    const decision = await decideMention(
+      { title: data.title, description: data.description || '' },
+      await getAllTasksForDedup(),
+      sourceMeeting ? { sourceMeeting, meetingsById: await getMeetingsById() } : {},
+    );
+
+    if (decision.kind === 'auto_merge') {
+      const mention = await mentionForTask({ ...data, source }, now);
+      const merged = await appendTaskMention(decision.taskId, mention);
+      if (!merged) throw new Error('Dedup candidate disappeared before merge');
+      await logMatchDecision({
+        decisionType: 'auto_merge',
+        confidence: decision.confidence,
+        retrievalScore: decision.retrievalScore,
+        candidateTaskId: decision.taskId,
+        taskId: decision.taskId,
+        newItemText: data.title,
+        decidedBy: 'system',
+        surface: 'oss',
+      });
+      return { kind: 'merged', task: merged };
+    }
+    if (decision.kind === 'ask') {
+      return {
+        kind: 'ask',
+        suggestion: {
+          candidateTaskId: decision.taskId,
+          candidateTitle: decision.taskTitle,
+          wasDone: decision.wasDone,
+          confidence: decision.confidence,
+          retrievalScore: decision.retrievalScore,
+          model: providerModelLabel(),
+        },
+      };
+    }
+    if (decision.kind === 'new') {
+      await logMatchDecision({
+        decisionType: 'below_ask_new',
+        confidence: decision.confidence,
+        retrievalScore: decision.retrievalScore,
+        candidateTaskId: decision.candidateTaskId,
+        taskId: proposedTaskId,
+        newItemText: data.title,
+        decidedBy: 'system',
+        surface: 'oss',
+      });
+    }
+  } catch (e: any) {
+    log('error', 'task-dedup:create-route-failed', e?.message || String(e));
+  }
+  return { kind: 'create' };
+}
+
+export async function createTask(data: TaskCreateInput): Promise<any> {
+  const now = new Date().toISOString();
+  const taskId = uuidv4();
+  if (data.skipDedup) return insertTaskDocument(data, taskId, now);
+  const route = await routeTaskCreation(data, taskId, now);
+  if (route.kind === 'merged') return { ...route.task, dedupOutcome: 'auto_merge' };
+  if (route.kind === 'ask') {
+    return { dedupPending: true, dedupSuggestion: route.suggestion, pendingTask: data };
+  }
+  return insertTaskDocument(data, taskId, now);
+}
+
+export async function resolveTaskCreationDedup(
+  data: TaskCreateInput,
+  suggestion: TaskCreateDedupSuggestion,
+  action: 'same' | 'new' | 'reopen',
+): Promise<any> {
+  const now = new Date().toISOString();
+  if (action === 'new') {
+    const taskId = uuidv4();
+    const created = await insertTaskDocument(data, taskId, now);
+    await logMatchDecision({
+      decisionType: 'confirm_new', confidence: suggestion.confidence,
+      retrievalScore: suggestion.retrievalScore,
+      candidateTaskId: suggestion.candidateTaskId, taskId,
+      newItemText: data.title, decidedBy: 'user', surface: 'oss',
+    });
+    return created;
+  }
+
+  try {
+    const mention = await mentionForTask(data, now);
+    const merged = await appendTaskMention(suggestion.candidateTaskId, mention, { reopen: action === 'reopen' });
+    if (!merged) throw new Error('Dedup candidate no longer exists');
+    await logMatchDecision({
+      decisionType: action === 'reopen' ? 'reopen_merge' : 'confirm_same',
+      confidence: suggestion.confidence,
+      retrievalScore: suggestion.retrievalScore,
+      candidateTaskId: suggestion.candidateTaskId,
+      taskId: suggestion.candidateTaskId,
+      newItemText: data.title,
+      decidedBy: 'user',
+      surface: 'oss',
+    });
+    return { ...merged, dedupOutcome: action === 'reopen' ? 'reopen_merge' : 'confirm_same' };
+  } catch (e: any) {
+    log('error', 'task-dedup:resolve-create-failed', e?.message || String(e));
+    return insertTaskDocument(data, uuidv4(), now);
+  }
 }
 
 export async function markLikelyDone(taskId: string): Promise<void> {
@@ -993,6 +1147,15 @@ async function computePeopleStats(person: any): Promise<any> {
   };
 }
 
+function personIsSelf(person: any): boolean {
+  return [
+    person?.name,
+    person?.email,
+    ...(Array.isArray(person?.altNames) ? person.altNames : []),
+    ...(Array.isArray(person?.altEmails) ? person.altEmails : []),
+  ].filter(Boolean).some((identity: string) => isSelf(identity));
+}
+
 export async function getPeople(search?: string): Promise<any[]> {
   const query: any = { archived: { $ne: true } };
   if (search) {
@@ -1001,8 +1164,8 @@ export async function getPeople(search?: string): Promise<any[]> {
   }
   const people = await peopleDb.findAsync(query);
   // The user is not a "person you meet with" — keep them out of the People list.
-  const others = people.filter((p: any) => !isSelf(p.name || '') && !isSelf(p.email || ''));
-  return Promise.all(others.map(computePeopleStats));
+  const rows = await Promise.all(people.map(computePeopleStats));
+  return rows.map((person: any) => ({ ...person, isSelf: personIsSelf(person) }));
 }
 
 export async function getArchivedPeople(): Promise<any[]> {
@@ -1013,6 +1176,7 @@ export async function getArchivedPeople(): Promise<any[]> {
 export async function getPerson(id: string): Promise<any> {
   const person = await peopleDb.findOneAsync({ _id: id });
   if (!person) return null;
+  const selfRecord = personIsSelf(person);
 
   const personName = ((person as any).name || '').toLowerCase();
   const personEmail = ((person as any).email || '').toLowerCase();
@@ -1125,13 +1289,32 @@ export async function getPerson(id: string): Promise<any> {
   }
 
   const base = await computePeopleStats(person);
+  const frequentPeople = selfRecord
+    ? (() => {
+        const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        const counts = new Map<string, number>();
+        for (const meeting of allMeetings as any[]) {
+          if (new Date(meeting.date).getTime() < cutoff) continue;
+          for (const attendee of meeting.attendees || []) {
+            if (!attendee || isSelf(attendee)) continue;
+            counts.set(attendee, (counts.get(attendee) || 0) + 1);
+          }
+        }
+        return [...counts.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([name, meetingCount]) => ({ name, meetingCount }));
+      })()
+    : [];
 
   return {
     ...base,
+    isSelf: selfRecord,
     pendingActionItems,
     commitments,
     nudges: nudges.sort((a, b) => (b.severity === 'high' ? 1 : 0) - (a.severity === 'high' ? 1 : 0)),
     communications,
+    frequentPeople,
     workingGroups: [],
     summary: {
       totalMeetings: base.meetingCount,
@@ -1387,16 +1570,24 @@ export async function getSuggestedPeople(): Promise<any[]> {
   // Already-tracked people for exclusion
   const allPeople = await peopleDb.findAsync({ archived: { $ne: true } });
   const trackedNames = new Set<string>();
+  const selfAliases = new Set<string>();
   for (const p of allPeople as any[]) {
     if (p.name) trackedNames.add(p.name.toLowerCase());
     for (const alt of p.altNames || []) trackedNames.add((alt || '').toLowerCase());
+    if (personIsSelf(p)) {
+      for (const identity of [p.name, p.email, ...(p.altNames || []), ...(p.altEmails || [])]) {
+        const normalized = String(identity || '').trim().toLowerCase();
+        if (normalized) selfAliases.add(normalized);
+      }
+    }
   }
 
   const frequency: Record<string, { name: string; count: number; meetings: any[] }> = {};
   for (const m of recentMeetings) {
     for (const attendee of (m.attendees || [])) {
       // Exclude current user across all their aliases
-      if (isSelf(attendee)) continue;
+      const attendeeLower = attendee.toLowerCase();
+      if (isSelf(attendee) || [...selfAliases].some(alias => attendeeLower.includes(alias) || alias.includes(attendeeLower))) continue;
       const key = attendee.toLowerCase();
       if (!frequency[key]) frequency[key] = { name: attendee, count: 0, meetings: [] };
       frequency[key].count++;
@@ -1765,6 +1956,21 @@ export async function getRecurringMeetingAgendaContext(event: DailyPlanEvent): P
 
 export async function updatePersonProfile(id: string, updates: { bio?: string; relationshipInsights?: string[] }): Promise<void> {
   await peopleDb.updateAsync({ _id: id }, { $set: updates }, {});
+}
+
+export async function renamePerson(id: string, name: string): Promise<any> {
+  const person: any = await peopleDb.findOneAsync({ _id: id });
+  const nextName = String(name || '').trim();
+  if (!person || !nextName) return null;
+  const aliases = new Set<string>(person.altEmails || []);
+  const previousName = String(person.name || '').trim();
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(previousName)) aliases.add(previousName);
+  await peopleDb.updateAsync(
+    { _id: id },
+    { $set: { name: nextName, altEmails: [...aliases] } },
+    {},
+  );
+  return getPerson(id);
 }
 
 // ── Voice Prints ──────────────────────────────────────────────────────────────

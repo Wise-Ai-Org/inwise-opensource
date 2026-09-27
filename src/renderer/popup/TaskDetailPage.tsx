@@ -168,6 +168,7 @@ function ExecutionCard({ summary }: { summary: any }) {
 export default function TaskDetailPage({ taskId }: { taskId: string }) {
   const { pop, push } = useNav();
   const [task, setTask] = useState<any>(null);
+  const [sourceMeeting, setSourceMeeting] = useState<any>(null);
   const [loaded, setLoaded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
@@ -188,6 +189,12 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
       setPeople((rows || []).map(p => p.name).filter(Boolean))).catch(() => {});
     api().getConfig?.().then((c: any) => setUserName(c?.userName || '')).catch(() => {});
   }, [taskId, reloadKey]);
+
+  useEffect(() => {
+    const meetingId = task?.source?.type === 'meeting' ? task.source.id : task?.meetingId || task?.provenance?.meetingId;
+    if (!meetingId) { setSourceMeeting(null); return; }
+    api().getMeeting?.(meetingId).then(setSourceMeeting).catch(() => setSourceMeeting(null));
+  }, [task]);
 
   // Show a transient confirmation after every silent auto-save — edits here
   // persist immediately and the user should see that.
@@ -350,7 +357,19 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
                   onClick={() => push({ kind: 'meeting', id: task.source.id })}
                 >
                   <div className="pp-row">
-                    <div className="pp-grow pp-title-sm">Open source meeting</div>
+                    <div className="pp-grow">
+                      <div className="pp-title-sm">{sourceMeeting?.title || 'Meeting'}</div>
+                      {(sourceMeeting?.date || task.createdAt) && (
+                        <div className="pp-meta" style={{ marginTop: 2 }}>
+                          {new Date(sourceMeeting?.date || task.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </div>
+                      )}
+                      {(task.taskMentions?.[0]?.excerpt || task.title) && (
+                        <div className="pp-meta" style={{ marginTop: 6, paddingLeft: 8, borderLeft: '3px solid var(--pp-teal-line)', fontStyle: 'italic', lineHeight: 1.5 }}>
+                          â€œ{task.taskMentions?.[0]?.excerpt || task.title}â€
+                        </div>
+                      )}
+                    </div>
                     <span className="pp-chevron">›</span>
                   </div>
                 </button>

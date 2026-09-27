@@ -28,6 +28,7 @@ import {
   SELECT_PROPS
 } from '../../components/modal/FlowModalShell';
 import { api } from '../../api';
+import { MatchAttribution, DedupSuggestion } from '../../popup/DedupBits';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -52,6 +53,9 @@ interface ActionItem {
   originalDueDate: string;
   resolution: OwnerResolution | null;
   ownerOverridden: boolean;
+  dedupSuggestion?: DedupSuggestion;
+  pendingTask?: Record<string, any>;
+  dedupResolvedAsMerge?: boolean;
 }
 
 interface BlockerItem {
@@ -102,6 +106,7 @@ interface Person {
   _id: string;
   name: string;
   email?: string;
+  isSelf?: boolean;
 }
 
 // ── Props — matches what Communications.tsx passes ────────────────────────
@@ -608,6 +613,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           (p.email && a.includes(p.email.toLowerCase()))
         );
       const sorted = (Array.isArray(peopleList) ? [...peopleList] : []).sort((x: any, y: any) => {
+        if (!!x.isSelf !== !!y.isSelf) return x.isSelf ? -1 : 1;
         const ax = isAttendee(x) ? 0 : 1;
         const ay = isAttendee(y) ? 0 : 1;
         if (ax !== ay) return ax - ay;
@@ -640,6 +646,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
         const id = `action-${idx}`;
         const owner = obj.owner || item.owner || '';
         const dueDate = obj.deadline || item.deadline || obj.dueDate || item.dueDate || '';
+        const approval = obj.approval || item.approval || null;
         heights[id] = estimateHeight(text);
         return {
           id,
@@ -648,7 +655,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           owner,
           dueDate,
           confidence: extractConfidence(item, 0.5),
-          selected: true,
+          selected: approval?.status !== 'rejected',
           edited: false,
           originalText: text,
           originalOwner: owner,
@@ -823,6 +830,18 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
 
   // ── Approve ────────────────────────────────────────────────────────────
 
+  const resolveActionDedup = async (item: ActionItem, action: 'same' | 'new' | 'reopen') => {
+    if (!item.dedupSuggestion || !item.pendingTask) return;
+    const result = await api.resolveCreateTaskDedup(item.pendingTask, item.dedupSuggestion, action);
+    setActionItems(prev => prev.map(row => row.id === item.id ? {
+      ...row,
+      taskId: result?._id || row.taskId,
+      dedupSuggestion: undefined,
+      pendingTask: undefined,
+      dedupResolvedAsMerge: action !== 'new',
+    } : row));
+  };
+
   const handleApprove = async () => {
     if (!meetingId) return;
     setIsApproving(true);
@@ -831,37 +850,91 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
       const reviewEdits = buildReviewEdits();
       console.log('[ReviewEdits]', reviewEdits);
 
-      // Mark meeting as reviewed via IPC
-      await api.reviewMeeting(meetingId);
-
       // Approve selected action items, reject dismissed ones
       const selectedActions = actionItems.filter(i => i.selected);
       const rejectedActions = actionItems.filter(i => !i.selected && i.taskId);
+      const nextActions = actionItems.map(item => ({ ...item }));
+      let needsDedupConfirmation = false;
 
       for (const item of selectedActions) {
         if (item.taskId) {
-          await api.updateTask(item.taskId, {
-            title: item.text,
-            assignee: item.owner || undefined,
-            dueDate: item.dueDate || undefined,
-            approval: { status: 'approved' }
-          });
+          if (!item.dedupResolvedAsMerge) {
+            await api.updateTask(item.taskId, {
+              title: item.text,
+              owner: item.owner || undefined,
+              assignee: item.owner || undefined,
+              dueDate: item.dueDate || undefined,
+              approval: { status: 'approved' }
+            });
+          }
+        } else if (item.dedupSuggestion) {
+          needsDedupConfirmation = true;
         } else {
-          await api.createTask({
+          const pendingTask = {
             title: item.text,
+            owner: item.owner || undefined,
             assignee: item.owner || undefined,
             dueDate: item.dueDate || undefined,
             meetingId,
             source: 'meeting-review',
-            approval: { status: 'approved' }
-          });
+            approval: { status: 'approved' },
+            aiExtracted: false,
+          };
+          const result = await api.createTask(pendingTask);
+          const idx = nextActions.findIndex(row => row.id === item.id);
+          if (result?.dedupPending) {
+            needsDedupConfirmation = true;
+            nextActions[idx] = {
+              ...nextActions[idx],
+              dedupSuggestion: result.dedupSuggestion,
+              pendingTask: result.pendingTask || pendingTask,
+            };
+          } else if (result?._id) {
+            nextActions[idx] = {
+              ...nextActions[idx],
+              taskId: result._id,
+              dedupResolvedAsMerge: result.dedupOutcome === 'auto_merge',
+            };
+          }
         }
+      }
+
+      setActionItems(nextActions);
+      if (needsDedupConfirmation) {
+        toast({
+          title: 'Confirm possible duplicates',
+          description: 'Choose whether each suggested match is the same task, then save the review again.',
+          status: 'info',
+          duration: 5000,
+        });
+        return;
       }
 
       // Reject dismissed action items
       for (const item of rejectedActions) {
         await api.updateTask(item.taskId!, { approval: { status: 'rejected' } });
       }
+
+      await api.reviewMeeting(meetingId, {
+        actionItems: nextActions.map(item => ({
+          text: item.text,
+          owner: item.owner || '',
+          dueDate: item.dueDate || '',
+          taskId: item.taskId,
+          approval: { status: item.selected ? 'approved' : 'rejected' },
+        })),
+        blockers: blockers.map(item => ({
+          text: item.text,
+          severity: item.severity,
+          blockerId: item.blockerId,
+          approval: { status: item.selected ? 'approved' : 'rejected' },
+        })),
+        decisions: decisions.map(item => ({
+          text: item.text,
+          relatedItemId: item.relatedItemId,
+          approval: { status: item.selected ? 'approved' : 'rejected' },
+        })),
+      });
 
       const totalSaved = selectedActions.length + blockers.filter(i => i.selected).length + decisions.filter(i => i.selected).length;
 
@@ -920,7 +993,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
     const tier = confTier(item.confidence);
     const style = CONF_STYLES[tier];
     const textH = textHeights[item.id] || LINE_H * 2;
-    const fullH = cardHeight(textH);
+    const fullH = cardHeight(textH) + (item.dedupSuggestion ? 112 : 0);
 
     if (!item.selected) {
       return (
@@ -1027,7 +1100,9 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                       {...SELECT_PROPS}
                     >
                       {people.map(p => (
-                        <option key={p._id} value={p.name}>{p.name}{p.email ? ` (${p.email})` : ''}</option>
+                        <option key={p._id} value={p.name}>
+                          {p.isSelf ? `${p.name} (you)` : p.name}{!p.isSelf && p.email ? ` (${p.email})` : ''}
+                        </option>
                       ))}
                     </Select>
                   ) : (
@@ -1069,6 +1144,21 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
               />
             </InlineField>
           </HStack>
+          {item.dedupSuggestion && (
+            <Box mt={3} p={3} border="1px solid" borderColor="#9dd4d9" borderRadius="8px" bg="#f0fafa">
+              <Text fontSize="13px" color="gray.700">
+                Sounds like <b>{item.dedupSuggestion.candidateTitle}</b> â€” same thing?
+              </Text>
+              <HStack mt={2} spacing={2}>
+                <Button size="xs" colorScheme="teal" onClick={() => resolveActionDedup(item, 'same')}>Same thing</Button>
+                <Button size="xs" variant="outline" onClick={() => resolveActionDedup(item, 'new')}>Keep separate</Button>
+                {item.dedupSuggestion.wasDone && (
+                  <Button size="xs" variant="ghost" onClick={() => resolveActionDedup(item, 'reopen')}>Reopen it</Button>
+                )}
+              </HStack>
+              <MatchAttribution model={item.dedupSuggestion.model} />
+            </Box>
+          )}
         </Box>
       </motion.div>
     );

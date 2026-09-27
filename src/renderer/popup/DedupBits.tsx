@@ -104,7 +104,7 @@ export function DedupConfirmCard({
 
 export interface ThreadEntry {
   id: string;
-  sourceType: 'meeting' | 'voice_note';
+  sourceType: 'meeting' | 'voice_note' | 'manual';
   sourceId: string | null;
   sourceTitle: string;
   excerpt: string;
@@ -149,7 +149,7 @@ export function MentionThread({ taskId, onChanged }: { taskId: string; onChanged
 
   return (
     <>
-      <div className="pp-seclabel">Came up {entries.length} times</div>
+      <div className="pp-seclabel">{entries.length === 1 ? 'Where this came from' : `Came up ${entries.length} times`}</div>
       <div className="pp-listcard" data-testid="mention-thread">
         {entries.map((e, i) => (
           <div
@@ -159,7 +159,7 @@ export function MentionThread({ taskId, onChanged }: { taskId: string; onChanged
           >
             <div className="pp-row" style={{ gap: 6 }}>
               <span style={{ color: 'var(--teal)', lineHeight: 0 }}>
-                {e.sourceType === 'voice_note' ? <NoteGlyph /> : <MeetingGlyph />}
+                {e.sourceType === 'meeting' ? <MeetingGlyph /> : <NoteGlyph />}
               </span>
               <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--navy)' }}>{e.sourceTitle}</span>
               <span className="pp-grow" />
