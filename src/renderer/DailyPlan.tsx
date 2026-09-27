@@ -8,6 +8,7 @@ interface PlanMeeting {
   endTime: number;
   attendees: string[];
   agenda: string[];
+  agendaBasis: string | null;
 }
 
 interface PlanTask {
@@ -168,6 +169,7 @@ export default function DailyPlan(): JSX.Element {
                 </div>
                 {m.agenda.length > 0 && (
                   <div
+                    title={m.agendaBasis || undefined}
                     style={{
                       marginTop: 6,
                       marginLeft: 2,

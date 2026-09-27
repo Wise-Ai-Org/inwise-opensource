@@ -68,7 +68,7 @@ export const api = {
   getSuggestedPeople: () => inwiseAPI.getSuggestedPeople(),
 
   // ── Briefing + Task Scoring ──────────────────────────────────────────────
-  getBriefing: () => inwiseAPI.getBriefing(),
+  getBriefing: (dateKey?: string) => inwiseAPI.getBriefing(dateKey),
   getScoredTasks: () => inwiseAPI.getScoredTasks(),
 
   // ── Voice Prints ─────────────────────────────────────────────────────────
@@ -132,7 +132,8 @@ export const api = {
     inwiseAPI.suggestTaskFields(data),
 
   // ── Recording (manual) ──────────────────────────────────────────────────
-  startRecording: (title: string) => inwiseAPI.startRecording(title),
+  startRecording: (title: string, calendarEventId?: string, attendees?: string[]) =>
+    inwiseAPI.startRecording(title, calendarEventId, attendees),
   stopRecording: () => inwiseAPI.stopRecording(),
   getRecordingState: () => inwiseAPI.getRecordingState(),
 

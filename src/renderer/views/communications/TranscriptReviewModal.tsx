@@ -491,9 +491,10 @@ function sorOneLineSummary(entry: SorWriteEntry): string {
 
 // ── Tab config ─────────────────────────────────────────────────────────────
 
-type ReviewTab = 'actionItems' | 'blockers' | 'decisions' | 'transcript' | 'sorWrites';
+type ReviewTab = 'overview' | 'actionItems' | 'blockers' | 'decisions' | 'transcript' | 'sorWrites';
 
 const TAB_CONFIG = [
+  { key: 'overview' as ReviewTab, label: 'Overview' },
   { key: 'actionItems' as ReviewTab, label: 'Action Items' },
   { key: 'blockers' as ReviewTab, label: 'Blockers' },
   { key: 'decisions' as ReviewTab, label: 'Decisions' },
@@ -559,14 +560,14 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
   const [loading, setLoading] = useState(false);
   const [meetingTitle, setMeetingTitle] = useState('');
   const [transcript, setTranscript] = useState('');
-  const [suggestions, setSuggestions] = useState<{ actionItems: any[]; blockers: any[]; decisions: any[]; keyTopics: string[] } | null>(null);
+  const [suggestions, setSuggestions] = useState<{ summary: string; meetingType: string; actionItems: any[]; blockers: any[]; decisions: any[]; keyTopics: string[]; signals: any[]; openQuestions: string[]; coverage?: any; quality?: any; analysisStatus?: string } | null>(null);
 
   const [actionItems, setActionItems] = useState<ActionItem[]>([]);
   const [blockers, setBlockers] = useState<BlockerItem[]>([]);
   const [decisions, setDecisions] = useState<DecisionItem[]>([]);
   const [editingField, setEditingField] = useState<{ id: string; field: string } | null>(null);
   const [editBuffer, setEditBuffer] = useState('');
-  const [activeTab, setActiveTab] = useState<ReviewTab>('actionItems');
+  const [activeTab, setActiveTab] = useState<ReviewTab>('overview');
   const [isApproving, setIsApproving] = useState(false);
   const [textHeights, setTextHeights] = useState<Record<string, number>>({});
   const [people, setPeople] = useState<Person[]>([]);
@@ -585,7 +586,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
     if (!isOpen || !meetingId) return;
 
     setLoading(true);
-    setActiveTab(initialTab ?? 'actionItems');
+    setActiveTab(initialTab ?? 'overview');
     setEditingField(null);
     setExpandedSorId(null);
     setRetryingSorId(null);
@@ -616,10 +617,17 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
 
       const insights = meeting?.insights || {};
       const rawSuggestions = {
+        summary: insights.summary || '',
+        meetingType: insights.meetingType || 'general',
         actionItems: insights.actionItems || [],
         blockers: insights.blockers || [],
         decisions: insights.decisions || [],
-        keyTopics: insights.keyTopics || insights.topics || []
+        keyTopics: insights.keyTopics || insights.topics || [],
+        signals: insights.signals || [],
+        openQuestions: insights.openQuestions || [],
+        coverage: insights.coverage || null,
+        quality: insights.quality || null,
+        analysisStatus: insights.analysisStatus || 'ready'
       };
       setSuggestions(rawSuggestions);
 
@@ -639,7 +647,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           text,
           owner,
           dueDate,
-          confidence: extractConfidence(item, 0.85),
+          confidence: extractConfidence(item, 0.5),
           selected: true,
           edited: false,
           originalText: text,
@@ -664,7 +672,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           severity,
           blockedItemId,
           blockedItemTitle: obj.blockedItemTitle || item.blockedItemTitle || '',
-          confidence: extractConfidence(item, 0.8),
+          confidence: extractConfidence(item, 0.5),
           selected: true,
           edited: false,
           originalText: text,
@@ -684,7 +692,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           text,
           relatedItemId,
           relatedItemTitle: obj.relatedItemTitle || item.relatedItemTitle || '',
-          confidence: extractConfidence(item, 0.8),
+          confidence: extractConfidence(item, 0.5),
           selected: true,
           edited: false,
           originalText: text,
@@ -889,6 +897,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
   const totalDismissed = (actionItems.length - selectedActions.length) + (blockers.length - selectedBlockers.length) + (decisions.length - selectedDecisions.length);
 
   const tabCounts: Record<ReviewTab, number> = {
+    overview: suggestions ? 1 : 0,
     actionItems: actionItems.length,
     blockers: blockers.length,
     decisions: decisions.length,
@@ -897,6 +906,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
   };
 
   const visibleTabs: ReviewTab[] = [
+    'overview',
     'actionItems',
     'blockers',
     'decisions',
@@ -1262,6 +1272,63 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
     );
   };
 
+  const renderOverviewTab = () => {
+    if (!suggestions) return null;
+    const quality = suggestions.quality;
+    const coverage = suggestions.coverage;
+    return (
+      <VStack spacing={4} align="stretch">
+        {suggestions.analysisStatus === 'needs_review' && (
+          <Box bg="orange.50" border="1px solid" borderColor="orange.200" borderRadius="10px" px={4} py={3}>
+            <Text fontSize="12px" color="orange.800" fontWeight="600">Some audio or transcript segments need review.</Text>
+            <Text fontSize="12px" color="orange.700" mt={1}>The items below are still usable, but verify names and quotes before saving.</Text>
+          </Box>
+        )}
+        <Box bg="gray.50" borderRadius="10px" px={4} py={3}>
+          <HStack justify="space-between" align="flex-start" mb={2}>
+            <Text fontSize="10px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em">Summary</Text>
+            <Badge variant="subtle" colorScheme="blue" fontSize="10px">{suggestions.meetingType.replace(/_/g, ' ')}</Badge>
+          </HStack>
+          <Text fontSize="14px" lineHeight="1.65" color="gray.700">{suggestions.summary || 'No summary was extracted.'}</Text>
+        </Box>
+
+        {suggestions.signals?.length > 0 && (
+          <Box>
+            <Text fontSize="10px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb={2}>Signals</Text>
+            <VStack spacing={2} align="stretch">
+              {suggestions.signals.slice(0, 12).map((signal: any, idx: number) => (
+                <Box key={idx} border="1px solid" borderColor="gray.200" borderRadius="9px" px={3} py={2.5} bg="white">
+                  <HStack justify="space-between" align="flex-start">
+                    <Text fontSize="12px" fontWeight="600" color="gray.700">{signal.text || 'Signal'}</Text>
+                    <Badge variant="outline" fontSize="9px" colorScheme="gray">{String(signal.type || 'context').replace(/_/g, ' ')}</Badge>
+                  </HStack>
+                  {signal.evidence?.quote && <Text mt={1.5} fontSize="11px" color="gray.500" fontStyle="italic">“{signal.evidence.quote}”</Text>}
+                </Box>
+              ))}
+            </VStack>
+          </Box>
+        )}
+
+        {suggestions.openQuestions?.length > 0 && (
+          <Box>
+            <Text fontSize="10px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb={2}>Open questions</Text>
+            <VStack align="stretch" spacing={1}>
+              {suggestions.openQuestions.slice(0, 8).map((question: string, idx: number) => <Text key={idx} fontSize="12px" color="gray.600">• {question}</Text>)}
+            </VStack>
+          </Box>
+        )}
+
+        {(coverage || quality) && (
+          <HStack spacing={3} color="gray.500" fontSize="11px">
+            {coverage && <Text>Coverage {Math.round((coverage.score || 0) * 100)}%</Text>}
+            {quality && <Text>Transcript quality {Math.round(quality.score ?? 0)}%</Text>}
+            {coverage?.missing?.length > 0 && <Text title={coverage.missing.join(', ')}>Needs context</Text>}
+          </HStack>
+        )}
+      </VStack>
+    );
+  };
+
   // ── Transcript tab ─────────────────────────────────────────────────────
 
   const renderTranscriptTab = () => {
@@ -1590,7 +1657,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
             <FlowModalBody maxH="calc(80vh - 200px)">
               <VStack spacing={3} align="stretch" pb={16}>
                 {/* Summary bar */}
-                {activeTab !== 'transcript' && activeTab !== 'sorWrites' && (
+                {activeTab !== 'overview' && activeTab !== 'transcript' && activeTab !== 'sorWrites' && (
                   <Box bg="#f7fafc" borderRadius="8px" px={3} py={2}>
                     <Text fontSize="11px" color="gray.500">
                       AI extracted {tabCounts[activeTab]} item{tabCounts[activeTab] !== 1 ? 's' : ''} from this meeting.
@@ -1600,6 +1667,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                 )}
 
                 {/* Empty states */}
+                {activeTab === 'overview' && renderOverviewTab()}
                 {activeTab === 'actionItems' && actionItems.length === 0 && (
                   <Box textAlign="center" py={10}>
                     <Text color="gray.400" fontSize="sm">No action items extracted from this meeting.</Text>
@@ -1642,9 +1710,9 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                     leftIcon={<CheckIcon />}
                     onClick={handleApprove}
                     isLoading={isApproving}
-                    isDisabled={totalSelected === 0}
+                    isDisabled={false}
                   >
-                    Save {totalSelected > 0 ? `${totalSelected} Item${totalSelected !== 1 ? 's' : ''}` : ''}
+                    {totalSelected > 0 ? `Save ${totalSelected} Item${totalSelected !== 1 ? 's' : ''}` : 'Done'}
                   </Button>
                 </HStack>
               </HStack>

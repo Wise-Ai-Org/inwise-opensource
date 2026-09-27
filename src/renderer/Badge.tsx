@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  classifyPendingSystemAudio,
   classifySystemAudioCapture,
   measureStreamRms,
-  SystemAudioCaptureState,
 } from './audio-probe';
 import { captureSystemAudio } from './system-audio';
 import {
@@ -15,7 +13,7 @@ import {
 // Compact recorder pill. Collapsed it is a small capsule with four dots that bob
 // with real audio level; hover expands it to show title, timer, and a stop square.
 // Left-click runs a device test, right-click opens the native Inwise menu (built
-// in main), drag lives on the left grip only so clicks stay clickable.
+// in main), and the pill can be dragged from any area except its buttons.
 type Status = 'idle' | 'preflight' | 'countdown' | 'recording' | 'saving' | 'error' | 'reminder';
 
 interface PreflightChecks {
@@ -35,7 +33,7 @@ interface State {
 // Background transcription jobs (a finished recording being processed while the
 // pill may already be recording the next meeting).
 type JobState = 'transcribing' | 'processing' | 'done' | 'error';
-interface Job { jobId: string; title: string; state: JobState; message?: string }
+interface Job { jobId: string; title: string; state: JobState; message?: string; meetingId?: string }
 
 interface SilencePrompt {
   title: string;
@@ -167,15 +165,14 @@ const styles: Record<string, any> = {
     cursor: 'pointer',
   },
   grip: {
-    WebkitAppRegion: 'drag',
-    width: 14,
+    width: 22,
     height: 44,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#475569',
-    fontSize: 9,
-    letterSpacing: -1,
+    color: '#94a3b8',
+    fontSize: 15,
+    cursor: 'grab',
     flexShrink: 0,
   },
   dot: {
@@ -227,8 +224,7 @@ export default function Badge() {
   const [state, setState] = useState<State>({ status: 'idle', title: 'Meeting' });
   const [elapsed, setElapsed] = useState(0);
   const [hover, setHover] = useState(false);
-  const [systemAudioState, setSystemAudioState] = useState<SystemAudioCaptureState>('ok');
-  const sysAudioWarning = systemAudioState !== 'ok';
+  const [sysAudioIssue, setSysAudioIssue] = useState<'none' | 'waiting' | 'unavailable'>('none');
   const [jobs, setJobs] = useState<Record<string, Job>>({});
   const [test, setTest] = useState<null | { mic: 'pending' | 'ok' | 'fail'; spk: 'pending' | 'ok' | 'fail' }>(null);
   const [silencePrompt, setSilencePrompt] = useState<SilencePrompt | null>(null);
@@ -241,6 +237,13 @@ export default function Badge() {
   const micStreamRef = useRef<MediaStream | null>(null);
   const systemStreamRef = useRef<MediaStream | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const systemSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const systemMonitorRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const systemRecoveryRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const systemWarningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const systemIgnoredRef = useRef(false);
+  const scheduleSystemRecoveryRef = useRef<() => void>(() => {});
+  const recoverSystemAudioRef = useRef<() => Promise<boolean>>(async () => false);
   const mergerRef = useRef<ChannelMergerNode | null>(null);
   const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -250,22 +253,29 @@ export default function Badge() {
   const stopRecordingRef = useRef<() => void>(() => {});
   const titleRef = useRef<string>('Meeting');
   const calendarEventIdRef = useRef<string | undefined>(undefined);
+  const attendeesRef = useRef<string[]>([]);
   const beginFlowRef = useRef<(title: string) => void>(() => {});
   const runIdRef = useRef(0);
   const dotRefs = useRef<(HTMLSpanElement | null)[]>([]);
   const levelRef = useRef(0);
   const testTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestCompletedMeetingRef = useRef<string | undefined>(undefined);
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean } | null>(null);
+  const suppressClickRef = useRef(false);
   // Mirror status into a ref so mount-only listeners read it without stale closures.
   const statusRef = useRef(state.status);
   statusRef.current = state.status;
+  const sysAudioIssueRef = useRef(sysAudioIssue);
+  sysAudioIssueRef.current = sysAudioIssue;
 
   useEffect(() => {
     const api = (window as any).inwiseAPI;
 
-    api.on('recording:start', (title: string, calendarEventId?: string) => {
+    api.on('recording:start', (title: string, calendarEventId?: string, attendees?: string[]) => {
       silencePromptRef.current = null;
       setSilencePrompt(null);
       calendarEventIdRef.current = calendarEventId;
+      attendeesRef.current = Array.isArray(attendees) ? attendees.filter(Boolean) : [];
       beginFlowRef.current(title);
     });
 
@@ -308,6 +318,7 @@ export default function Badge() {
       if (!msg?.jobId) return;
       setJobs(prev => ({ ...prev, [msg.jobId]: msg }));
       if (msg.state === 'done') {
+        latestCompletedMeetingRef.current = msg.meetingId;
         // Long enough to read the "open Inwise" invite; main closes the pill on
         // a matching delay once the queue drains.
         setTimeout(() => setJobs(prev => {
@@ -334,7 +345,10 @@ export default function Badge() {
 
     beginFlowRef.current = async (title: string) => {
       titleRef.current = title;
-      setSystemAudioState('ok');
+      systemIgnoredRef.current = false;
+      if (systemRecoveryRef.current) clearInterval(systemRecoveryRef.current);
+      if (systemWarningTimerRef.current) clearTimeout(systemWarningTimerRef.current);
+      setSysAudioIssue('none');
       const myRun = ++runIdRef.current;
       const alive = () => runIdRef.current === myRun;
 
@@ -361,7 +375,7 @@ export default function Badge() {
 
       // Soft fail: system audio missing — proceed but flag it
       setState(s => ({ ...s, preflight: { ...s.preflight!, audio: audioResult.ok } }));
-      if (!audioResult.ok) setSystemAudioState('missing');
+      if (!audioResult.ok) setSysAudioIssue('unavailable');
       await new Promise(r => setTimeout(r, 250));
       if (!alive()) return;
 
@@ -462,6 +476,8 @@ export default function Badge() {
       try { (window as any).electronAPI?.sendAudioHealth(h); } catch { /* ignore */ }
     };
     try {
+      setSysAudioIssue('none');
+      hasStereoRef.current = false;
       const cfg = await (window as any).inwiseAPI.getConfig();
       const deviceId = cfg?.micDeviceId && cfg.micDeviceId !== 'default' ? cfg.micDeviceId : undefined;
 
@@ -498,17 +514,12 @@ export default function Badge() {
 
       const initialRms = sysStream ? await measureStreamRms(sysStream, 1500) : 0;
       const initialSystemState = classifySystemAudioCapture(!!sysStream, initialRms, permissions);
-      if (initialSystemState === 'missing' && sysStream) {
-        sysStream.getTracks().forEach(t => t.stop());
-        sysStream = null;
-      }
-
-      setSystemAudioState(initialSystemState);
+      // Keep a successfully acquired system stream alive even when the meeting
+      // starts in silence. A final WAV-level check decides whether its channel is
+      // actually usable after the recording has ended.
       systemStreamRef.current = sysStream;
-      // Only enable diarization once the right channel has carried real audio.
-      // The stream remains connected while pending so a quiet call can recover.
-      hasStereoRef.current = initialSystemState === 'ok';
-
+      hasStereoRef.current = !!sysStream;
+      setSysAudioIssue(!sysStream ? 'unavailable' : initialSystemState === 'ok' ? 'none' : 'waiting');
       reportHealth({
         micOk: true,
         systemAudioOk: !!sysStream,
@@ -520,53 +531,6 @@ export default function Badge() {
               ? 'Screen & System Audio Recording permission is disabled in System Settings'
               : sysCaptureError || 'System audio unavailable — only your voice will be recorded',
       });
-
-      if (sysStream) {
-        const capturedStream = sysStream;
-        capturedStream.getAudioTracks()[0]?.addEventListener('ended', () => {
-          if (systemStreamRef.current !== capturedStream) return;
-          systemStreamRef.current = null;
-          hasStereoRef.current = false;
-          setSystemAudioState('missing');
-          reportHealth({
-            micOk: true,
-            systemAudioOk: false,
-            message: 'System audio capture ended — only your microphone is still being recorded',
-          });
-        });
-        if (initialSystemState === 'pending') {
-          void (async () => {
-            const pendingStartedAt = Date.now();
-            let silenceReported = false;
-            while (systemStreamRef.current === capturedStream) {
-              let maxRms = 0;
-              try {
-                maxRms = await measureStreamRms(capturedStream, 15_000);
-              } catch {
-                return; // the track-ended handler owns failure reporting
-              }
-              if (systemStreamRef.current !== capturedStream) return;
-              const nextState = classifyPendingSystemAudio(maxRms, Date.now() - pendingStartedAt);
-              if (nextState === 'ok') {
-                hasStereoRef.current = true;
-                setSystemAudioState('ok');
-                reportHealth({ micOk: true, systemAudioOk: true });
-                return;
-              }
-              if (nextState === 'missing' && !silenceReported) {
-                silenceReported = true;
-                hasStereoRef.current = false;
-                setSystemAudioState('missing');
-                reportHealth({
-                  micOk: true,
-                  systemAudioOk: false,
-                  message: 'No system audio detected — check Screen & System Audio Recording permission and call output',
-                });
-              }
-            }
-          })();
-        }
-      }
 
       const audioCtx = new AudioContext({ sampleRate: 16000 });
       audioCtxRef.current = audioCtx;
@@ -587,9 +551,47 @@ export default function Badge() {
         const merger = audioCtx.createChannelMerger(2);
         mergerRef.current = merger;
         micSource.connect(merger, 0, 0);
-        audioCtx.createMediaStreamSource(sysStream).connect(merger, 0, 1);
+        const systemSource = audioCtx.createMediaStreamSource(sysStream);
+        systemSourceRef.current = systemSource;
+        systemSource.connect(merger, 0, 1);
         merger.connect(destination);
         merger.connect(analyser);
+
+        // A quiet start is normal. Monitor until real call audio arrives, but do
+        // not stop or disconnect the stream while waiting.
+        const systemAnalyser = audioCtx.createAnalyser();
+        systemAnalyser.fftSize = 2048;
+        systemSource.connect(systemAnalyser);
+        const systemSamples = new Float32Array(systemAnalyser.fftSize);
+        systemMonitorRef.current = setInterval(() => {
+          systemAnalyser.getFloatTimeDomainData(systemSamples);
+          let sumSq = 0;
+          for (let i = 0; i < systemSamples.length; i++) sumSq += systemSamples[i] * systemSamples[i];
+          const rms = Math.sqrt(sumSq / systemSamples.length);
+          if (rms > 0.001) {
+            setSysAudioIssue('none');
+            reportHealth({ micOk: true, systemAudioOk: true });
+            if (systemMonitorRef.current) clearInterval(systemMonitorRef.current);
+            systemMonitorRef.current = null;
+            if (systemRecoveryRef.current) clearInterval(systemRecoveryRef.current);
+            systemRecoveryRef.current = null;
+            if (systemWarningTimerRef.current) clearTimeout(systemWarningTimerRef.current);
+            systemWarningTimerRef.current = null;
+          }
+        }, 250);
+        const track = sysStream.getAudioTracks()[0];
+        track?.addEventListener('ended', () => {
+          if (systemIgnoredRef.current) return;
+          reportHealth({ micOk: true, systemAudioOk: false, message: 'Other speaker audio unavailable' });
+          setSysAudioIssue('waiting');
+          scheduleSystemRecoveryRef.current();
+        });
+        track?.addEventListener('mute', () => {
+          if (systemIgnoredRef.current) return;
+          reportHealth({ micOk: true, systemAudioOk: false, message: 'Other speaker audio unavailable' });
+          setSysAudioIssue('waiting');
+          scheduleSystemRecoveryRef.current();
+        });
       } else {
         // Mono: mic only
         mergerRef.current = null;
@@ -597,18 +599,152 @@ export default function Badge() {
         micSource.connect(analyser);
       }
 
+      // Recover silently in the background. Only after the grace period do we
+      // surface the compact Retry / Continue choice in the pill.
+      scheduleSystemRecoveryRef.current();
+
       const mr = new MediaRecorder(destination.stream, { mimeType: 'audio/webm;codecs=opus' });
       mediaRef.current = mr;
       chunksRef.current = [];
       mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       mr.start(250);
     } catch (e: any) {
+      if (systemMonitorRef.current) clearInterval(systemMonitorRef.current);
+      systemMonitorRef.current = null;
+      if (systemRecoveryRef.current) clearInterval(systemRecoveryRef.current);
+      systemRecoveryRef.current = null;
+      if (systemWarningTimerRef.current) clearTimeout(systemWarningTimerRef.current);
+      systemWarningTimerRef.current = null;
       systemStreamRef.current?.getTracks().forEach(t => t.stop());
       systemStreamRef.current = null;
+      micStreamRef.current?.getTracks().forEach(t => t.stop());
+      micStreamRef.current = null;
       const msg = `Microphone error: ${e?.name || ''} ${e?.message || String(e)}`.trim();
       reportHealth({ micOk: false, systemAudioOk: false, message: msg });
       setState((s) => ({ ...s, status: 'error', message: msg }));
     }
+  };
+
+  const recoverSystemAudio = async (): Promise<boolean> => {
+    if (systemIgnoredRef.current) return false;
+    const ctx = audioCtxRef.current;
+    const destination = destinationRef.current;
+    const micSource = micSourceRef.current;
+    if (!ctx || !destination || !micSource) return false;
+    try {
+      const sourceId = await (window as any).inwiseAPI?.getDesktopSourceId?.();
+      if (!sourceId) return false;
+      try { systemSourceRef.current?.disconnect(); } catch { /* ignore */ }
+      systemStreamRef.current?.getTracks().forEach(t => t.stop());
+      systemSourceRef.current = null;
+      systemStreamRef.current = null;
+      const stream: MediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } } as any,
+        video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } } as any,
+      });
+      stream.getVideoTracks().forEach(t => t.stop());
+
+      // If recording began mic-only, replace the mono wiring with the same
+      // explicit L/R layout used by normal stereo capture.
+      try { micSource.disconnect(); } catch { /* already disconnected */ }
+      const hadMerger = !!mergerRef.current;
+      const merger = mergerRef.current || ctx.createChannelMerger(2);
+      mergerRef.current = merger;
+      micSource.connect(merger, 0, 0);
+      const source = ctx.createMediaStreamSource(stream);
+      source.connect(merger, 0, 1);
+      if (!hadMerger) {
+        merger.connect(destination);
+        if (analyserRef.current) merger.connect(analyserRef.current);
+      }
+      systemSourceRef.current = source;
+      systemStreamRef.current = stream;
+      hasStereoRef.current = true;
+      setSysAudioIssue('waiting');
+      const track = stream.getAudioTracks()[0];
+      track?.addEventListener('ended', () => {
+        if (!systemIgnoredRef.current) {
+          try { (window as any).electronAPI?.sendAudioHealth({ micOk: true, systemAudioOk: false, message: 'Other speaker audio unavailable' }); } catch { /* ignore */ }
+          setSysAudioIssue('waiting');
+          scheduleSystemRecoveryRef.current();
+        }
+      });
+      track?.addEventListener('mute', () => {
+        if (!systemIgnoredRef.current) {
+          try { (window as any).electronAPI?.sendAudioHealth({ micOk: true, systemAudioOk: false, message: 'Other speaker audio unavailable' }); } catch { /* ignore */ }
+          setSysAudioIssue('waiting');
+          scheduleSystemRecoveryRef.current();
+        }
+      });
+
+      const systemAnalyser = ctx.createAnalyser();
+      systemAnalyser.fftSize = 2048;
+      source.connect(systemAnalyser);
+      const samples = new Float32Array(systemAnalyser.fftSize);
+      if (systemMonitorRef.current) clearInterval(systemMonitorRef.current);
+      systemMonitorRef.current = setInterval(() => {
+        systemAnalyser.getFloatTimeDomainData(samples);
+        let sumSq = 0;
+        for (let i = 0; i < samples.length; i++) sumSq += samples[i] * samples[i];
+        const rms = Math.sqrt(sumSq / samples.length);
+        if (rms > 0.001) {
+          setSysAudioIssue('none');
+          try { (window as any).electronAPI?.sendAudioHealth({ micOk: true, systemAudioOk: true }); } catch { /* ignore */ }
+          if (systemMonitorRef.current) clearInterval(systemMonitorRef.current);
+          systemMonitorRef.current = null;
+          if (systemRecoveryRef.current) clearInterval(systemRecoveryRef.current);
+          systemRecoveryRef.current = null;
+          if (systemWarningTimerRef.current) clearTimeout(systemWarningTimerRef.current);
+          systemWarningTimerRef.current = null;
+        }
+      }, 250);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  recoverSystemAudioRef.current = recoverSystemAudio;
+
+  scheduleSystemRecoveryRef.current = () => {
+    if (systemIgnoredRef.current || !audioCtxRef.current) return;
+    if (systemRecoveryRef.current) return;
+    if (systemWarningTimerRef.current) clearTimeout(systemWarningTimerRef.current);
+    systemWarningTimerRef.current = setTimeout(() => {
+      systemWarningTimerRef.current = null;
+      if (!systemIgnoredRef.current) setSysAudioIssue('unavailable');
+    }, 10_000);
+    systemRecoveryRef.current = setInterval(() => {
+      const track = systemStreamRef.current?.getAudioTracks?.()[0];
+      if (track?.readyState === 'live' && !track.muted && sysAudioIssueRef.current !== 'unavailable') return;
+      void recoverSystemAudioRef.current().then(ok => {
+        if (ok && systemRecoveryRef.current) {
+          clearInterval(systemRecoveryRef.current);
+          systemRecoveryRef.current = null;
+        }
+      });
+    }, 3_000);
+    void recoverSystemAudioRef.current().then(ok => {
+      if (ok && systemRecoveryRef.current) {
+        clearInterval(systemRecoveryRef.current);
+        systemRecoveryRef.current = null;
+      }
+    });
+  };
+
+  const retrySystemAudio = () => {
+    systemIgnoredRef.current = false;
+    setSysAudioIssue('waiting');
+    scheduleSystemRecoveryRef.current();
+  };
+
+  const continueWithoutSystemAudio = () => {
+    systemIgnoredRef.current = true;
+    if (systemRecoveryRef.current) clearInterval(systemRecoveryRef.current);
+    if (systemWarningTimerRef.current) clearTimeout(systemWarningTimerRef.current);
+    systemRecoveryRef.current = null;
+    systemWarningTimerRef.current = null;
+    setSysAudioIssue('none');
+    try { (window as any).electronAPI?.sendAudioHealth({ micOk: true, systemAudioOk: false, message: 'Recording mic only by request' }); } catch { /* ignore */ }
   };
 
   // Live mic switch mid-recording: swap the source node feeding the existing graph.
@@ -646,10 +782,18 @@ export default function Badge() {
     mediaRef.current = null;
     mr.stop();
     mr.stream.getTracks().forEach(t => t.stop());
-    micStreamRef.current?.getTracks().forEach(t => t.stop());
-    micStreamRef.current = null;
+    if (systemMonitorRef.current) clearInterval(systemMonitorRef.current);
+    systemMonitorRef.current = null;
+    if (systemRecoveryRef.current) clearInterval(systemRecoveryRef.current);
+    systemRecoveryRef.current = null;
+    if (systemWarningTimerRef.current) clearTimeout(systemWarningTimerRef.current);
+    systemWarningTimerRef.current = null;
+    try { systemSourceRef.current?.disconnect(); } catch { /* ignore */ }
+    systemSourceRef.current = null;
     systemStreamRef.current?.getTracks().forEach(t => t.stop());
     systemStreamRef.current = null;
+    micStreamRef.current?.getTracks().forEach(t => t.stop());
+    micStreamRef.current = null;
     audioCtxRef.current?.close();
     audioCtxRef.current = null;
     analyserRef.current = null;
@@ -671,6 +815,7 @@ export default function Badge() {
       buffer: new Uint8Array(wav),
       title: titleRef.current,
       calendarEventId: calendarEventIdRef.current,
+      attendees: attendeesRef.current,
       stereo: hasStereoRef.current,
     });
     // Main owns the window lifecycle from here — it closes the pill once every
@@ -822,10 +967,41 @@ export default function Badge() {
 
   const onPillClick = () => {
     if (silencePrompt) return;
+    if (suppressClickRef.current) return;
     if (state.status === 'countdown' || state.status === 'preflight') { cancelCountdown(); return; }
     if (state.status === 'reminder') { window.close(); return; }
-    if (state.status === 'saving') { (window as any).inwiseAPI.openInwise?.(); return; }
+    if (state.status === 'saving') {
+      (window as any).inwiseAPI.openInwise?.(latestCompletedMeetingRef.current);
+      return;
+    }
     void runDeviceTest();
+  };
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
+    dragRef.current = { pointerId: e.pointerId, startX: e.screenX, startY: e.screenY, moved: false };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    (window as any).inwiseAPI.beginPillDrag?.();
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    if (!drag.moved && Math.hypot(e.screenX - drag.startX, e.screenY - drag.startY) < 3) return;
+    drag.moved = true;
+    (window as any).inwiseAPI.movePill?.();
+  };
+
+  const finishPointerDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    dragRef.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    (window as any).inwiseAPI.endPillDrag?.();
+    if (drag.moved) {
+      suppressClickRef.current = true;
+      setTimeout(() => { suppressClickRef.current = false; }, 0);
+    }
   };
 
   const onContextMenu = async (e: React.MouseEvent) => {
@@ -858,7 +1034,9 @@ export default function Badge() {
       micOk,
       spkOk,
       recording: statusRef.current === 'recording',
+      status: statusRef.current,
       title: titleRef.current,
+      meetingId: latestCompletedMeetingRef.current,
     });
   };
 
@@ -890,7 +1068,7 @@ export default function Badge() {
 
   // ── Render pieces ──
 
-  const grip = <div style={styles.grip} title="Drag to move">⋮⋮</div>;
+  const grip = <div style={styles.grip} title="Drag recorder">⠿</div>;
 
   // Secondary slot: a previous meeting still transcribing (or failed) while the
   // pill is busy with the current one.
@@ -955,7 +1133,7 @@ export default function Badge() {
         {grip}
         {renderDots([
           p.mic ? TEAL : DIM,
-          p.audio ? TEAL : (sysAudioWarning ? AMBER : DIM),
+          p.audio ? TEAL : (sysAudioIssue !== 'none' ? AMBER : DIM),
           p.ready ? TEAL : DIM,
           p.mic && p.ready ? TEAL : DIM,
         ])}
@@ -1028,20 +1206,34 @@ export default function Badge() {
         {grip}
         {secondaryDot}
         {renderDots(recording
-          ? [TEAL, sysAudioWarning ? AMBER : TEAL, TEAL, TEAL]
+          ? [TEAL, sysAudioIssue !== 'none' ? AMBER : TEAL, TEAL, TEAL]
           : [DIM, DIM, DIM, DIM])}
         {recording && hover && (
           <>
-            <span style={styles.label} title={state.title + (systemAudioState === 'missing' ? ' (mic only)' : systemAudioState === 'pending' ? ' (waiting for system audio)' : '')}>{truncate(state.title)}</span>
+            <span style={styles.label} title={state.title + (sysAudioIssue === 'waiting' ? ' (waiting for call audio)' : sysAudioIssue === 'unavailable' ? ' (mic only)' : '')}>{truncate(state.title)}</span>
             {busyJob && (
               <span style={{ ...styles.subtext, maxWidth: 90 }} title={`Transcribing — ${busyJob.title}`}>
                 ⟳ {truncate(busyJob.title, 14)}
               </span>
             )}
-            {sysAudioWarning && !busyJob && (
+            {sysAudioIssue !== 'none' && !busyJob && (
               <span style={{ ...styles.subtext, color: AMBER }}>
-                {systemAudioState === 'pending' ? 'waiting for call audio' : 'mic only'}
+                {sysAudioIssue === 'waiting' ? 'waiting for call audio' : 'mic only'}
               </span>
+            )}
+            {sysAudioIssue === 'unavailable' && (
+              <>
+                <button
+                  className="pill-btn"
+                  title="Try to reconnect other-speaker audio"
+                  onClick={(e) => { e.stopPropagation(); retrySystemAudio(); }}
+                >Retry audio</button>
+                <button
+                  className="pill-btn pill-btn-ghost"
+                  title="Keep recording from the microphone only"
+                  onClick={(e) => { e.stopPropagation(); continueWithoutSystemAudio(); }}
+                >Continue</button>
+              </>
             )}
             <span style={styles.timer}>{fmt(elapsed)}</span>
             <button
@@ -1103,6 +1295,10 @@ export default function Badge() {
         style={pillStyle}
         onClick={onPillClick}
         onContextMenu={onContextMenu}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={finishPointerDrag}
+        onPointerCancel={finishPointerDrag}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
       >

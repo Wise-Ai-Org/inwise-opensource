@@ -7,10 +7,11 @@ import { isSelf } from './self-identity';
 import { fuzzyNameScore, normalizeNameStr, SAME_PERSON_THRESHOLD, REVIEW_THRESHOLD } from './fuzzy-name';
 import { log } from './logger';
 import {
-  decideMention, computeRepetitionNudge, providerModelLabel,
+  decideMention, computeRepetitionNudge, getSeriesUid, providerModelLabel,
   TaskMention, MentionSourceType,
 } from './task-dedup';
 import { initMatchDecisionLog, logMatchDecision } from './match-decision-log';
+import { DailyPlanEvent, buildAgendaBasis, selectAgendaHistory } from './daily-plan';
 
 let meetingsDb: Datastore;
 let tasksDb: Datastore;
@@ -35,6 +36,7 @@ export async function createMeeting(data: {
   date: string;
   duration?: number;
   calendarEventId?: string;
+  seriesUid?: string | null;
   source?: string;
   attendees?: string[];
 }): Promise<string> {
@@ -48,14 +50,40 @@ export async function createMeeting(data: {
     status: 'pending',
     source: data.source || 'desktop_recording',
     calendarEventId: data.calendarEventId || null,
+    seriesUid: data.seriesUid === undefined
+      ? getSeriesUid({ calendarEventId: data.calendarEventId })
+      : data.seriesUid,
     insights: null,
     createdAt: new Date().toISOString(),
   });
   return (doc as any)._id;
 }
 
-export async function updateMeetingTranscript(id: string, transcript: string, duration: number): Promise<void> {
-  await meetingsDb.updateAsync({ _id: id }, { $set: { transcript, duration, status: 'transcribed' } }, {});
+export async function updateMeetingTranscript(id: string, transcript: string, duration: number, transcriptQuality?: any): Promise<void> {
+  await meetingsDb.updateAsync(
+    { _id: id },
+    {
+      $set: {
+        transcript,
+        duration,
+        status: 'transcribed',
+        ...(transcriptQuality === undefined ? {} : { transcriptQuality }),
+      },
+    },
+    {},
+  );
+}
+
+/** Keep attendee metadata current when coalesced recording segments arrive. */
+export async function mergeMeetingAttendees(id: string, attendees: string[]): Promise<void> {
+  if (!attendees?.length) return;
+  const meeting: any = await meetingsDb.findOneAsync({ _id: id });
+  if (!meeting) return;
+  const current = Array.isArray(meeting.attendees) ? meeting.attendees : [];
+  const merged = [...new Set([...current, ...attendees].map((name) => String(name).trim()).filter(Boolean))];
+  if (merged.length !== current.length || merged.some((name, index) => name !== current[index])) {
+    await meetingsDb.updateAsync({ _id: id }, { $set: { attendees: merged } }, {});
+  }
 }
 
 export async function updateMeetingStatus(id: string, status: string): Promise<void> {
@@ -77,12 +105,19 @@ export async function findRecentRecordingMeeting(title: string, calendarEventId:
   return candidates[0] || null;
 }
 
-export async function appendMeetingTranscript(id: string, transcript: string, addedDuration: number): Promise<void> {
+export async function appendMeetingTranscript(id: string, transcript: string, addedDuration: number, transcriptQuality?: any): Promise<void> {
   const m: any = await meetingsDb.findOneAsync({ _id: id });
   const combined = m?.transcript ? `${m.transcript}\n${transcript}` : transcript;
   await meetingsDb.updateAsync(
     { _id: id },
-    { $set: { transcript: combined, duration: (m?.duration || 0) + addedDuration, status: 'transcribed' } },
+    {
+      $set: {
+        transcript: combined,
+        duration: (m?.duration || 0) + addedDuration,
+        status: 'transcribed',
+        ...(transcriptQuality === undefined ? {} : { transcriptQuality }),
+      },
+    },
     {}
   );
 }
@@ -95,6 +130,12 @@ export async function saveInsights(meetingId: string, insights: {
   commitments?: { text: string; who: string; deadline?: string; context?: string }[];
   contradictions?: { text: string; previousDecision: string; previousMeetingTitle?: string; previousMeetingDate?: string }[];
   people?: { name: string; email?: string; role?: string; company?: string }[];
+  meetingType?: string;
+  signals?: any[];
+  openQuestions?: string[];
+  coverage?: any;
+  quality?: any;
+  analysisStatus?: string;
 }): Promise<void> {
   await meetingsDb.updateAsync(
     { _id: meetingId },
@@ -108,6 +149,12 @@ export async function saveInsights(meetingId: string, insights: {
           blockers: insights.blockers,
           commitments: insights.commitments || [],
           contradictions: insights.contradictions || [],
+          meetingType: insights.meetingType || 'general',
+          signals: insights.signals || [],
+          openQuestions: insights.openQuestions || [],
+          coverage: insights.coverage || null,
+          quality: insights.quality || null,
+          analysisStatus: insights.analysisStatus || 'ready',
         },
       },
     },
@@ -1666,27 +1713,49 @@ export async function getMeetingAgendaContext(meetingTitle: string, attendeeName
     }
   }
 
-  // Prior meetings with the same title pattern (for recurring meetings)
-  const titleWords = meetingTitle.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-  if (titleWords.length > 0) {
-    const priorSameTitle = allMeetings
-      .filter((m: any) => {
-        const t = (m.title || '').toLowerCase();
-        return titleWords.some(w => t.includes(w)) && m.insights?.summary;
-      })
-      .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
-      .slice(0, 3);
+  return lines.join('\n');
+}
 
-    if (priorSameTitle.length > 0) {
-      lines.push('\n## Previous meetings with similar title');
-      for (const m of priorSameTitle) {
-        const date = new Date(m.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        lines.push(`- "${m.title}" (${date}): ${m.insights.summary}`);
-      }
+export interface RecurringAgendaContext {
+  context: string;
+  basis: string | null;
+}
+
+function agendaItemText(item: any): string {
+  return typeof item === 'string' ? item : String(item?.text || '').trim();
+}
+
+/** Evidence-only context for the daily brief's recurring-meeting agenda. */
+export async function getRecurringMeetingAgendaContext(event: DailyPlanEvent): Promise<RecurringAgendaContext> {
+  const allMeetings = await meetingsDb.findAsync({});
+  const history = selectAgendaHistory(allMeetings as any[], event);
+  const lines: string[] = [
+    `Upcoming recurring meeting: "${event.title}"`,
+    `Other attendees: ${event.attendees.length > 0 ? event.attendees.join(', ') : 'not available'}`,
+    '',
+    'Use only the evidence below. Do not infer topics from the meeting title or meeting type.',
+    '',
+    '## Earlier meetings in this exact calendar series',
+  ];
+
+  for (const meeting of history as any[]) {
+    const date = new Date(meeting.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    lines.push(`\n### ${date}: ${meeting.title || event.title}`);
+    if (meeting.insights?.summary) lines.push(`Summary: ${meeting.insights.summary}`);
+
+    const sections: Array<[string, any[] | undefined]> = [
+      ['Action items', meeting.insights?.actionItems],
+      ['Decisions', meeting.insights?.decisions],
+      ['Commitments', meeting.insights?.commitments],
+      ['Blockers', meeting.insights?.blockers],
+    ];
+    for (const [label, items] of sections) {
+      const texts = (items || []).map(agendaItemText).filter(Boolean);
+      if (texts.length > 0) lines.push(`${label}: ${texts.join('; ')}`);
     }
   }
 
-  return lines.join('\n');
+  return { context: lines.join('\n'), basis: buildAgendaBasis(history) };
 }
 
 export async function updatePersonProfile(id: string, updates: { bio?: string; relationshipInsights?: string[] }): Promise<void> {

@@ -73,7 +73,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   markNotSamePerson: (idA: string, idB: string) => ipcRenderer.invoke('people:notSame', idA, idB),
 
   // Briefing + Task Scoring
-  getBriefing: () => ipcRenderer.invoke('briefing:get'),
+  getBriefing: (dateKey?: string) => ipcRenderer.invoke('briefing:get', dateKey),
   getScoredTasks: () => ipcRenderer.invoke('tasks:scored'),
 
   // Voice prints

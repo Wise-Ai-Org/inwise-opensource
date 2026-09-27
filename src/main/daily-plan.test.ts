@@ -3,6 +3,8 @@ import {
   computeDailyPlanGate,
   selectTodaysMeetings,
   hasAgendaHistory,
+  selectAgendaHistory,
+  buildAgendaBasis,
   buildGreeting,
   isSameLocalDay,
   DailyPlanEvent,
@@ -15,8 +17,14 @@ function at(hour: number, minute = 0, dayOffset = 0): Date {
   return new Date(2026, 6, 28 + dayOffset, hour, minute, 0);
 }
 
-function ev(id: string, start: Date, end: Date, attendees: string[] = ['ana@x.com']): DailyPlanEvent {
-  return { id, title: `Meeting ${id}`, startTime: start, endTime: end, attendees };
+function ev(
+  id: string,
+  start: Date,
+  end: Date,
+  attendees: string[] = ['ana@x.com'],
+  seriesUid: string | null = null,
+): DailyPlanEvent {
+  return { id, title: `Meeting ${id}`, startTime: start, endTime: end, attendees, seriesUid };
 }
 
 // ── computeDailyPlanGate ─────────────────────────────────────────────────────
@@ -86,30 +94,65 @@ assert.equal(isSameLocalDay(at(23, 59, -1), at(0, 1)), false);
 
 {
   const past = [
-    { title: 'Weekly sync', attendees: ['Ana Torres', 'Shrav'] },
-    { title: 'Roadmap review', attendees: [] },
+    {
+      title: 'Weekly sync',
+      date: at(9, 0, -7).toISOString(),
+      attendees: ['Ana Torres', 'Shrav'],
+      seriesUid: 'weekly-sync',
+      insights: { actionItems: [{ text: 'Send the launch brief' }] },
+    },
   ];
 
   assert.equal(
-    hasAgendaHistory(past, { title: 'Design kickoff', attendees: ['ana torres'] }),
-    true,
-    'attendee overlap counts as history',
-  );
-  assert.equal(
-    hasAgendaHistory(past, { title: 'Weekly sync', attendees: ['nobody@new.com'] }),
-    true,
-    'recurring title counts as history',
-  );
-  assert.equal(
-    hasAgendaHistory(past, { title: 'Brand new intro', attendees: ['stranger@new.com'] }),
+    hasAgendaHistory(past, ev('one-off', at(11), at(12), ['Shrav'], null)),
     false,
-    'no overlap → no history → skip AI agenda',
+    'a one-time event never inherits history from a shared attendee (including self)',
   );
   assert.equal(
-    hasAgendaHistory([], { title: 'Anything', attendees: ['ana'] }),
+    hasAgendaHistory(past, ev('renamed', at(11), at(12), [], 'weekly-sync')),
+    true,
+    'an exact recurring-series match with substantive evidence qualifies',
+  );
+  assert.equal(
+    hasAgendaHistory(past, ev('Weekly sync', at(11), at(12), [], 'different-series')),
+    false,
+    'a matching title in a different series does not qualify',
+  );
+  assert.equal(
+    hasAgendaHistory([], ev('anything', at(11), at(12), [], 'series')),
     false,
     'empty history never matches',
   );
+}
+
+// Low-signal recordings are filtered before the history cap is applied.
+{
+  const seriesUid = 'daily-standup';
+  const lowSignal = [1, 2, 3].map((daysAgo) => ({
+    title: 'Daily standup',
+    date: at(9, 0, -daysAgo).toISOString(),
+    seriesUid,
+    insights: { summary: daysAgo === 1 ? 'Coughing.' : '' },
+  }));
+  const substantive = {
+    title: 'Daily standup',
+    date: at(9, 0, -7).toISOString(),
+    seriesUid,
+    insights: { decisions: [{ text: 'Ship the revised launch page' }] },
+  };
+  const unrelated = {
+    title: 'Daily standup',
+    date: at(9, 0, -8).toISOString(),
+    seriesUid: 'another-series',
+    insights: { actionItems: [{ text: 'Should never appear' }] },
+  };
+
+  const picked = selectAgendaHistory(
+    [...lowSignal, substantive, unrelated],
+    ev('today', at(11), at(12), [], seriesUid),
+  );
+  assert.deepEqual(picked.map(meeting => meeting.date), [substantive.date]);
+  assert.equal(buildAgendaBasis(picked), 'Based on Jul 21: Daily standup');
 }
 
 // ── buildGreeting ────────────────────────────────────────────────────────────

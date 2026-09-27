@@ -3132,8 +3132,8 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
                 onChange={e => update('whisperModel', e.target.value)}
               >
                 <option value="tiny">Tiny (~75 MB) — fastest</option>
-                <option value="base">Base (~148 MB) — recommended</option>
-                <option value="small">Small (~488 MB) — better accuracy</option>
+                <option value="base">Base (~148 MB) — faster, lower accuracy</option>
+                <option value="small">Small (~488 MB) — recommended</option>
                 <option value="medium">Medium (~1.5 GB) — best accuracy</option>
               </select>
               <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4 }}>

@@ -67,7 +67,7 @@ export function SettingsRootPage() {
       if (cfg.status === 'fulfilled' && cfg.value) {
         const c = cfg.value;
         next['ai'] = c.apiKey ? (c.apiProvider === 'openai' ? 'OpenAI · key added' : 'Anthropic · key added') : 'No API key yet';
-        next['transcription'] = `Whisper ${c.whisperModel || 'base'}${c.calendarFreeRecording ? ' · auto-record on' : ''}`;
+        next['transcription'] = `Whisper ${c.whisperModel || 'small'}${c.calendarFreeRecording ? ' · auto-record on' : ''}`;
         next['voice'] = c.userName ? `Enrolled as ${c.userName}` : 'Not set up yet';
       }
       if (mcp.status === 'fulfilled' && mcp.value) {

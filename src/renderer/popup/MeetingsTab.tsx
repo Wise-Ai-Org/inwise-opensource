@@ -11,6 +11,8 @@ interface MeetingRow {
   attendees: string[];
   hasInsights: boolean;
   actionItemCount: number;
+  decisionCount: number;
+  blockerCount: number;
   status: string;
   source: 'db' | 'calendar';
   calendarEventId?: string;
@@ -23,10 +25,26 @@ interface MeetingRow {
 interface LiveEvent { id: string; title: string; attendees?: string[] }
 
 interface Briefing {
+  dateKey?: string;
+  title?: string;
   greeting?: string;
   topTasks?: Array<{ title: string }>;
   overdueCommitments?: Array<{ text?: string; who?: string }>;
   totalTasks?: number;
+  taskLabel?: 'Top priorities' | 'Tasks due';
+  meetingCount?: number;
+  actionItemCount?: number;
+  decisionCount?: number;
+  blockerCount?: number;
+}
+
+function localDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function briefTitle(date: Date): string {
+  if (sameDay(date, new Date())) return "Today's brief";
+  return `${date.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })} brief`;
 }
 
 // ── Pre-record bottom sheet ──────────────────────────────────────────────────
@@ -40,17 +58,18 @@ function RecordSheet({ liveEvent, onClose, onStarted }: {
   const [linkedEvent, setLinkedEvent] = useState<LiveEvent | null>(liveEvent);
   const [people, setPeople] = useState<Array<{ _id: string; name: string }>>([]);
   const [chosen, setChosen] = useState<string[]>([]);
+  const [personQuery, setPersonQuery] = useState('');
   const [audioOk, setAudioOk] = useState<boolean | null>(null);
   const [starting, setStarting] = useState(false);
 
   useEffect(() => {
-    // Rank chips by recency of contact — the people you're meeting these days
-    // come first; the rest are reachable via typing a title anyway.
+    // Load the full searchable directory. The old eight-chip cap hid people
+    // such as Ethan; the UI now filters locally as the user types.
     api().getPeople?.().then((rows: any[]) => {
       const named = (rows || []).filter(p => p?.name);
       named.sort((a: any, b: any) =>
         (a.daysSinceLastContact ?? Infinity) - (b.daysSinceLastContact ?? Infinity));
-      setPeople(named.slice(0, 8).map(p => ({ _id: p._id, name: p.name })));
+      setPeople(named.map(p => ({ _id: p._id, name: p.name })));
     }).catch(() => {});
     // The tab-level live-event hint can be minutes old; ask for the active
     // calendar event at the moment the sheet opens.
@@ -65,13 +84,27 @@ function RecordSheet({ liveEvent, onClose, onStarted }: {
   const togglePerson = (name: string) =>
     setChosen(c => (c.includes(name) ? c.filter(n => n !== name) : [...c, name]));
 
+  const personMatches = useMemo(() => {
+    const query = (personQuery || title).trim().toLowerCase();
+    const ranked = people
+      .map(person => ({ person, score: query ? (person.name.toLowerCase() === query ? 0 : person.name.toLowerCase().startsWith(query) ? 1 : person.name.toLowerCase().includes(query) ? 2 : 3) : 3 }))
+      .filter(({ score }) => !query || score < 3)
+      .sort((a, b) => a.score - b.score || a.person.name.localeCompare(b.person.name))
+      .map(({ person }) => person);
+    return ranked.slice(0, 10);
+  }, [people, personQuery, title]);
+
   const start = async () => {
     setStarting(true);
+    const exactTitleMatch = people.find(person => person.name.trim().toLowerCase() === title.trim().toLowerCase());
+    const recordingAttendees = exactTitleMatch && !chosen.some(name => name.toLowerCase() === exactTitleMatch.name.toLowerCase())
+      ? [...chosen, exactTitleMatch.name]
+      : chosen;
     const finalTitle =
       (linkedEvent ? linkedEvent.title : title.trim()) ||
-      (chosen.length ? `Meeting with ${chosen.join(', ')}` : 'Recorded conversation');
+      (recordingAttendees.length ? `Meeting with ${recordingAttendees.join(', ')}` : 'Recorded conversation');
     try {
-      await api().startRecording?.(finalTitle, linkedEvent?.id, chosen);
+      await api().startRecording?.(finalTitle, linkedEvent?.id, recordingAttendees);
       onStarted();
     } finally {
       setStarting(false);
@@ -111,9 +144,16 @@ function RecordSheet({ liveEvent, onClose, onStarted }: {
 
         {people.length > 0 && (
           <div>
-            <div className="pp-seclabel" style={{ paddingLeft: 2 }}>Who's this with? (optional)</div>
+            <div className="pp-seclabel" style={{ paddingLeft: 2 }}>Participants (optional)</div>
+            <div className="pp-search" style={{ width: '100%', marginTop: 6 }}>
+              <input
+                placeholder="Search people…"
+                value={personQuery}
+                onChange={e => setPersonQuery(e.target.value)}
+              />
+            </div>
             <div className="pp-row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-              {people.map(p => (
+              {personMatches.map(p => (
                 <button
                   key={p._id}
                   className={`pp-chip ${chosen.includes(p.name) ? 'pp-teal' : ''}`}
@@ -123,6 +163,11 @@ function RecordSheet({ liveEvent, onClose, onStarted }: {
                 </button>
               ))}
             </div>
+            {title.trim() && personMatches.length > 0 && !chosen.some(name => name.toLowerCase() === personMatches[0].name.toLowerCase()) && (
+              <div className="pp-meta" style={{ marginTop: 6 }}>
+                Suggested from the title: <button className="pp-link" onClick={() => togglePerson(personMatches[0].name)}>Use {personMatches[0].name}</button>
+              </div>
+            )}
           </div>
         )}
 
@@ -152,8 +197,12 @@ export default function MeetingsTab() {
   const [meetings, setMeetings] = useState<MeetingRow[]>([]);
   const [calendarConnected, setCalendarConnected] = useState(true);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
+  const [briefingLoading, setBriefingLoading] = useState(true);
+  const [briefingError, setBriefingError] = useState(false);
+  const [briefingRevision, setBriefingRevision] = useState(0);
   const [briefingDismissed, setBriefingDismissed] = useState(false);
   const [selectedDay, setSelectedDay] = useState<Date>(new Date());
+  const selectedDayKey = useMemo(() => localDateKey(selectedDay), [selectedDay]);
   const [liveEvent, setLiveEvent] = useState<LiveEvent | null>(null);
   const [liveDismissed, setLiveDismissed] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -186,6 +235,8 @@ export default function MeetingsTab() {
         attendees: m.attendees || [],
         hasInsights: !!(m.insights?.summary || m.insights?.actionItems?.length),
         actionItemCount: m.insights?.actionItems?.length || 0,
+        decisionCount: m.insights?.decisions?.length || m.decisionCount || 0,
+        blockerCount: m.insights?.blockers?.length || m.blockerCount || 0,
         status: m.status,
         source: 'db' as const,
         calendarEventId: m.calendarEventId,
@@ -204,6 +255,8 @@ export default function MeetingsTab() {
           attendees: e.attendees || [],
           hasInsights: false,
           actionItemCount: 0,
+          decisionCount: 0,
+          blockerCount: 0,
           status: 'pending',
           source: 'calendar' as const,
           meetingUrl: e.url,
@@ -233,12 +286,15 @@ export default function MeetingsTab() {
   useEffect(() => {
     reload();
     const a = api();
-    a.getBriefing?.().then((b: any) => { if (b) setBriefing(b); }).catch(() => {});
     a.welcomeBackLiveMeeting?.().then((m: any) => { if (m) setLiveEvent({ id: m.id, title: m.title }); }).catch(() => {});
 
     const onStatus = (p: any) => {
       if (p?.status === 'recording' || p?.status === 'processing') setRecording(p.status === 'recording');
-      if (p?.status === 'done' || p?.status === 'error') { setRecording(false); reload(); }
+      if (p?.status === 'done' || p?.status === 'error') {
+        setRecording(false);
+        reload();
+        if (p.status === 'done') setBriefingRevision(revision => revision + 1);
+      }
     };
     const onNew = () => reload();
     a.on?.('recording:status', onStatus);
@@ -250,6 +306,22 @@ export default function MeetingsTab() {
       a.off?.('calendar:events', onNew);
     };
   }, [reload]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBriefing(null);
+    setBriefingError(false);
+    setBriefingLoading(true);
+    setBriefingDismissed(false);
+    api().getBriefing?.(selectedDayKey).then((next: Briefing) => {
+      if (!cancelled) setBriefing(next || null);
+    }).catch(() => {
+      if (!cancelled) setBriefingError(true);
+    }).finally(() => {
+      if (!cancelled) setBriefingLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [selectedDayKey, briefingRevision]);
 
   const week = useMemo(() => {
     const days: Date[] = [];
@@ -305,6 +377,20 @@ export default function MeetingsTab() {
   const dayMeetings = meetingsWithDates
     .filter(m => sameDay(m.when, selectedDay))
     .sort((a, b) => a.when.getTime() - b.when.getTime());
+
+  const briefMeetingCount = Math.max(dayMeetings.length, briefing?.meetingCount || 0);
+  const briefActionItemCount = Math.max(
+    dayMeetings.reduce((sum, meeting) => sum + meeting.actionItemCount, 0),
+    briefing?.actionItemCount || 0,
+  );
+  const briefDecisionCount = Math.max(
+    dayMeetings.reduce((sum, meeting) => sum + meeting.decisionCount, 0),
+    briefing?.decisionCount || 0,
+  );
+  const briefBlockerCount = Math.max(
+    dayMeetings.reduce((sum, meeting) => sum + meeting.blockerCount, 0),
+    briefing?.blockerCount || 0,
+  );
 
   const isToday = sameDay(selectedDay, new Date());
   const pendingByMeetingTitle = useMemo(() => {
@@ -383,17 +469,25 @@ export default function MeetingsTab() {
         })}
       </div>
 
-      {briefing && !briefingDismissed && ((briefing.topTasks?.length || 0) > 0 || (briefing.overdueCommitments?.length || 0) > 0) && (
+      {!briefingDismissed && (
         <div className="pp-card" style={{ background: 'var(--pp-teal-tint)', borderColor: 'var(--pp-teal-line)' }}>
           <div className="pp-row">
             <div className="pp-grow">
-              <div className="pp-title-sm">{briefing.greeting || 'Morning briefing'}</div>
+              <div className="pp-title-sm">{briefing?.title || briefTitle(selectedDay)}</div>
               <div className="pp-meta" style={{ marginTop: 2 }}>
-                {[
-                  briefing.topTasks?.length ? `${briefing.topTasks.length} top task${briefing.topTasks.length === 1 ? '' : 's'} today` : null,
-                  briefing.overdueCommitments?.length ? `${briefing.overdueCommitments.length} overdue commitment${briefing.overdueCommitments.length === 1 ? '' : 's'}` : null,
-                ].filter(Boolean).join(' · ')}
-                {review.count > 0 && (
+                {briefingLoading ? 'Loading brief…' : briefingError ? "Couldn't load this day's brief." : ([
+                  briefMeetingCount ? `${briefMeetingCount} meeting${briefMeetingCount === 1 ? '' : 's'}` : null,
+                  briefActionItemCount ? `${briefActionItemCount} action item${briefActionItemCount === 1 ? '' : 's'}` : null,
+                  briefDecisionCount ? `${briefDecisionCount} decision${briefDecisionCount === 1 ? '' : 's'}` : null,
+                  briefBlockerCount ? `${briefBlockerCount} blocker${briefBlockerCount === 1 ? '' : 's'}` : null,
+                  briefing?.topTasks?.length
+                    ? briefing.taskLabel === 'Tasks due'
+                      ? `${briefing.topTasks.length} task${briefing.topTasks.length === 1 ? '' : 's'} due`
+                      : `${briefing.topTasks.length} top priorit${briefing.topTasks.length === 1 ? 'y' : 'ies'}`
+                    : null,
+                  briefing?.overdueCommitments?.length ? `${briefing.overdueCommitments.length} overdue commitment${briefing.overdueCommitments.length === 1 ? '' : 's'}` : null,
+                ].filter(Boolean).join(' · ') || 'Nothing scheduled or due for this day.')}
+                {isToday && review.count > 0 && !briefingLoading && !briefingError && (
                   <>
                     {' · '}
                     <button className="pp-link" style={{ fontSize: 11.5, padding: 0 }} onClick={() => push({ kind: 'review' })}>
@@ -500,7 +594,8 @@ export default function MeetingsTab() {
                 <div className="pp-meta" style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                   {isDb && m.hasInsights && <span className="pp-chip pp-teal">Recorded</span>}
                   {isDb && !m.hasInsights && m.status === 'recording' && <span className="pp-chip">Recording…</span>}
-                  {isDb && !m.hasInsights && m.status !== 'recording' && (m.hasTranscript || m.status === 'transcribed' || m.status === 'pending')
+                  {isDb && m.status === 'needs_review' && <span className="pp-chip pp-amber">Needs review</span>}
+                  {isDb && !m.hasInsights && m.status !== 'recording' && m.status !== 'needs_review' && (m.hasTranscript || m.status === 'transcribed' || m.status === 'pending')
                     ? <span className="pp-chip">Processing</span> : null}
                   {isDb && !m.hasInsights && !m.hasTranscript && m.status !== 'recording' && m.status !== 'transcribed' && m.status !== 'pending' && (
                     <span className="pp-chip">No transcript</span>
