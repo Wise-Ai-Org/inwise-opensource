@@ -471,6 +471,11 @@ export async function createVoiceMemoTask(memoId: string, item: {
   });
 }
 
+export async function hasMeetingBySourceExternalId(source: string, externalId: string): Promise<boolean> {
+  const meeting = await meetingsDb.findOneAsync({ source, externalId });
+  return !!meeting;
+}
+
 // ── Calendar Sync ────────────────────────────────────────────────────────────
 
 export async function syncCalendarEventsToDb(events: {

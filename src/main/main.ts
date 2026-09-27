@@ -115,6 +115,7 @@ import { computePopupBounds } from './popup-position';
 import { installApplicationMenu } from './application-menu';
 import { getMediaPermissions, openMediaSettings, requestMicrophonePermission } from './media-permissions';
 import { createLoginItemRegistration, shouldStartHidden } from './login-item';
+import { startZoomPoller, stopZoomPoller, runZoomPollNow, onZoomTranscriptImported } from './zoom-poller';
 
 let mainWindow: BrowserWindow | null = null;
 let overlayWindow: BrowserWindow | null = null;
@@ -2420,7 +2421,11 @@ ipcMain.handle('zoom:saveCredentials', async (_e, clientId: string, clientSecret
   catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('zoom:connect', async () => {
-  try { return await connectZoom(); }
+  try {
+    const result = await connectZoom();
+    if (result.ok) runZoomPollNow().catch(e => log('error', 'zoom:poller', e.message));
+    return result;
+  }
   catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('zoom:disconnect', async () => {
@@ -3598,6 +3603,20 @@ app.whenReady().then(() => {
     });
   }
 
+  // Import new Zoom cloud transcripts directly to the local database. The
+  // listener keeps the renderer and user informed without involving a server.
+  onZoomTranscriptImported(async (recording, meetingId) => {
+    const meeting = await getMeeting(meetingId);
+    mainWindow?.webContents.send('meeting:new', meeting);
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'Zoom transcript imported',
+        body: `“${recording.title}” is ready in Inwise.`,
+      }).show();
+    }
+  });
+  setTimeout(() => startZoomPoller(), 15_000);
+
   // One-time scan for SoR writes stuck in 'pending' / 'pending-approval' / 'retrying'
   // for more than 24 hours â€” these indicate an interrupted/crashed prior session.
   setTimeout(async () => {
@@ -3741,6 +3760,7 @@ app.on('before-quit', () => {
   calendarWatcher.stop();
   stopSlackPoller();
   void stopMcpServer();
+  stopZoomPoller();
   destroyTray();
   globalShortcut.unregisterAll();
   mainWindow?.removeAllListeners('close');
