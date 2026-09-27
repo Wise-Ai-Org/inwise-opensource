@@ -9,6 +9,23 @@ import {
   computeExtractionCoverage,
   normalizeSpeakerLabels,
 } from './transcription-quality';
+import { buildWhisperArgs } from './whisper-args';
+
+const productionArgs = buildWhisperArgs('meeting.wav', {
+  modelPath: 'ggml-base.bin',
+  vadPath: 'ggml-silero-v6.2.0.bin',
+  stereo: true,
+  tinyDiarize: false,
+  retry: false,
+  useVad: true,
+  outputBase: 'meeting-output',
+  timeoutMs: 120_000,
+});
+assert.ok(productionArgs.includes('--vad'), 'validated stereo capture keeps VAD enabled');
+assert.ok(productionArgs.includes('-di'), 'validated stereo capture keeps channel diarization enabled');
+assert.ok(!productionArgs.includes('--prompt'), 'production transcription must not inject a meeting prompt');
+assert.ok(!productionArgs.includes('--carry-initial-prompt'), 'production transcription must not carry prompt context');
+assert.ok(!productionArgs.includes('-mc'), 'production transcription must not cap and carry decoder context');
 
 const loop = Array.from({ length: 18 }, () => 'We are going to have a lot of fun.').join(' ');
 const bad = assessTranscriptQuality(loop);

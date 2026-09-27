@@ -14,6 +14,7 @@ import {
   chooseBetterTranscript,
   formatTinyDiarization,
 } from './transcription-quality';
+import { buildWhisperArgs, WhisperRunOptions } from './whisper-args';
 
 const MODEL_BASE_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main';
 const TINY_DIARIZE_BASE_URL = 'https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main';
@@ -191,17 +192,6 @@ export interface TranscriptionOptions {
   monoDiarization?: boolean;
 }
 
-interface WhisperRunOptions {
-  modelPath: string;
-  vadPath?: string;
-  stereo: boolean;
-  tinyDiarize: boolean;
-  retry: boolean;
-  useVad: boolean;
-  outputBase: string;
-  timeoutMs: number;
-}
-
 interface WhisperRunResult {
   text: string;
   segmentCount: number;
@@ -242,29 +232,7 @@ async function runWhisper(audioPath: string, options: WhisperRunOptions): Promis
     if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
   }
 
-  const args = [
-    '-m', options.modelPath,
-    '-f', audioPath,
-    '-nt',
-    '--output-txt',
-    '--output-vtt',
-    '--output-json-full',
-    '-of', options.outputBase,
-    ...(options.useVad && options.vadPath ? [
-      '--vad',
-      '-vm', options.vadPath,
-      '-vt', '0.50',
-      '-vspd', '200',
-      '-vsd', '600',
-      '-vmsd', '30',
-      '-vp', '100',
-      '-vo', '0.10',
-    ] : []),
-    ...(options.stereo ? ['-di'] : []),
-    ...(options.tinyDiarize ? ['-tdrz'] : []),
-    ...(options.retry ? ['-nf', '-et', '2.20', '-nth', '0.45'] : []),
-    ...(options.retry && !options.tinyDiarize ? ['-sns'] : []),
-  ];
+  const args = buildWhisperArgs(audioPath, options);
 
   return new Promise((resolve, reject) => {
     const proc = spawn(exe, args, {
