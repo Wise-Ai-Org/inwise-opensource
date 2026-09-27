@@ -1,16 +1,30 @@
 import { getConfig } from './config';
+import { assessTranscriptQuality, inferMeetingType, sanitizeDueDate, computeExtractionCoverage } from './transcription-quality';
 
-interface Insights {
+export interface Insights {
   summary: string;
   actionItems: { text: string; owner?: string; dueDate?: string; priority?: string; isCommitment?: boolean }[];
   decisions: { text: string; rationale?: string }[];
   blockers: { text: string; severity?: string }[];
   contradictions: { text: string; previousDecision: string; previousMeetingTitle?: string; previousMeetingDate?: string }[];
+  meetingType: string;
+  signals: { type: string; text: string; speaker?: string; confidence?: number; evidence?: { quote?: string; timestamp?: string } }[];
+  openQuestions: string[];
+  coverage: { score: number; missing: string[]; checkedAt: string };
+  quality?: { ok: boolean; score: number; reasons: string[]; wordCount?: number; [key: string]: any };
+  analysisStatus?: 'ready' | 'needs_review';
 }
 
-const SYSTEM_PROMPT = `You are an expert meeting analyst. Given a meeting transcript, extract structured insights.
+export interface ExtractionContext {
+  meetingTitle?: string;
+  meetingDate?: string;
+  attendees?: string[];
+  userName?: string;
+}
 
-Classify every piece of information into exactly one of four categories: Summary, Action Item, Blocker, or Decision. Apply the routing and deduplication rules below strictly.
+const SYSTEM_PROMPT = `You are an expert meeting analyst. Given a transcript, extract evidence-grounded insights for any kind of meeting: customer call, internal sync, planning, hiring, support, project review, 1:1, or general conversation.
+
+Route concrete outcomes into exactly one of four categories: Summary, Action Item, Blocker, or Decision. Keep high-signal context in signals and apply the routing and deduplication rules below strictly.
 
 ## ROUTING RULES (apply in this order)
 1. Is it a committed, final choice the group agreed to? → Decision
@@ -33,13 +47,24 @@ Self-check before returning: For each Decision, scan all Action Items — if any
 
 If someone makes a personal promise or commitment (e.g., "I'll send the proposal by Friday"), include it as an action item with isCommitment: true. Commitments carry accountability weight.
 
+Adapt the extraction to the meeting rather than assuming it is a sales call. Also identify unresolved questions and high-signal context such as needs, pain points, objections, risks, opportunities, timelines, stakeholders, or constraints. Every signal must be grounded in a short quote from the transcript when possible. Use null instead of guessing. Confidence is 0..1 and must reflect evidence strength.
+
 Return a JSON object with this exact shape:
 {
+  "meetingType": "customer|internal|sales|hiring|one_on_one|planning|support|project|general",
   "summary": "2-3 sentence summary of the meeting",
-  "actionItems": [{ "text": "...", "owner": "name or null", "dueDate": "YYYY-MM-DD or null", "priority": "high|medium|low", "isCommitment": false }],
-  "decisions": [{ "text": "...", "rationale": "... or null" }],
-  "blockers": [{ "text": "...", "severity": "high|medium|low" }]
+  "actionItems": [{ "text": "...", "owner": "name or null", "dueDate": "YYYY-MM-DD or null", "priority": "high|medium|low", "isCommitment": false, "confidence": 0.0 }],
+  "decisions": [{ "text": "...", "rationale": "... or null", "confidence": 0.0 }],
+  "blockers": [{ "text": "...", "severity": "high|medium|low", "confidence": 0.0 }],
+  "signals": [{ "type": "pain|need|objection|opportunity|timeline|stakeholder|context|risk", "text": "...", "speaker": "name or null", "confidence": 0.0, "evidence": { "quote": "short exact quote or null", "timestamp": "timestamp or null" } }],
+  "openQuestions": ["question that remains unresolved"],
+  "coverage": { "score": 0.0, "missing": ["important area not supported by evidence"] }
 }
+Rules:
+- Use the meeting date supplied by the caller as the reference date. Never invent a past due date. If no date is stated, use null.
+- Do not create action items, decisions, blockers, or signals from generic small talk.
+- Keep the categories mutually exclusive and do not duplicate the same fact.
+- If the transcript is thin or speaker labels are unreliable, lower confidence and say so in coverage.missing.
 Return only valid JSON, no markdown fences.`;
 
 const CONTRADICTION_PROMPT = `You are a meeting consistency analyst. You will receive:
@@ -55,32 +80,70 @@ Return a JSON array of contradictions (empty array if none):
 
 Return only valid JSON, no markdown fences.`;
 
-function parseInsights(text: string): Insights {
+function parseInsights(text: string, transcript = '', context: ExtractionContext = {}): Insights {
   // Strip markdown fences if present (```json ... ```)
   const stripped = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   const parsed = JSON.parse(stripped);
+  const quality = assessTranscriptQuality(transcript);
+  const actionItems = Array.isArray(parsed.actionItems) ? parsed.actionItems.map((item: any) => ({
+    ...item,
+    dueDate: sanitizeDueDate(item?.dueDate, context.meetingDate),
+  })) : [];
+  const decisions = Array.isArray(parsed.decisions) ? parsed.decisions : [];
+  const blockers = Array.isArray(parsed.blockers) ? parsed.blockers : [];
+  const signals = Array.isArray(parsed.signals) ? parsed.signals.slice(0, 30) : [];
+  const openQuestions = Array.isArray(parsed.openQuestions) ? parsed.openQuestions.filter((q: any) => typeof q === 'string').slice(0, 20) : [];
+  const modelMissing = Array.isArray(parsed.coverage?.missing) ? parsed.coverage.missing.filter((m: any) => typeof m === 'string') : [];
+  const missing = [...new Set([
+    ...modelMissing,
+    ...quality.reasons.map(reason => `transcript quality: ${reason}`),
+  ])];
+  const computedCoverage = computeExtractionCoverage({
+    transcript,
+    summary: parsed.summary,
+    actionItems,
+    decisions,
+    blockers,
+    signals,
+    missing,
+  });
+  const modelCoverage = typeof parsed.coverage?.score === 'number' ? parsed.coverage.score : computedCoverage.score;
+  const coverageScore = Math.max(0, Math.min(1, quality.ok ? modelCoverage : Math.min(modelCoverage, 0.5)));
   return {
     summary: parsed.summary || '',
-    actionItems: parsed.actionItems || [],
-    decisions: parsed.decisions || [],
-    blockers: parsed.blockers || [],
+    actionItems,
+    decisions,
+    blockers,
     contradictions: parsed.contradictions || [],
+    meetingType: parsed.meetingType || inferMeetingType(context.meetingTitle, transcript),
+    signals,
+    openQuestions,
+    coverage: { score: coverageScore, missing, checkedAt: new Date().toISOString() },
+    quality,
+    analysisStatus: quality.ok ? 'ready' : 'needs_review',
   };
 }
 
-export async function extractInsights(transcript: string): Promise<Insights> {
+export async function extractInsights(transcript: string, context: ExtractionContext = {}): Promise<Insights> {
   const config = getConfig();
 
   if (!config.apiKey) throw new Error('API key not configured');
 
   if (config.apiProvider === 'anthropic') {
-    return extractWithClaude(transcript, config.apiKey);
+    return extractWithClaude(transcript, config.apiKey, context);
   } else {
-    return extractWithOpenAI(transcript, config.apiKey);
+    return extractWithOpenAI(transcript, config.apiKey, context);
   }
 }
 
-async function extractWithClaude(transcript: string, apiKey: string): Promise<Insights> {
+function extractionContext(context: ExtractionContext): string {
+  const date = context.meetingDate ? `Meeting date: ${context.meetingDate}.` : '';
+  const title = context.meetingTitle ? `Meeting title: ${context.meetingTitle}.` : '';
+  const attendees = context.attendees?.length ? `Known participants: ${context.attendees.join(', ')}.` : '';
+  return [title, date, attendees].filter(Boolean).join(' ');
+}
+
+async function extractWithClaude(transcript: string, apiKey: string, context: ExtractionContext): Promise<Insights> {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -92,7 +155,7 @@ async function extractWithClaude(transcript: string, apiKey: string): Promise<In
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 2048,
       system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: `Transcript:\n\n${transcript}` }],
+      messages: [{ role: 'user', content: `${extractionContext(context)}\n\nTranscript:\n\n${transcript}` }],
     }),
   });
 
@@ -103,7 +166,7 @@ async function extractWithClaude(transcript: string, apiKey: string): Promise<In
 
   const data = await res.json() as any;
   const text = data.content?.[0]?.text || '';
-  return parseInsights(text);
+  return parseInsights(text, transcript, context);
 }
 
 // ── Contradiction detection ──────────────────────────────────────────────────
@@ -201,7 +264,14 @@ function buildMeetingContext(meetings: any[]): string {
   return meetings.map((m: any) => {
     const date = new Date(m.date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
     const lines: string[] = [`## "${m.title}" — ${date}`];
+    if (m.insights?.meetingType) lines.push(`Meeting type: ${m.insights.meetingType}`);
     if (m.insights?.summary) lines.push(`Summary: ${m.insights.summary}`);
+    if (m.insights?.signals?.length) {
+      lines.push(`Signals: ${m.insights.signals.map((s: any) => s.text || s).join(' | ')}`);
+    }
+    if (m.insights?.openQuestions?.length) {
+      lines.push(`Open questions: ${m.insights.openQuestions.join(' | ')}`);
+    }
     if (m.insights?.actionItems?.length) {
       lines.push(`Action items: ${m.insights.actionItems.map((a: any) => `${a.text}${a.owner ? ` (${a.owner})` : ''}`).join(' | ')}`);
     }
@@ -277,11 +347,12 @@ Return a JSON object with this exact shape:
 {"agenda":["item1","item2","item3","item4","item5"]}
 
 Guidelines:
-- 4-6 items, each a short actionable sentence (under 15 words)
+- 1-6 items, each a short actionable sentence (under 15 words)
 - Prioritize: overdue commitments → open action items → follow-ups from recent meetings → forward-looking topics
 - If there are open tasks or commitments, always include at least one item to review them
 - Be specific — reference actual topics, decisions, and names from the context, not generic placeholders
-- If very little context is available, fall back to sensible defaults for the meeting type
+- Use only concrete evidence in the supplied context; do not infer topics from a meeting title or meeting type
+- If the context contains no concrete agenda evidence, return {"agenda":[]}
 
 Return only valid JSON, no markdown fences.`;
 
@@ -345,7 +416,7 @@ export type VoiceMemoItem =
   | { kind: 'agenda'; text: string; targetMeetingId: string | null }
   | { kind: 'note'; text: string };
 
-const VOICE_MEMO_SYSTEM_PROMPT = `You are Wiser, a note-sorting assistant. The user recorded a spoken voice note. Split it into discrete items and classify each as exactly one of: task, agenda, note.
+const VOICE_MEMO_SYSTEM_PROMPT = `You are Ollie, a note-sorting assistant. The user recorded a spoken voice note. Split it into discrete items and classify each as exactly one of: task, agenda, note.
 
 - task: something someone needs to do.
 - agenda: a point to raise in one of the user's UPCOMING MEETINGS. Only use this when the note clearly refers to discussing or covering something in a meeting; bind it to one of the listed meetings when the match is clear, else leave targetMeetingId null.
@@ -513,7 +584,7 @@ export async function suggestTaskFields(
   };
 }
 
-async function extractWithOpenAI(transcript: string, apiKey: string): Promise<Insights> {
+async function extractWithOpenAI(transcript: string, apiKey: string, context: ExtractionContext): Promise<Insights> {
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -525,7 +596,7 @@ async function extractWithOpenAI(transcript: string, apiKey: string): Promise<In
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: `Transcript:\n\n${transcript}` },
+        { role: 'user', content: `${extractionContext(context)}\n\nTranscript:\n\n${transcript}` },
       ],
     }),
   });
@@ -537,5 +608,5 @@ async function extractWithOpenAI(transcript: string, apiKey: string): Promise<In
 
   const data = await res.json() as any;
   const text = data.choices?.[0]?.message?.content || '';
-  return parseInsights(text);
+  return parseInsights(text, transcript, context);
 }

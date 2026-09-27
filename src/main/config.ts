@@ -66,7 +66,7 @@ interface Config {
   /** Last dragged position of the recorder pill; null = default top-left. */
   pillX: number | null;
   pillY: number | null;
-  /** Once-a-day "Wiser planned your day" popup after startup/unlock. */
+  /** Once-a-day "Ollie planned your day" popup after startup/unlock. */
   dailyPlanEnabled: boolean;
   dailyPlanLastShownAt: string | null;
   /** True once autostart has been set — either the first-run default or an explicit user toggle. */

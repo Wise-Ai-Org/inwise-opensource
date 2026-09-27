@@ -6,6 +6,7 @@ import { buildMeetingSlackRecap } from './slack-recap';
 
 interface Insights {
   summary?: string;
+  analysisStatus?: string;
   actionItems?: Array<{ text: string; owner?: string; assignee?: string; isCommitment?: boolean }>;
   decisions?: Array<{ text: string }>;
   blockers?: Array<{ text: string }>;
@@ -61,7 +62,7 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
     setSlackSending(true);
     setSlackResult(null);
     try {
-      const result = await api().slackPostWiserNote?.(
+      const result = await api().slackPostOllieNote?.(
         slackChannelId,
         buildMeetingSlackRecap(meeting),
       );
@@ -95,6 +96,9 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
                   : null}
                 {meeting.attendees?.length ? ` · ${meeting.attendees.length} attendee${meeting.attendees.length === 1 ? '' : 's'}` : ''}
               </div>
+              {(meeting.status === 'needs_review' || insights.analysisStatus === 'needs_review') && (
+                <div className="pp-meta" style={{ color: 'var(--amber)', marginTop: 5 }}>Some audio or transcript segments need review.</div>
+              )}
               {insights.summary && (
                 <div style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.55, marginTop: 8 }}>
                   {insights.summary}
@@ -174,13 +178,22 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               </>
             )}
 
-            {meeting.transcript && (
+            {meeting.transcript && meeting.status === 'processed' && (
               <button
                 className="pp-btn pp-solid"
                 onClick={() => api().openReviewWindow?.(meetingId)}
               >
-                Open full review
+                {meeting.reviewedAt ? 'New items to review' : 'Open full review'}
               </button>
+            )}
+
+            {meeting.status === 'reviewed' && (
+              <div className="pp-row" style={{ justifyContent: 'center', gap: 8, padding: '4px 0' }}>
+                <span className="pp-meta">
+                  Reviewed{meeting.reviewedAt ? ` Â· ${new Date(meeting.reviewedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : ''}
+                </span>
+                <button className="pp-quiet-action" onClick={() => api().openReviewWindow?.(meetingId)}>Review again</button>
+              </div>
             )}
 
             {jiraConnected && (insights.actionItems?.length || 0) > 0 && (

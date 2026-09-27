@@ -3,7 +3,7 @@ import {
   classifySlackToken,
   getChannelHistory,
   getThreadReplies,
-  postWiserNote,
+  postOllieNote,
   validateToken,
 } from './slack-client';
 
@@ -119,7 +119,7 @@ async function run(): Promise<void> {
 
   {
     let postedBody: any;
-    await postWiserNote('C-write', 'A concise recap', {
+    await postOllieNote('C-write', 'A concise recap', {
       token: 'xoxp-user',
       writeChannels: ['C-write'],
       fetchFn: async (_url, init) => {
@@ -128,11 +128,11 @@ async function run(): Promise<void> {
       },
     });
     assert.equal(postedBody.channel, 'C-write');
-    assert.match(postedBody.text, /\*Wiser Note\*/);
+    assert.match(postedBody.text, /\*Ollie Note\*/);
     assert.match(postedBody.text, /A concise recap/);
 
     await assert.rejects(
-      () => postWiserNote('C-other', 'No', {
+      () => postOllieNote('C-other', 'No', {
         token: 'xoxp-user',
         writeChannels: ['C-write'],
         fetchFn: async () => jsonResponse({ ok: true }),

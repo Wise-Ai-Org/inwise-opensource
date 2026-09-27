@@ -145,15 +145,15 @@ function CalendarRowView({
 }: {
   row: CalendarRow;
   autoFocus: boolean;
-  onPatch: (id: string, patch: Partial<Omit<CalendarRow, 'id'>>) => void;
+  onPatch: (id: string, patch: Partial<Omit<CalendarRow, 'id'>>) => Promise<void>;
   onRemove: (id: string) => void;
 }) {
   const [label, setLabel] = useState(row.label);
   const [url, setUrl] = useState(row.url);
   const [testStatus, setTestStatus] = useState<TestStatus>('idle');
   const [testMsg, setTestMsg] = useState('');
+  const [urlDirty, setUrlDirty] = useState(false);
   const labelDebouncer = useRef<number | null>(null);
-  const urlDebouncer = useRef<number | null>(null);
   const labelInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -165,20 +165,21 @@ function CalendarRowView({
   useEffect(() => {
     return () => {
       if (labelDebouncer.current) window.clearTimeout(labelDebouncer.current);
-      if (urlDebouncer.current) window.clearTimeout(urlDebouncer.current);
     };
   }, []);
 
   const debouncedSave = (key: 'label' | 'url', value: string) => {
-    const ref = key === 'label' ? labelDebouncer : urlDebouncer;
+    const ref = labelDebouncer;
     if (ref.current) window.clearTimeout(ref.current);
-    ref.current = window.setTimeout(() => onPatch(row.id, { [key]: value } as any), 500);
+    ref.current = window.setTimeout(() => onPatch(row.id, { [key]: value } as any), 400);
   };
 
   const test = async () => {
     if (!url.trim()) return;
     setTestStatus('testing');
     setTestMsg('');
+    await onPatch(row.id, { url: url.trim() });
+    setUrlDirty(false);
     const result = await (window as any).inwiseAPI.testCalendarUrl(url.trim());
     if (result.ok) {
       setTestStatus('ok');
@@ -237,11 +238,7 @@ function CalendarRowView({
           className="form-input"
           style={{ flex: 1 }}
           value={url}
-          onChange={e => { setUrl(e.target.value); setTestStatus('idle'); debouncedSave('url', e.target.value); }}
-          onBlur={() => {
-            if (urlDebouncer.current) window.clearTimeout(urlDebouncer.current);
-            onPatch(row.id, { url });
-          }}
+          onChange={e => { setUrl(e.target.value); setTestStatus('idle'); setUrlDirty(e.target.value !== row.url); }}
           placeholder="https://… (paste your secret ICS link)"
         />
         <button
@@ -250,7 +247,7 @@ function CalendarRowView({
           disabled={!url.trim() || testStatus === 'testing'}
           style={{ flexShrink: 0 }}
         >
-          {testStatus === 'testing' ? 'Testing…' : 'Test'}
+          {testStatus === 'testing' ? 'Connecting…' : 'Save and connect'}
         </button>
         <button
           className="btn btn-secondary btn-sm"
@@ -260,6 +257,10 @@ function CalendarRowView({
           Delete
         </button>
       </div>
+
+      {(urlDirty || (!row.url && url.length === 0)) && (
+        <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 6 }}>Not saved yet</div>
+      )}
 
       {testStatus !== 'idle' && (
         <div style={{ fontSize: 12, color: statusColor, marginTop: 8 }}>
@@ -685,13 +686,25 @@ function SlackSettings() {
   // Channel + inactivity settings (shown when connected)
   const [channels, setChannels] = useState<SlackChannel[]>([]);
   const [loadingChannels, setLoadingChannels] = useState(false);
+  const [channelError, setChannelError] = useState<string | null>(null);
   const [readChannels, setReadChannels] = useState<string[]>([]);
   const [writeChannels, setWriteChannels] = useState<string[]>([]);
   const [inactivityWindowMin, setInactivityWindowMin] = useState(60);
-  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [savedKey, setSavedKey] = useState<string | null>(null);
+  const inactivityTimer = useRef<number | null>(null);
+
+  const markSaved = (key: string) => {
+    setSavedKey(key);
+    window.setTimeout(() => setSavedKey(current => current === key ? null : current), 1800);
+  };
 
   useEffect(() => {
-    (window as any).inwiseAPI.slackStatus?.().then((s: any) => setStatus(s));
+    (window as any).inwiseAPI.slackStatus?.().then((s: any) => {
+      setStatus(s);
+      setTeamName(s?.teamName);
+      setSlackUserName(s?.userName);
+      if (s?.connected) loadChannels();
+    }).catch((e: any) => setError(e?.message || 'Could not read Slack status'));
     // Load existing channel selections
     (window as any).inwiseAPI.getConfig?.().then((cfg: any) => {
       if (cfg) {
@@ -700,24 +713,27 @@ function SlackSettings() {
         setInactivityWindowMin(cfg.slackInactivityWindowMin ?? 60);
       }
     });
+    return () => { if (inactivityTimer.current) window.clearTimeout(inactivityTimer.current); };
   }, []);
 
-  const loadChannels = async () => {
+  async function loadChannels() {
     setLoadingChannels(true);
+    setChannelError(null);
     try {
       const result = await (window as any).inwiseAPI.slackListChannels?.();
       if (result?.ok) {
         setChannels(result.channels ?? []);
         setError(null);
+        setChannelError(null);
       } else {
-        setError(result?.error ?? 'Could not load Slack channels');
+        setChannelError(result?.error ?? 'Could not load Slack channels');
       }
     } catch (e: any) {
-      setError(e.message);
+      setChannelError(e?.message || 'Could not load Slack channels');
     } finally {
       setLoadingChannels(false);
     }
-  };
+  }
 
   const connectOAuth = async () => {
     setOauthConnecting(true);
@@ -762,26 +778,25 @@ function SlackSettings() {
   };
 
   const disconnect = async () => {
-    await (window as any).inwiseAPI.slackDisconnect?.();
-    setStatus({ connected: false, tokenType: 'none', threadCapable: false });
-    setTeamName(undefined);
-    setSlackUserName(undefined);
-    setChannels([]);
+    setError(null);
+    try {
+      await (window as any).inwiseAPI.slackDisconnect?.();
+      setStatus({ connected: false, tokenType: 'none', threadCapable: false });
+      setTeamName(undefined);
+      setSlackUserName(undefined);
+      setChannels([]);
+    } catch (e: any) {
+      setError(e?.message || 'Could not disconnect Slack');
+    }
   };
 
-  const toggleChannel = (id: string, list: string[], setter: (v: string[]) => void) => {
-    setter(list.includes(id) ? list.filter(c => c !== id) : [...list, id]);
-    setSettingsSaved(false);
-  };
-
-  const saveSettings = async () => {
-    await (window as any).inwiseAPI.setConfig?.({
-      slackReadChannels: readChannels,
-      slackWriteChannels: writeChannels,
-      slackInactivityWindowMin: inactivityWindowMin,
-    });
-    setSettingsSaved(true);
-    setTimeout(() => setSettingsSaved(false), 2000);
+  const toggleChannel = async (id: string, kind: 'read' | 'write') => {
+    const list = kind === 'read' ? readChannels : writeChannels;
+    const next = list.includes(id) ? list.filter(c => c !== id) : [...list, id];
+    if (kind === 'read') setReadChannels(next); else setWriteChannels(next);
+    const key = kind === 'read' ? 'slackReadChannels' : 'slackWriteChannels';
+    await (window as any).inwiseAPI.setConfig?.({ [key]: next });
+    markSaved(kind);
   };
 
   return (
@@ -801,6 +816,7 @@ function SlackSettings() {
             </span>
             <button className="btn btn-secondary" style={{ marginLeft: 'auto' }} onClick={disconnect}>Disconnect</button>
           </div>
+          {error && <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 12 }}>✕ {error}</div>}
 
           {status.threadCapable === false && (
             <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 16, lineHeight: 1.5 }}>
@@ -812,17 +828,10 @@ function SlackSettings() {
           <div className="form-group">
             <label className="form-label">
               Read channels
-              {channels.length === 0 && (
-                <button
-                  className="btn btn-secondary"
-                  style={{ marginLeft: 8, padding: '2px 8px', fontSize: 12 }}
-                  onClick={loadChannels}
-                  disabled={loadingChannels}
-                >
-                  {loadingChannels ? 'Loading…' : 'Load channels'}
-                </button>
-              )}
+              {savedKey === 'read' && <span style={{ marginLeft: 8, color: 'var(--teal)', fontWeight: 500 }}>✓ Saved</span>}
             </label>
+            {loadingChannels && <span style={{ fontSize: 12, color: 'var(--slate-500)' }}>Loading channels…</span>}
+            {channelError && <span style={{ fontSize: 12, color: 'var(--red)' }}>✕ {channelError}</span>}
             {channels.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
                 {channels.map(ch => (
@@ -830,7 +839,7 @@ function SlackSettings() {
                     <input
                       type="checkbox"
                       checked={readChannels.includes(ch.id)}
-                      onChange={() => toggleChannel(ch.id, readChannels, setReadChannels)}
+                      onChange={() => toggleChannel(ch.id, 'read')}
                     />
                     #{ch.name}
                   </label>
@@ -840,9 +849,12 @@ function SlackSettings() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Write channels</label>
+            <label className="form-label">
+              Write channels
+              {savedKey === 'write' && <span style={{ marginLeft: 8, color: 'var(--teal)', fontWeight: 500 }}>✓ Saved</span>}
+            </label>
             <span style={{ fontSize: 12, color: 'var(--slate-500)', display: 'block', marginBottom: 6 }}>
-              Meeting detail pages can post an explicit Wiser recap only to the channels selected here.
+              Meeting detail pages can post an explicit Ollie recap only to the channels selected here.
             </span>
             {channels.length > 0 ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
@@ -851,14 +863,16 @@ function SlackSettings() {
                     <input
                       type="checkbox"
                       checked={writeChannels.includes(ch.id)}
-                      onChange={() => toggleChannel(ch.id, writeChannels, setWriteChannels)}
+                      onChange={() => toggleChannel(ch.id, 'write')}
                     />
                     #{ch.name}
                   </label>
                 ))}
               </div>
             ) : (
-              <span style={{ fontSize: 12, color: 'var(--slate-400)' }}>Load channels above first</span>
+              <span style={{ fontSize: 12, color: channelError ? 'var(--red)' : 'var(--slate-400)' }}>
+                {loadingChannels ? 'Loading channels…' : channelError || 'No channels available.'}
+              </span>
             )}
           </div>
 
@@ -867,7 +881,10 @@ function SlackSettings() {
               Advanced sync timing
             </summary>
             <div className="form-group" style={{ marginTop: 10 }}>
-              <label className="form-label">Thread inactivity window (minutes)</label>
+              <label className="form-label">
+                Thread inactivity window (minutes)
+                {savedKey === 'window' && <span style={{ marginLeft: 8, color: 'var(--teal)', fontWeight: 500 }}>✓ Saved</span>}
+              </label>
               <input
                 type="number"
                 className="form-input"
@@ -876,8 +893,13 @@ function SlackSettings() {
                 style={{ width: 100 }}
                 value={inactivityWindowMin}
                 onChange={e => {
-                  setInactivityWindowMin(parseInt(e.target.value, 10) || 60);
-                  setSettingsSaved(false);
+                  const next = parseInt(e.target.value, 10) || 60;
+                  setInactivityWindowMin(next);
+                  if (inactivityTimer.current) window.clearTimeout(inactivityTimer.current);
+                  inactivityTimer.current = window.setTimeout(async () => {
+                    await (window as any).inwiseAPI.setConfig?.({ slackInactivityWindowMin: next });
+                    markSaved('window');
+                  }, 400);
                 }}
               />
               <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
@@ -886,9 +908,6 @@ function SlackSettings() {
             </div>
           </details>
 
-          <button className="btn btn-primary" onClick={saveSettings}>
-            {settingsSaved ? 'Saved!' : 'Save Slack Settings'}
-          </button>
         </div>
       ) : (
         <div>
@@ -939,11 +958,12 @@ function SlackSettings() {
   );
 }
 
-function JiraSettings({ config, update }: { config: Config; update: (key: keyof Config, value: string) => void }) {
+function JiraSettings({ config, update, savedKey }: { config: Config; update: (key: keyof Config, value: any) => void; savedKey?: keyof Config | null }) {
   const [status, setStatus] = useState<{ connected: boolean; info: any } | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [projects, setProjects] = useState<{ key: string; name: string }[]>([]);
   const [error, setError] = useState('');
+  const [credentialsDirty, setCredentialsDirty] = useState(false);
 
   useEffect(() => {
     (window as any).inwiseAPI.jiraStatus?.().then((s: any) => {
@@ -969,6 +989,7 @@ function JiraSettings({ config, update }: { config: Config; update: (key: keyof 
       jiraClientId: config.jiraClientId,
       jiraClientSecret: config.jiraClientSecret,
     });
+    setCredentialsDirty(false);
     const result = await (window as any).inwiseAPI.jiraConnect();
     if (result.ok) {
       const s = await (window as any).inwiseAPI.jiraStatus();
@@ -1003,20 +1024,22 @@ function JiraSettings({ config, update }: { config: Config; update: (key: keyof 
           <div className="form-group" style={{ marginBottom: 12 }}>
             <label className="form-label">Client ID</label>
             <input type="text" className="form-input" value={config.jiraClientId}
-              onChange={e => update('jiraClientId', e.target.value)} placeholder="e.g. 74pdU1t2..." />
+              onChange={e => { setCredentialsDirty(true); update('jiraClientId', e.target.value); }} placeholder="e.g. 74pdU1t2..." />
           </div>
 
           <div className="form-group" style={{ marginBottom: 16 }}>
             <label className="form-label">Client Secret</label>
             <input type="password" className="form-input" value={config.jiraClientSecret}
-              onChange={e => update('jiraClientSecret', e.target.value)} placeholder="Secret from your Atlassian app" />
+              onChange={e => { setCredentialsDirty(true); update('jiraClientSecret', e.target.value); }} placeholder="Secret from your Atlassian app" />
           </div>
+
+          {credentialsDirty && <div style={{ fontSize: 12, color: 'var(--slate-500)', marginBottom: 12 }}>Not saved yet</div>}
 
           {error && <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 12 }}>✕ {error}</div>}
 
           <button className="btn btn-primary btn-sm" onClick={handleConnect}
             disabled={connecting || !config.jiraClientId || !config.jiraClientSecret}>
-            {connecting ? 'Connecting…' : 'Connect Jira'}
+            {connecting ? 'Connecting…' : 'Save and connect'}
           </button>
         </>
       ) : (
@@ -1047,7 +1070,7 @@ function JiraSettings({ config, update }: { config: Config; update: (key: keyof 
           </div>
 
           <div className="form-group" style={{ marginBottom: 12 }}>
-            <label className="form-label">Default Project</label>
+            <label className="form-label">Default Project {savedKey === 'jiraDefaultProject' && <span style={{ color: 'var(--teal)', fontWeight: 500 }}>✓ Saved</span>}</label>
             <select className="form-select" value={config.jiraDefaultProject}
               onChange={e => update('jiraDefaultProject', e.target.value)}>
               <option value="">Select a project</option>
@@ -1064,7 +1087,7 @@ function JiraSettings({ config, update }: { config: Config; update: (key: keyof 
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
               <input type="checkbox" checked={config.jiraAutoPush as any === true || config.jiraAutoPush === 'true' as any}
                 onChange={e => update('jiraAutoPush' as any, e.target.checked as any)} />
-              <span className="form-label" style={{ margin: 0 }}>Auto-push tasks to your systems</span>
+              <span className="form-label" style={{ margin: 0 }}>Auto-push tasks to your systems {savedKey === 'jiraAutoPush' && <span style={{ color: 'var(--teal)', fontWeight: 500 }}>✓ Saved</span>}</span>
             </label>
             <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block', paddingLeft: 24 }}>
               Tasks from meetings push to the right destination automatically.
@@ -2992,10 +3015,11 @@ export type SettingsSectionOnly =
 
 export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) {
   const [config, setConfig] = useState<Config | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [savedKey, setSavedKey] = useState<keyof Config | null>(null);
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [speakers, setSpeakers] = useState<MediaDeviceInfo[]>([]);
   const [openAtLogin, setOpenAtLogin] = useState<boolean | null>(null);
+  const saveTimers = useRef<Partial<Record<keyof Config, number>>>({});
 
   useEffect(() => {
     (window as any).inwiseAPI.getConfig().then(setConfig);
@@ -3011,28 +3035,40 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
     refreshDevices();
     // Keep the device lists fresh if the user plugs/unplugs hardware while Settings is open.
     navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
-    return () => navigator.mediaDevices.removeEventListener('devicechange', refreshDevices);
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', refreshDevices);
+      Object.values(saveTimers.current).forEach(timer => timer && window.clearTimeout(timer));
+    };
   }, []);
 
   if (!config) return null;
 
-  const update = (key: keyof Config, value: string) => {
+  const markSaved = (key: keyof Config) => {
+    setSavedKey(key);
+    window.setTimeout(() => setSavedKey(current => current === key ? null : current), 1800);
+  };
+
+  const update = (key: keyof Config, value: any) => {
     setConfig(c => c ? { ...c, [key]: value } : c);
-    setSaved(false);
+    if (key === 'jiraClientId' || key === 'jiraClientSecret') return;
+    const persist = async () => {
+      await (window as any).inwiseAPI.setConfig({ [key]: value });
+      markSaved(key);
+    };
+    if (key === 'apiKey' || key === 'userName') {
+      const prior = saveTimers.current[key];
+      if (prior) window.clearTimeout(prior);
+      saveTimers.current[key] = window.setTimeout(persist, 400);
+    } else {
+      void persist();
+    }
   };
 
   // Device pickers persist immediately (no Save click needed) so the chosen
   // mic/speaker is remembered across sessions. setConfig merges in the main process.
   const updateDevice = (key: 'micDeviceId' | 'speakerDeviceId', value: string) => {
     setConfig(c => c ? { ...c, [key]: value } : c);
-    setSaved(false);
-    (window as any).inwiseAPI.setConfig({ [key]: value });
-  };
-
-  const save = async () => {
-    await (window as any).inwiseAPI.setConfig(config);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    (window as any).inwiseAPI.setConfig({ [key]: value }).then(() => markSaved(key));
   };
 
   const show = (key: SettingsSectionOnly) => !only || only === key;
@@ -3053,7 +3089,7 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
             <div className="settings-section-title">AI Provider</div>
 
             <div className="form-group">
-              <label className="form-label">Provider</label>
+              <label className="form-label">Provider {savedKey === 'apiProvider' && <span style={{ color: 'var(--teal)' }}>✓ Saved</span>}</label>
               <select
                 className="form-select"
                 value={config.apiProvider}
@@ -3067,6 +3103,7 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
             <div className="form-group">
               <label className="form-label">
                 {config.apiProvider === 'anthropic' ? 'Anthropic API Key' : 'OpenAI API Key'}
+                {savedKey === 'apiKey' && <span style={{ marginLeft: 8, color: 'var(--teal)' }}>✓ Saved</span>}
               </label>
               <input
                 type="password"
@@ -3083,7 +3120,7 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
           <div className="settings-section">
             <div className="settings-section-title">Transcription</div>
             <div className="form-group">
-              <label className="form-label">Microphone</label>
+              <label className="form-label">Microphone {savedKey === 'micDeviceId' && <span style={{ color: 'var(--teal)' }}>✓ Saved</span>}</label>
               <select
                 className="form-select"
                 value={config.micDeviceId}
@@ -3099,7 +3136,7 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
               <MicTest deviceId={config.micDeviceId} />
             </div>
             <div className="form-group">
-              <label className="form-label">Speaker</label>
+              <label className="form-label">Speaker {savedKey === 'speakerDeviceId' && <span style={{ color: 'var(--teal)' }}>✓ Saved</span>}</label>
               <select
                 className="form-select"
                 value={config.speakerDeviceId ?? 'default'}
@@ -3125,15 +3162,15 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
               <SystemAudioTest />
             </div>
             <div className="form-group">
-              <label className="form-label">Whisper Model</label>
+              <label className="form-label">Whisper Model {savedKey === 'whisperModel' && <span style={{ color: 'var(--teal)' }}>✓ Saved</span>}</label>
               <select
                 className="form-select"
                 value={config.whisperModel}
                 onChange={e => update('whisperModel', e.target.value)}
               >
                 <option value="tiny">Tiny (~75 MB) — fastest</option>
-                <option value="base">Base (~148 MB) — recommended</option>
-                <option value="small">Small (~488 MB) — better accuracy</option>
+                <option value="base">Base (~148 MB) — faster, lower accuracy</option>
+                <option value="small">Small (~488 MB) — recommended</option>
                 <option value="medium">Medium (~1.5 GB) — best accuracy</option>
               </select>
               <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4 }}>
@@ -3162,7 +3199,7 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
                 <span className="form-label" style={{ margin: 0 }}>Launch Inwise when you log in</span>
               </label>
               <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
-                Starts quietly in the tray, so Wiser is ready before your first meeting.
+                Starts quietly in the tray, so Ollie is ready before your first meeting.
               </span>
             </div>
             <div className="form-group">
@@ -3172,15 +3209,13 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
                   checked={config.dailyPlanEnabled !== false}
                   onChange={e => {
                     const value = e.target.checked;
-                    setConfig(c => c ? { ...c, dailyPlanEnabled: value } : c);
-                    setSaved(false);
-                    (window as any).inwiseAPI.setConfig({ dailyPlanEnabled: value });
+                    update('dailyPlanEnabled', value);
                   }}
                 />
-                <span className="form-label" style={{ margin: 0 }}>Daily plan from Wiser</span>
+                <span className="form-label" style={{ margin: 0 }}>Daily plan from Ollie {savedKey === 'dailyPlanEnabled' && <span style={{ color: 'var(--teal)' }}>✓ Saved</span>}</span>
               </label>
               <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block' }}>
-                About 10 minutes after you open your computer, Wiser pops up today's meetings, drafted
+                About 10 minutes after you open your computer, Ollie pops up today's meetings, drafted
                 agendas, and your top priorities. Waits until you're out of any meeting in progress.
               </span>
             </div>
@@ -3197,12 +3232,10 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
                   checked={config.calendarFreeRecording === true}
                   onChange={e => {
                     const value = e.target.checked;
-                    setConfig(c => c ? { ...c, calendarFreeRecording: value } : c);
-                    setSaved(false);
-                    (window as any).inwiseAPI.setConfig({ calendarFreeRecording: value });
+                    update('calendarFreeRecording', value);
                   }}
                 />
-                <span className="form-label" style={{ margin: 0 }}>Calendar-free recording</span>
+                <span className="form-label" style={{ margin: 0 }}>Calendar-free recording {savedKey === 'calendarFreeRecording' && <span style={{ color: 'var(--teal)' }}>✓ Saved</span>}</span>
               </label>
               <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block', paddingLeft: 24, lineHeight: 1.5 }}>
                 Listens to your microphone and automatically starts recording when it detects speech —
@@ -3231,7 +3264,7 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
           {show('jira') && (
           <div className="settings-section">
             <div className="settings-section-title">Jira Integration</div>
-            <JiraSettings config={config} update={update} />
+            <JiraSettings config={config} update={update} savedKey={savedKey} />
           </div>
           )}
 
@@ -3275,7 +3308,7 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
             </p>
 
             <div className="form-group" style={{ marginBottom: 16 }}>
-              <label className="form-label">Your Name</label>
+              <label className="form-label">Your Name {savedKey === 'userName' && <span style={{ color: 'var(--teal)' }}>✓ Saved</span>}</label>
               <input
                 type="text"
                 className="form-input"
@@ -3292,19 +3325,12 @@ export default function Settings({ only }: { only?: SettingsSectionOnly } = {}) 
               emails={config.selfEmails ?? []}
               onChange={async (next) => {
                 setConfig(c => c ? { ...c, selfEmails: next } : c);
-                setSaved(false);
                 await (window as any).inwiseAPI.setSelfEmails(next);
+                markSaved('selfEmails');
               }}
             />
 
             <VoiceEnrollment />
-          </div>
-          )}
-
-          {(!only || only === 'ai' || only === 'transcription' || only === 'voice') && (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <button className="btn btn-primary" onClick={save}>Save Settings</button>
-            {saved && <span style={{ fontSize: 13, color: 'var(--teal)' }}>✓ Saved</span>}
           </div>
           )}
 

@@ -28,6 +28,7 @@ import {
   SELECT_PROPS
 } from '../../components/modal/FlowModalShell';
 import { api } from '../../api';
+import { MatchAttribution, DedupSuggestion } from '../../popup/DedupBits';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -52,6 +53,9 @@ interface ActionItem {
   originalDueDate: string;
   resolution: OwnerResolution | null;
   ownerOverridden: boolean;
+  dedupSuggestion?: DedupSuggestion;
+  pendingTask?: Record<string, any>;
+  dedupResolvedAsMerge?: boolean;
 }
 
 interface BlockerItem {
@@ -102,6 +106,7 @@ interface Person {
   _id: string;
   name: string;
   email?: string;
+  isSelf?: boolean;
 }
 
 // ── Props — matches what Communications.tsx passes ────────────────────────
@@ -491,9 +496,10 @@ function sorOneLineSummary(entry: SorWriteEntry): string {
 
 // ── Tab config ─────────────────────────────────────────────────────────────
 
-type ReviewTab = 'actionItems' | 'blockers' | 'decisions' | 'transcript' | 'sorWrites';
+type ReviewTab = 'overview' | 'actionItems' | 'blockers' | 'decisions' | 'transcript' | 'sorWrites';
 
 const TAB_CONFIG = [
+  { key: 'overview' as ReviewTab, label: 'Overview' },
   { key: 'actionItems' as ReviewTab, label: 'Action Items' },
   { key: 'blockers' as ReviewTab, label: 'Blockers' },
   { key: 'decisions' as ReviewTab, label: 'Decisions' },
@@ -559,14 +565,14 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
   const [loading, setLoading] = useState(false);
   const [meetingTitle, setMeetingTitle] = useState('');
   const [transcript, setTranscript] = useState('');
-  const [suggestions, setSuggestions] = useState<{ actionItems: any[]; blockers: any[]; decisions: any[]; keyTopics: string[] } | null>(null);
+  const [suggestions, setSuggestions] = useState<{ summary: string; meetingType: string; actionItems: any[]; blockers: any[]; decisions: any[]; keyTopics: string[]; signals: any[]; openQuestions: string[]; coverage?: any; quality?: any; analysisStatus?: string } | null>(null);
 
   const [actionItems, setActionItems] = useState<ActionItem[]>([]);
   const [blockers, setBlockers] = useState<BlockerItem[]>([]);
   const [decisions, setDecisions] = useState<DecisionItem[]>([]);
   const [editingField, setEditingField] = useState<{ id: string; field: string } | null>(null);
   const [editBuffer, setEditBuffer] = useState('');
-  const [activeTab, setActiveTab] = useState<ReviewTab>('actionItems');
+  const [activeTab, setActiveTab] = useState<ReviewTab>('overview');
   const [isApproving, setIsApproving] = useState(false);
   const [textHeights, setTextHeights] = useState<Record<string, number>>({});
   const [people, setPeople] = useState<Person[]>([]);
@@ -585,7 +591,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
     if (!isOpen || !meetingId) return;
 
     setLoading(true);
-    setActiveTab(initialTab ?? 'actionItems');
+    setActiveTab(initialTab ?? 'overview');
     setEditingField(null);
     setExpandedSorId(null);
     setRetryingSorId(null);
@@ -607,6 +613,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           (p.email && a.includes(p.email.toLowerCase()))
         );
       const sorted = (Array.isArray(peopleList) ? [...peopleList] : []).sort((x: any, y: any) => {
+        if (!!x.isSelf !== !!y.isSelf) return x.isSelf ? -1 : 1;
         const ax = isAttendee(x) ? 0 : 1;
         const ay = isAttendee(y) ? 0 : 1;
         if (ax !== ay) return ax - ay;
@@ -616,10 +623,17 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
 
       const insights = meeting?.insights || {};
       const rawSuggestions = {
+        summary: insights.summary || '',
+        meetingType: insights.meetingType || 'general',
         actionItems: insights.actionItems || [],
         blockers: insights.blockers || [],
         decisions: insights.decisions || [],
-        keyTopics: insights.keyTopics || insights.topics || []
+        keyTopics: insights.keyTopics || insights.topics || [],
+        signals: insights.signals || [],
+        openQuestions: insights.openQuestions || [],
+        coverage: insights.coverage || null,
+        quality: insights.quality || null,
+        analysisStatus: insights.analysisStatus || 'ready'
       };
       setSuggestions(rawSuggestions);
 
@@ -632,6 +646,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
         const id = `action-${idx}`;
         const owner = obj.owner || item.owner || '';
         const dueDate = obj.deadline || item.deadline || obj.dueDate || item.dueDate || '';
+        const approval = obj.approval || item.approval || null;
         heights[id] = estimateHeight(text);
         return {
           id,
@@ -639,8 +654,8 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           text,
           owner,
           dueDate,
-          confidence: extractConfidence(item, 0.85),
-          selected: true,
+          confidence: extractConfidence(item, 0.5),
+          selected: approval?.status !== 'rejected',
           edited: false,
           originalText: text,
           originalOwner: owner,
@@ -664,7 +679,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           severity,
           blockedItemId,
           blockedItemTitle: obj.blockedItemTitle || item.blockedItemTitle || '',
-          confidence: extractConfidence(item, 0.8),
+          confidence: extractConfidence(item, 0.5),
           selected: true,
           edited: false,
           originalText: text,
@@ -684,7 +699,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           text,
           relatedItemId,
           relatedItemTitle: obj.relatedItemTitle || item.relatedItemTitle || '',
-          confidence: extractConfidence(item, 0.8),
+          confidence: extractConfidence(item, 0.5),
           selected: true,
           edited: false,
           originalText: text,
@@ -815,6 +830,18 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
 
   // ── Approve ────────────────────────────────────────────────────────────
 
+  const resolveActionDedup = async (item: ActionItem, action: 'same' | 'new' | 'reopen') => {
+    if (!item.dedupSuggestion || !item.pendingTask) return;
+    const result = await api.resolveCreateTaskDedup(item.pendingTask, item.dedupSuggestion, action);
+    setActionItems(prev => prev.map(row => row.id === item.id ? {
+      ...row,
+      taskId: result?._id || row.taskId,
+      dedupSuggestion: undefined,
+      pendingTask: undefined,
+      dedupResolvedAsMerge: action !== 'new',
+    } : row));
+  };
+
   const handleApprove = async () => {
     if (!meetingId) return;
     setIsApproving(true);
@@ -823,37 +850,91 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
       const reviewEdits = buildReviewEdits();
       console.log('[ReviewEdits]', reviewEdits);
 
-      // Mark meeting as reviewed via IPC
-      await api.reviewMeeting(meetingId);
-
       // Approve selected action items, reject dismissed ones
       const selectedActions = actionItems.filter(i => i.selected);
       const rejectedActions = actionItems.filter(i => !i.selected && i.taskId);
+      const nextActions = actionItems.map(item => ({ ...item }));
+      let needsDedupConfirmation = false;
 
       for (const item of selectedActions) {
         if (item.taskId) {
-          await api.updateTask(item.taskId, {
-            title: item.text,
-            assignee: item.owner || undefined,
-            dueDate: item.dueDate || undefined,
-            approval: { status: 'approved' }
-          });
+          if (!item.dedupResolvedAsMerge) {
+            await api.updateTask(item.taskId, {
+              title: item.text,
+              owner: item.owner || undefined,
+              assignee: item.owner || undefined,
+              dueDate: item.dueDate || undefined,
+              approval: { status: 'approved' }
+            });
+          }
+        } else if (item.dedupSuggestion) {
+          needsDedupConfirmation = true;
         } else {
-          await api.createTask({
+          const pendingTask = {
             title: item.text,
+            owner: item.owner || undefined,
             assignee: item.owner || undefined,
             dueDate: item.dueDate || undefined,
             meetingId,
             source: 'meeting-review',
-            approval: { status: 'approved' }
-          });
+            approval: { status: 'approved' },
+            aiExtracted: false,
+          };
+          const result = await api.createTask(pendingTask);
+          const idx = nextActions.findIndex(row => row.id === item.id);
+          if (result?.dedupPending) {
+            needsDedupConfirmation = true;
+            nextActions[idx] = {
+              ...nextActions[idx],
+              dedupSuggestion: result.dedupSuggestion,
+              pendingTask: result.pendingTask || pendingTask,
+            };
+          } else if (result?._id) {
+            nextActions[idx] = {
+              ...nextActions[idx],
+              taskId: result._id,
+              dedupResolvedAsMerge: result.dedupOutcome === 'auto_merge',
+            };
+          }
         }
+      }
+
+      setActionItems(nextActions);
+      if (needsDedupConfirmation) {
+        toast({
+          title: 'Confirm possible duplicates',
+          description: 'Choose whether each suggested match is the same task, then save the review again.',
+          status: 'info',
+          duration: 5000,
+        });
+        return;
       }
 
       // Reject dismissed action items
       for (const item of rejectedActions) {
         await api.updateTask(item.taskId!, { approval: { status: 'rejected' } });
       }
+
+      await api.reviewMeeting(meetingId, {
+        actionItems: nextActions.map(item => ({
+          text: item.text,
+          owner: item.owner || '',
+          dueDate: item.dueDate || '',
+          taskId: item.taskId,
+          approval: { status: item.selected ? 'approved' : 'rejected' },
+        })),
+        blockers: blockers.map(item => ({
+          text: item.text,
+          severity: item.severity,
+          blockerId: item.blockerId,
+          approval: { status: item.selected ? 'approved' : 'rejected' },
+        })),
+        decisions: decisions.map(item => ({
+          text: item.text,
+          relatedItemId: item.relatedItemId,
+          approval: { status: item.selected ? 'approved' : 'rejected' },
+        })),
+      });
 
       const totalSaved = selectedActions.length + blockers.filter(i => i.selected).length + decisions.filter(i => i.selected).length;
 
@@ -889,6 +970,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
   const totalDismissed = (actionItems.length - selectedActions.length) + (blockers.length - selectedBlockers.length) + (decisions.length - selectedDecisions.length);
 
   const tabCounts: Record<ReviewTab, number> = {
+    overview: suggestions ? 1 : 0,
     actionItems: actionItems.length,
     blockers: blockers.length,
     decisions: decisions.length,
@@ -897,6 +979,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
   };
 
   const visibleTabs: ReviewTab[] = [
+    'overview',
     'actionItems',
     'blockers',
     'decisions',
@@ -910,7 +993,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
     const tier = confTier(item.confidence);
     const style = CONF_STYLES[tier];
     const textH = textHeights[item.id] || LINE_H * 2;
-    const fullH = cardHeight(textH);
+    const fullH = cardHeight(textH) + (item.dedupSuggestion ? 112 : 0);
 
     if (!item.selected) {
       return (
@@ -1017,7 +1100,9 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                       {...SELECT_PROPS}
                     >
                       {people.map(p => (
-                        <option key={p._id} value={p.name}>{p.name}{p.email ? ` (${p.email})` : ''}</option>
+                        <option key={p._id} value={p.name}>
+                          {p.isSelf ? `${p.name} (you)` : p.name}{!p.isSelf && p.email ? ` (${p.email})` : ''}
+                        </option>
                       ))}
                     </Select>
                   ) : (
@@ -1059,6 +1144,21 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
               />
             </InlineField>
           </HStack>
+          {item.dedupSuggestion && (
+            <Box mt={3} p={3} border="1px solid" borderColor="#9dd4d9" borderRadius="8px" bg="#f0fafa">
+              <Text fontSize="13px" color="gray.700">
+                Sounds like <b>{item.dedupSuggestion.candidateTitle}</b> â€” same thing?
+              </Text>
+              <HStack mt={2} spacing={2}>
+                <Button size="xs" colorScheme="teal" onClick={() => resolveActionDedup(item, 'same')}>Same thing</Button>
+                <Button size="xs" variant="outline" onClick={() => resolveActionDedup(item, 'new')}>Keep separate</Button>
+                {item.dedupSuggestion.wasDone && (
+                  <Button size="xs" variant="ghost" onClick={() => resolveActionDedup(item, 'reopen')}>Reopen it</Button>
+                )}
+              </HStack>
+              <MatchAttribution model={item.dedupSuggestion.model} />
+            </Box>
+          )}
         </Box>
       </motion.div>
     );
@@ -1259,6 +1359,63 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           </InlineField>
         </Box>
       </motion.div>
+    );
+  };
+
+  const renderOverviewTab = () => {
+    if (!suggestions) return null;
+    const quality = suggestions.quality;
+    const coverage = suggestions.coverage;
+    return (
+      <VStack spacing={4} align="stretch">
+        {suggestions.analysisStatus === 'needs_review' && (
+          <Box bg="orange.50" border="1px solid" borderColor="orange.200" borderRadius="10px" px={4} py={3}>
+            <Text fontSize="12px" color="orange.800" fontWeight="600">Some audio or transcript segments need review.</Text>
+            <Text fontSize="12px" color="orange.700" mt={1}>The items below are still usable, but verify names and quotes before saving.</Text>
+          </Box>
+        )}
+        <Box bg="gray.50" borderRadius="10px" px={4} py={3}>
+          <HStack justify="space-between" align="flex-start" mb={2}>
+            <Text fontSize="10px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em">Summary</Text>
+            <Badge variant="subtle" colorScheme="blue" fontSize="10px">{suggestions.meetingType.replace(/_/g, ' ')}</Badge>
+          </HStack>
+          <Text fontSize="14px" lineHeight="1.65" color="gray.700">{suggestions.summary || 'No summary was extracted.'}</Text>
+        </Box>
+
+        {suggestions.signals?.length > 0 && (
+          <Box>
+            <Text fontSize="10px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb={2}>Signals</Text>
+            <VStack spacing={2} align="stretch">
+              {suggestions.signals.slice(0, 12).map((signal: any, idx: number) => (
+                <Box key={idx} border="1px solid" borderColor="gray.200" borderRadius="9px" px={3} py={2.5} bg="white">
+                  <HStack justify="space-between" align="flex-start">
+                    <Text fontSize="12px" fontWeight="600" color="gray.700">{signal.text || 'Signal'}</Text>
+                    <Badge variant="outline" fontSize="9px" colorScheme="gray">{String(signal.type || 'context').replace(/_/g, ' ')}</Badge>
+                  </HStack>
+                  {signal.evidence?.quote && <Text mt={1.5} fontSize="11px" color="gray.500" fontStyle="italic">“{signal.evidence.quote}”</Text>}
+                </Box>
+              ))}
+            </VStack>
+          </Box>
+        )}
+
+        {suggestions.openQuestions?.length > 0 && (
+          <Box>
+            <Text fontSize="10px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb={2}>Open questions</Text>
+            <VStack align="stretch" spacing={1}>
+              {suggestions.openQuestions.slice(0, 8).map((question: string, idx: number) => <Text key={idx} fontSize="12px" color="gray.600">• {question}</Text>)}
+            </VStack>
+          </Box>
+        )}
+
+        {(coverage || quality) && (
+          <HStack spacing={3} color="gray.500" fontSize="11px">
+            {coverage && <Text>Coverage {Math.round((coverage.score || 0) * 100)}%</Text>}
+            {quality && <Text>Transcript quality {Math.round(quality.score ?? 0)}%</Text>}
+            {coverage?.missing?.length > 0 && <Text title={coverage.missing.join(', ')}>Needs context</Text>}
+          </HStack>
+        )}
+      </VStack>
     );
   };
 
@@ -1590,7 +1747,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
             <FlowModalBody maxH="calc(80vh - 200px)">
               <VStack spacing={3} align="stretch" pb={16}>
                 {/* Summary bar */}
-                {activeTab !== 'transcript' && activeTab !== 'sorWrites' && (
+                {activeTab !== 'overview' && activeTab !== 'transcript' && activeTab !== 'sorWrites' && (
                   <Box bg="#f7fafc" borderRadius="8px" px={3} py={2}>
                     <Text fontSize="11px" color="gray.500">
                       AI extracted {tabCounts[activeTab]} item{tabCounts[activeTab] !== 1 ? 's' : ''} from this meeting.
@@ -1600,6 +1757,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                 )}
 
                 {/* Empty states */}
+                {activeTab === 'overview' && renderOverviewTab()}
                 {activeTab === 'actionItems' && actionItems.length === 0 && (
                   <Box textAlign="center" py={10}>
                     <Text color="gray.400" fontSize="sm">No action items extracted from this meeting.</Text>
@@ -1642,9 +1800,9 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                     leftIcon={<CheckIcon />}
                     onClick={handleApprove}
                     isLoading={isApproving}
-                    isDisabled={totalSelected === 0}
+                    isDisabled={false}
                   >
-                    Save {totalSelected > 0 ? `${totalSelected} Item${totalSelected !== 1 ? 's' : ''}` : ''}
+                    {totalSelected > 0 ? `Save ${totalSelected} Item${totalSelected !== 1 ? 's' : ''}` : 'Done'}
                   </Button>
                 </HStack>
               </HStack>

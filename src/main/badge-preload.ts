@@ -24,14 +24,18 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   getMediaPermissions: () => ipcRenderer.invoke('media:permissions'),
   requestMicrophonePermission: () => ipcRenderer.invoke('media:requestMicrophone'),
   openMediaSettings: (kind: 'microphone' | 'screen') => ipcRenderer.invoke('media:openSettings', kind),
-  startRecording: (title: string) => ipcRenderer.invoke('recording:start', title),
+  startRecording: (title: string, calendarEventId?: string, attendees?: string[]) =>
+    ipcRenderer.invoke('recording:start', title, calendarEventId, attendees),
   resizePill: (width: number, height?: number) => ipcRenderer.send('pill:resize', { width, height }),
-  showPillMenu: (payload: { mics: { id: string; label: string }[]; speakers: { id: string; label: string }[]; micOk?: boolean; spkOk?: boolean; recording: boolean; title?: string }) => {
+  showPillMenu: (payload: { mics: { id: string; label: string }[]; speakers: { id: string; label: string }[]; micOk?: boolean; spkOk?: boolean; recording: boolean; status?: string; title?: string; meetingId?: string }) => {
     ipcRenderer.send('pill:context-menu', payload);
   },
-  openInwise: () => ipcRenderer.send('pill:open-inwise'),
+  openInwise: (meetingId?: string) => ipcRenderer.send('pill:open-inwise', meetingId),
+  beginPillDrag: () => ipcRenderer.send('pill:drag-start'),
+  movePill: () => ipcRenderer.send('pill:drag-move'),
+  endPillDrag: () => ipcRenderer.send('pill:drag-end'),
   pillCancelled: () => ipcRenderer.send('pill:cancelled'),
-  notifyRecordingSilence: (payload: { title: string; silenceMs: number }) => {
+  notifyRecordingSilence: (payload: { title: string; silenceMs: number; autoStopped?: boolean }) => {
     ipcRenderer.send('recording:silence-check-in', payload);
   },
   respondRecordingSilence: (response: 'keep' | 'sound' | 'stop') => {
@@ -40,7 +44,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 });
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  sendAudio: (payload: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
+  sendAudio: (payload: { buffer: Buffer; title: string; calendarEventId?: string; attendees?: string[]; stereo?: boolean }) => {
     // Must be send(), not invoke(): main listens with ipcMain.on, and invoke only
     // routes to ipcMain.handle — the invoke pairing silently drops the audio.
     ipcRenderer.send('recording:audio-data', payload);

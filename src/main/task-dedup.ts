@@ -28,7 +28,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type MentionSourceType = 'meeting' | 'voice_note';
+export type MentionSourceType = 'meeting' | 'voice_note' | 'manual';
 
 /** One recorded mention of a task (US-002). */
 export interface TaskMention {
@@ -441,7 +441,7 @@ export interface ThreadEntry {
  */
 export function buildMentionThread(task: { taskMentions?: TaskMention[] | null }): ThreadEntry[] {
   const mentions = task?.taskMentions || [];
-  if (mentions.length < 2) return [];
+  if (mentions.length === 0) return [];
   return [...mentions]
     .sort((a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime())
     .map(m => ({
@@ -451,7 +451,7 @@ export function buildMentionThread(task: { taskMentions?: TaskMention[] | null }
       sourceTitle: m.sourceTitle || (m.sourceType === 'voice_note' ? 'Voice note' : 'Meeting'),
       excerpt: m.excerpt || '',
       occurredAt: m.occurredAt,
-      canSplit: !!m.mergedItem,
+      canSplit: mentions.length > 1 && !!m.mergedItem,
     }));
 }
 

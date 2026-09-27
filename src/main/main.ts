@@ -11,29 +11,32 @@ import { isSelf } from './self-identity';
 import { fuzzyNameScore, SAME_PERSON_THRESHOLD } from './fuzzy-name';
 import { log } from './logger';
 import { CalendarWatcher } from './calendar-watcher';
-import { transcribeAudio, setupWhisper } from './transcriber';
+import { transcribeAudio, transcribeAudioDetailed, setupWhisper } from './transcriber';
+import { analyzeWavChannels } from './audio-utils';
+import { assessTranscriptQuality, normalizeSpeakerLabels } from './transcription-quality';
 import { extractInsights, searchMeetings, detectContradictions, generateAgenda, suggestTaskFields, classifyVoiceMemo, VoiceMemoItem } from './extractor';
 import {
   initDatabase,
-  createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus,
+  createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus, reviewMeeting,
+  mergeMeetingAttendees,
   findRecentRecordingMeeting, appendMeetingTranscript,
-  getMeetings, getMeeting, deleteMeeting, getAllPastDecisions, getOverdueCommitments,
+  getMeetings, getMeeting, deleteMeeting, getAllPastDecisions,
   createMeetingFromTranscript,
   createVoiceMemo, createVoiceMemoTask,
   getTasks, createTask, updateTask, deleteTask,
   getSnoozedTasks, snoozeTask, bringBackTask,
   markLikelyDone, confirmLikelyDone, rejectLikelyDone,
   getPeople, getArchivedPeople, getPerson, addPerson, addTrackedPeople,
-  archivePerson, unarchivePerson, getSuggestedPeople, updatePersonProfile,
+  archivePerson, unarchivePerson, getSuggestedPeople, updatePersonProfile, renamePerson,
   dedupePeopleByName, dedupeCalendarSyncMeetings,
   getPersonMergeCandidates, mergePeople, markNotSamePerson,
-  getPersonAgendaContext, getMeetingAgendaContext,
+  getPersonAgendaContext, getMeetingAgendaContext, getRecurringMeetingAgendaContext,
   saveVoicePrint, getVoicePrints, getVoicePrint, deleteVoicePrint,
   getUserVoicePrint, getVoicePrintByName, getVoicePrintsWithEmbeddings,
   renameVoicePrint,
   syncCalendarEventsToDb,
   getAllTasksForDedup, getMeetingsById, appendTaskMention,
-  mergeTasksManual, undoSplitMention, resolvePendingDedup,
+  mergeTasksManual, undoSplitMention, resolvePendingDedup, resolveTaskCreationDedup,
   bumpTaskPriority, dismissTaskNudge,
 } from './database';
 import { decideMention, retrieveCandidates, classifyCandidates, buildMentionThread, providerModelLabel } from './task-dedup';
@@ -69,6 +72,7 @@ import {
 import { buildActionExecutionSummary, getActionExecution, initActionExecutionLog } from './action-execution-log';
 import { matchAllItems, semanticMatch } from './jira-matcher';
 import { scoreTasks } from './task-scorer';
+import { buildDailyBriefing } from './daily-briefing';
 import { computeVoiceEmbedding, identifySpeaker, SPEAKER_MATCH_THRESHOLD } from '@inwise/desktop-shared';
 import { createTray, updateTrayMenu, destroyTray, getTrayBounds } from './tray';
 import { sweepStaleTasks, getLastSweepResult } from './staleness-sweep';
@@ -101,7 +105,7 @@ import {
   validateToken,
   getSlackConnectionInfo,
   listChannels as slackListChannels,
-  postWiserNote,
+  postOllieNote,
 } from './slack-client';
 import { connectSlackWithOAuth } from './slack-oauth';
 import { normalizeSlackThread } from './slack-normalizer';
@@ -111,6 +115,7 @@ import { computePopupBounds } from './popup-position';
 import { installApplicationMenu } from './application-menu';
 import { getMediaPermissions, openMediaSettings, requestMicrophonePermission } from './media-permissions';
 import { createLoginItemRegistration, shouldStartHidden } from './login-item';
+import { startZoomPoller, stopZoomPoller, runZoomPollNow, onZoomTranscriptImported } from './zoom-poller';
 
 let mainWindow: BrowserWindow | null = null;
 let overlayWindow: BrowserWindow | null = null;
@@ -198,6 +203,25 @@ function openVoiceCapture(): void {
 
   const navigate = () => {
     if (!win.isDestroyed()) win.webContents.send('app:navigate', 'voice-capture');
+  };
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', () => setTimeout(navigate, 100));
+  } else {
+    navigate();
+  }
+}
+
+function showMeetingOverview(meetingId?: string): void {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+
+  positionPopupWindow(win);
+  win.show();
+  win.focus();
+
+  if (!meetingId) return;
+  const navigate = () => {
+    if (!win.isDestroyed()) win.webContents.send('meeting:open-details', { meetingId });
   };
   if (win.webContents.isLoading()) {
     win.webContents.once('did-finish-load', () => setTimeout(navigate, 100));
@@ -311,15 +335,35 @@ function createReviewWindow(meetingId: string, initialTab?: string): void {
 const PILL_WIDTH = 240;
 const PILL_HEIGHT = 72;
 
-function pillPosition(): { x: number; y: number } {
-  const cfg = getConfig();
+function clampPillPosition(x: number, y: number, width: number, height: number): { x: number; y: number } {
+  const display = screen.getDisplayNearestPoint({ x, y });
+  const wa = display.workArea;
+  const maxX = Math.max(wa.x, wa.x + wa.width - width);
+  const maxY = Math.max(wa.y, wa.y + wa.height - height);
   return {
-    x: typeof cfg.pillX === 'number' ? cfg.pillX : 20,
-    y: typeof cfg.pillY === 'number' ? cfg.pillY : 20,
+    x: Math.min(Math.max(Math.round(x), wa.x), maxX),
+    y: Math.min(Math.max(Math.round(y), wa.y), maxY),
   };
 }
 
+function pillPosition(): { x: number; y: number } {
+  const cfg = getConfig();
+  return clampPillPosition(
+    typeof cfg.pillX === 'number' ? cfg.pillX : 20,
+    typeof cfg.pillY === 'number' ? cfg.pillY : 20,
+    PILL_WIDTH,
+    PILL_HEIGHT,
+  );
+}
+
 let pillMoveTimer: NodeJS.Timeout | null = null;
+let activePillDrag: {
+  webContentsId: number;
+  startCursor: { x: number; y: number };
+  startWindow: { x: number; y: number };
+} | null = null;
+const closePillAfterAudio = new Set<number>();
+
 function trackPillPosition(win: BrowserWindow): void {
   // 'move' (not 'moved'): on Windows 'moved' only fires when a user drag ends,
   // so programmatic moves would never persist. Debounce absorbs the drag stream.
@@ -358,17 +402,20 @@ function createPillWindow(): BrowserWindow {
   return win;
 }
 
-function createOverlayWindow(title: string, calendarEventId?: string): void {
+function createOverlayWindow(title: string, calendarEventId?: string, attendees: string[] = []): void {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.webContents.send('recording:start', title, calendarEventId);
+    overlayWindow.webContents.send('recording:start', title, calendarEventId, attendees);
     return;
   }
-  overlayWindow = createPillWindow();
-  const win = overlayWindow;
-  overlayWindow.webContents.once('did-finish-load', () => {
-    overlayWindow?.webContents.send('recording:start', title, calendarEventId);
+  const win = createPillWindow();
+  const webContentsId = win.webContents.id;
+  overlayWindow = win;
+  win.webContents.once('did-finish-load', () => {
+    if (!win.isDestroyed()) win.webContents.send('recording:start', title, calendarEventId, attendees);
   });
   win.once('closed', () => {
+    closePillAfterAudio.delete(webContentsId);
+    if (activePillDrag?.webContentsId === webContentsId) activePillDrag = null;
     if (overlayWindow === win) overlayWindow = null;
     clearRecordingSilenceCheckIn();
   });
@@ -388,7 +435,7 @@ function createReminderBadge(title: string): void {
   setTimeout(() => { if (!win.isDestroyed()) win.close(); }, 30_000);
 }
 
-// ── Daily plan ("Wiser planned your day") ────────────────────────────────────
+// ── Daily plan ("Ollie planned your day") ────────────────────────────────────
 
 const DAILY_PLAN_WIDTH = 400;
 const DAILY_PLAN_HEIGHT = 660;
@@ -494,7 +541,7 @@ function applyAutostartDefault(): void {
 // them in a secondary slot so a new recording is never interrupted by an old
 // meeting's pipeline status.
 let activePipelineJobs = 0;
-function emitSecondary(msg: { jobId: string; title: string; state: 'transcribing' | 'processing' | 'done' | 'error'; message?: string }) {
+function emitSecondary(msg: { jobId: string; title: string; state: 'transcribing' | 'processing' | 'done' | 'error'; message?: string; meetingId?: string }) {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('pipeline:secondary', msg);
   }
@@ -558,6 +605,11 @@ async function replaceSpeakerLabels(transcript: string, attendees: string[]): Pr
     // Group â€” try to identify via voice prints, otherwise use "Others"
     // For now, label as the group. MFCC per-segment matching is a future enhancement.
     speakerMap['1'] = 'Others';
+  } else {
+    // Never leave a real second channel looking like the user. The attendee
+    // list may be unavailable for ad-hoc recordings, so use an honest generic
+    // label that can be corrected later without asking for an audio sample.
+    speakerMap['1'] = 'Other speaker';
   }
 
   if (Object.keys(speakerMap).length === 0) {
@@ -567,14 +619,7 @@ async function replaceSpeakerLabels(transcript: string, attendees: string[]): Pr
   // Replace all speaker label patterns
   // Whisper.cpp -di outputs: [SPEAKER_0], [SPEAKER_1], etc.
   // Also handle: (SPEAKER_0), SPEAKER_0:, [SPEAKER 0], speaker 0, etc.
-  const replaced = transcript.replace(
-    /[\[(]?SPEAKER[_\s]?(\d+)[\])]?:?/gi,
-    (match, num) => {
-      const name = speakerMap[num];
-      if (name) return `${name}:`;
-      return match;
-    }
-  );
+  const replaced = normalizeSpeakerLabels(transcript, userName || '', otherAttendees);
 
   const replacementCount = (transcript.match(/SPEAKER[_\s]?\d+/gi) || []).length;
   if (replacementCount > 0) {
@@ -720,36 +765,102 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
         date: new Date().toISOString(),
         duration: durationSec,
         calendarEventId,
+        seriesUid: calendarEventId
+          ? calendarWatcher.getUpcomingEvents().find(event => event.id === calendarEventId)?.seriesUid
+          : undefined,
         source: 'desktop_recording',
         attendees: attendees || [],
       });
   log('info', merging ? 'pipeline:meeting-merged' : 'pipeline:meeting-created', meetingId);
+  if (merging) await mergeMeetingAttendees(meetingId, attendees || []);
   await updateMeetingStatus(meetingId, 'transcribing');
   mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
 
   try {
-    let transcript = await transcribeAudio(audioPath, stereo);
+    let effectiveStereo = false;
+    try {
+      const channels = analyzeWavChannels(audioPath);
+      effectiveStereo = !!stereo && channels.usableStereo;
+      log('info', 'pipeline:audio-channels', JSON.stringify({
+        requestedStereo: !!stereo,
+        effectiveStereo,
+        channels: channels.channels,
+        rms: channels.rms.map(value => Number(value.toFixed(6))),
+        correlation: channels.correlation === null ? null : Number(channels.correlation.toFixed(6)),
+        reason: channels.reason,
+      }));
+    } catch (channelErr: any) {
+      log('error', 'pipeline:audio-channel-check-failed', channelErr.message);
+    }
+
+    const config = getConfig();
+    const transcription = await transcribeAudioDetailed(audioPath, effectiveStereo, {
+      meetingTitle,
+      attendees: attendees || [],
+      userName: config.userName,
+      monoDiarization: !effectiveStereo,
+    });
+    let transcript = transcription.transcript;
     log('info', 'pipeline:transcribed', `length=${transcript.length} chars`);
 
     // Replace speaker labels with real names
-    if (stereo) {
+    if (effectiveStereo) {
       transcript = await replaceSpeakerLabels(transcript, attendees || []);
     }
 
+    const transcriptQuality = assessTranscriptQuality(transcript);
+    log(transcriptQuality.ok ? 'info' : 'warn', 'pipeline:transcript-quality', JSON.stringify({
+      ...transcriptQuality,
+      ...transcription.metadata,
+    }));
+
     if (merging) {
-      await appendMeetingTranscript(meetingId, transcript, durationSec);
+      await appendMeetingTranscript(meetingId, transcript, durationSec, transcriptQuality);
     } else {
-      await updateMeetingTranscript(meetingId, transcript, durationSec);
+      await updateMeetingTranscript(meetingId, transcript, durationSec, transcriptQuality);
     }
 
     // Always notify renderer so meeting appears even if insights fail
     mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
 
+    // Preserve the transcript for review, but never let a known-bad decode feed
+    // summaries, task extraction, Jira, or completion inference.
+    if (!transcriptQuality.ok) {
+      await updateMeetingStatus(meetingId, 'needs_review');
+      mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+      emitSecondary({
+        jobId: job,
+        title: meetingTitle,
+        state: 'done',
+        message: 'Transcript needs review',
+        meetingId,
+      });
+      mainWindow?.webContents.send('recording:status', { status: 'done' });
+      showMeetingOverview(meetingId);
+      log('warn', 'pipeline:needs-review', `meeting=${meetingId} reasons=${transcriptQuality.reasons.join('; ')}`);
+      return true;
+    }
+
     emitSecondary({ jobId: job, title: meetingTitle, state: 'processing' });
     try {
       // When merging segments, re-extract insights from the combined transcript
-      const fullTranscript = merging ? ((await getMeeting(meetingId))?.transcript || transcript) : transcript;
-      const insights = await extractInsights(fullTranscript);
+      const fullMeeting: any = await getMeeting(meetingId);
+      const fullTranscript = merging ? (fullMeeting?.transcript || transcript) : transcript;
+      const insights = await extractInsights(fullTranscript, {
+        meetingTitle,
+        meetingDate: fullMeeting?.date || new Date().toISOString(),
+        attendees: attendees || [],
+        userName: config.userName,
+      });
+      insights.quality = {
+        ok: insights.quality?.ok ?? true,
+        score: insights.quality?.score ?? 100,
+        reasons: insights.quality?.reasons ?? [],
+        ...(insights.quality || {}),
+        transcriptLength: fullTranscript.length,
+        stereo: !!effectiveStereo,
+      };
+      if (insights.quality?.ok === false) insights.analysisStatus = 'needs_review';
 
       // Detect contradictions against past decisions
       try {
@@ -970,7 +1081,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
     }
 
     // Auto-enroll voices from stereo recordings
-    if (stereo && attendees && attendees.length > 0) {
+    if (effectiveStereo && attendees && attendees.length > 0) {
       try {
         await autoEnrollVoices(audioPath, attendees);
       } catch (enrollErr: any) {
@@ -1010,8 +1121,9 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       log('error', 'pipeline:likely-done-failed', inferErr.message);
     }
 
-    emitSecondary({ jobId: job, title: meetingTitle, state: 'done' });
+    emitSecondary({ jobId: job, title: meetingTitle, state: 'done', meetingId });
     mainWindow?.webContents.send('recording:status', { status: 'done' });
+    showMeetingOverview(meetingId);
     log('info', 'pipeline:done', meetingId);
   } catch (err: any) {
     log('error', 'pipeline:failed', err.message);
@@ -1649,7 +1761,10 @@ ipcMain.handle('calendar:active-event', () => {
 ipcMain.handle('db:getMeetings', async () => getMeetings());
 ipcMain.handle('db:getMeeting', async (_e, id) => getMeeting(id));
 ipcMain.handle('db:deleteMeeting', async (_e, id) => { await deleteMeeting(id); return true; });
-ipcMain.handle('db:reviewMeeting', async (_e, id) => { await updateMeetingStatus(id, 'reviewed'); return true; });
+ipcMain.handle('db:reviewMeeting', async (_e, id, reviewedInsights) => {
+  await reviewMeeting(id, reviewedInsights);
+  return true;
+});
 
 ipcMain.handle('db:createMeetingFromTranscript', async (_e, data) => {
   const meeting = await createMeetingFromTranscript(data);
@@ -1704,6 +1819,11 @@ ipcMain.handle('db:getTasks', async () => {
   }));
 });
 ipcMain.handle('db:createTask', async (_e, data) => createTask(data));
+ipcMain.handle('dedup:resolveCreate', async (_e, data, suggestion, action: 'same' | 'new' | 'reopen') => {
+  const result = await resolveTaskCreationDedup(data, suggestion, action);
+  mainWindow?.webContents.send('tasks:mentions-updated');
+  return result;
+});
 ipcMain.handle('db:updateTask', async (_e, id, updates) => {
   const result = await updateTask(id, updates);
 
@@ -1871,6 +1991,7 @@ ipcMain.handle('db:addTrackedPeople', async (_e, names) => addTrackedPeople(name
 ipcMain.handle('db:archivePerson', async (_e, id) => { await archivePerson(id); return true; });
 ipcMain.handle('db:unarchivePerson', async (_e, id) => { await unarchivePerson(id); return true; });
 ipcMain.handle('db:getSuggestedPeople', async () => getSuggestedPeople());
+ipcMain.handle('people:rename', async (_e, id: string, name: string) => renamePerson(id, name));
 
 // AI features
 ipcMain.handle('ai:generatePersonInsights', async (_e, personId: string) => {
@@ -2047,41 +2168,38 @@ ipcMain.handle('ai:suggestTaskFields', async (_e, data: { title: string; modalTy
 });
 
 // Briefing + Task Scoring
-ipcMain.handle('briefing:get', async () => {
+ipcMain.handle('briefing:get', async (_event, requestedDateKey?: string) => {
   try {
     const config = getConfig();
     const name = config.userName?.trim() || '';
 
-    // Score all tasks
     const tasks = await getTasks();
     const meetings = await getMeetings();
     const people = await getPeople();
     const scored = scoreTasks(tasks, meetings, people);
-
-    // Top 3 non-completed tasks
-    const topTasks = scored
-      .filter(s => {
-        const task = tasks.find((t: any) => t._id === s._id);
-        return task && task.status !== 'completed';
-      })
-      .slice(0, 3)
-      .map(s => {
-        const task = tasks.find((t: any) => t._id === s._id);
-        return { ...task, priorityScore: s.score, priorityReasoning: s.reasoning };
-      });
-
-    // Overdue commitments
-    const overdueCommitments = await getOverdueCommitments();
-
-    return {
-      greeting: name ? `Hi, ${name}` : 'Hi',
-      topTasks,
-      overdueCommitments: overdueCommitments.slice(0, 5),
-      totalTasks: tasks.filter((t: any) => t.status !== 'completed').length,
-    };
+    return buildDailyBriefing({
+      requestedDateKey,
+      now: new Date(),
+      name,
+      tasks,
+      meetings,
+      calendarEvents: calendarWatcher.getUpcomingEvents(),
+      scoredTasks: scored,
+    });
   } catch (e: any) {
     log('error', 'briefing:get', e.message);
-    return { greeting: 'Hi', topTasks: [], overdueCommitments: [], totalTasks: 0 };
+    return {
+      dateKey: requestedDateKey,
+      title: 'Daily brief',
+      greeting: 'Hi',
+      topTasks: [],
+      overdueCommitments: [],
+      totalTasks: 0,
+      meetingCount: 0,
+      actionItemCount: 0,
+      decisionCount: 0,
+      blockerCount: 0,
+    };
   }
 });
 
@@ -2312,7 +2430,11 @@ ipcMain.handle('zoom:saveCredentials', async (_e, clientId: string, clientSecret
   catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('zoom:connect', async () => {
-  try { return await connectZoom(); }
+  try {
+    const result = await connectZoom();
+    if (result.ok) runZoomPollNow().catch(e => log('error', 'zoom:poller', e.message));
+    return result;
+  }
   catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('zoom:disconnect', async () => {
@@ -2610,7 +2732,7 @@ let adHocAttendees: string[] = [];
 ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string, attendees?: string[]) => {
   clearRecordingSilenceCheckIn('reset');
   adHocAttendees = Array.isArray(attendees) ? attendees.filter(Boolean) : [];
-  createOverlayWindow(title, calendarEventId);
+  createOverlayWindow(title, calendarEventId, adHocAttendees);
   updateTrayMenu(mainWindow!, true);
   isRecordingActive = true;
   lastMicFailureNotifiedAt = 0;
@@ -2638,12 +2760,52 @@ ipcMain.on('pill:resize', (e, { width, height }: { width: number; height?: numbe
   if (!win || win.isDestroyed()) return;
   const [x, y] = win.getPosition();
   const bounds = win.getBounds();
+  const nextWidth = Math.max(120, Math.round(width) || bounds.width);
+  const nextHeight = Math.max(48, Math.round(height ?? bounds.height));
+  const nextPosition = clampPillPosition(x, y, nextWidth, nextHeight);
   win.setBounds({
-    x,
-    y,
-    width: Math.max(120, Math.round(width) || bounds.width),
-    height: Math.max(48, Math.round(height ?? bounds.height)),
+    ...nextPosition,
+    width: nextWidth,
+    height: nextHeight,
   });
+});
+
+ipcMain.on('pill:drag-start', (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed()) return;
+  const cursor = screen.getCursorScreenPoint();
+  const [x, y] = win.getPosition();
+  activePillDrag = {
+    webContentsId: e.sender.id,
+    startCursor: cursor,
+    startWindow: { x, y },
+  };
+});
+
+ipcMain.on('pill:drag-move', (e) => {
+  const drag = activePillDrag;
+  if (!drag || drag.webContentsId !== e.sender.id) return;
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed()) return;
+  const cursor = screen.getCursorScreenPoint();
+  const bounds = win.getBounds();
+  const next = clampPillPosition(
+    drag.startWindow.x + cursor.x - drag.startCursor.x,
+    drag.startWindow.y + cursor.y - drag.startCursor.y,
+    bounds.width,
+    bounds.height,
+  );
+  win.setPosition(next.x, next.y);
+});
+
+ipcMain.on('pill:drag-end', (e) => {
+  const drag = activePillDrag;
+  if (!drag || drag.webContentsId !== e.sender.id) return;
+  activePillDrag = null;
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed()) return;
+  const [x, y] = win.getPosition();
+  setConfig({ pillX: x, pillY: y });
 });
 
 // User clicked the pill during preflight/countdown — abort before recording starts.
@@ -2670,7 +2832,9 @@ ipcMain.on('pill:context-menu', (e, payload: {
   micOk?: boolean;
   spkOk?: boolean;
   recording: boolean;
+  status?: string;
   title?: string;
+  meetingId?: string;
 }) => {
   const win = BrowserWindow.fromWebContents(e.sender);
   const cfg = getConfig();
@@ -2698,7 +2862,7 @@ ipcMain.on('pill:context-menu', (e, payload: {
     { type: 'separator' },
     {
       label: 'Open Inwise',
-      click: () => { mainWindow?.show(); mainWindow?.focus(); },
+      click: () => showMeetingOverview(payload.meetingId),
     },
     {
       label: 'Microphone',
@@ -2732,15 +2896,33 @@ ipcMain.on('pill:context-menu', (e, payload: {
         click: () => { win?.webContents.send('recording:stop-request'); },
       },
     ] : []),
+    { type: 'separator' },
+    {
+      label: 'Close',
+      click: () => {
+        if (!win || win.isDestroyed()) return;
+        if (payload.recording || (payload.status === 'saving' && isRecordingActive)) {
+          closePillAfterAudio.add(win.webContents.id);
+          if (payload.recording) win.webContents.send('recording:stop-request');
+          return;
+        }
+        if (payload.status === 'preflight' || payload.status === 'countdown' || payload.status === 'error') {
+          isRecordingActive = false;
+          lastRecordingSilenceNotifiedAt = 0;
+          if (mainWindow && !mainWindow.isDestroyed()) updateTrayMenu(mainWindow, false);
+          mainWindow?.webContents.send('recording:status', { status: 'done' });
+        }
+        win.close();
+      },
+    },
   ];
 
   Menu.buildFromTemplate(template).popup({ window: win ?? undefined });
 });
 
 // "Saved — open Inwise" click on the pill after a transcription lands.
-ipcMain.on('pill:open-inwise', () => {
-  mainWindow?.show();
-  mainWindow?.focus();
+ipcMain.on('pill:open-inwise', (_e, meetingId?: string) => {
+  showMeetingOverview(meetingId);
 });
 
 ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
@@ -2762,8 +2944,8 @@ ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
   if (prev?.systemAudioOk === true && next.systemAudioOk === false && now - lastSysAudioFailureNotifiedAt > AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS) {
     lastSysAudioFailureNotifiedAt = now;
     new Notification({
-      title: 'System audio lost',
-      body: next.message || 'System audio lost â€” only your mic will be transcribed for the rest of this meeting.',
+      title: 'Other speaker audio unavailable',
+      body: 'Inwise is retrying. Open the recorder to retry audio or continue with mic only.',
     }).show();
   }
 });
@@ -2895,18 +3077,19 @@ ipcMain.handle('dailyPlan:get', async () => {
     const events = selectTodaysMeetings(calendarWatcher.getUpcomingEvents(), now);
     const [tasks, meetings, people] = await Promise.all([getTasks(), getMeetings(), getPeople()]);
 
-    // Agendas are only drafted when local history gives the model something
-    // real to draw on (shared attendee or recurring title) — max 3 AI calls.
+    // Daily-brief agendas are only drafted for a true recurring calendar
+    // series with substantive local history — max 3 AI calls.
     const agendaTargets = config.apiKey
-      ? events.filter((ev) => ev.attendees.length > 0 && hasAgendaHistory(meetings, ev)).slice(0, 3)
+      ? events.filter((ev) => hasAgendaHistory(meetings, ev)).slice(0, 3)
       : [];
-    const agendaById = new Map<string, string[]>();
+    const agendaById = new Map<string, { items: string[]; basis: string | null }>();
     await Promise.all(agendaTargets.map(async (ev) => {
       try {
-        const context = await getMeetingAgendaContext(ev.title, ev.attendees);
-        agendaById.set(ev.id, await generateAgenda(context));
+        const agendaEvent = { ...ev, attendees: ev.attendees.filter(attendee => !isSelf(attendee)) };
+        const { context, basis } = await getRecurringMeetingAgendaContext(agendaEvent);
+        agendaById.set(ev.id, { items: await generateAgenda(context), basis });
       } catch {
-        agendaById.set(ev.id, []);
+        agendaById.set(ev.id, { items: [], basis: null });
       }
     }));
 
@@ -2937,7 +3120,8 @@ ipcMain.handle('dailyPlan:get', async () => {
         startTime: ev.startTime.getTime(),
         endTime: ev.endTime.getTime(),
         attendees: ev.attendees,
-        agenda: (agendaById.get(ev.id) || []).slice(0, 4),
+        agenda: (agendaById.get(ev.id)?.items || []).slice(0, 4),
+        agendaBasis: agendaById.get(ev.id)?.basis || null,
       })),
       tasks: topTasks,
       hasApiKey: !!config.apiKey,
@@ -2974,25 +3158,32 @@ ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; messag
 // windows, VAD splits). Hold buffers briefly and stitch them into one WAV so a
 // single meeting is processed once instead of as fragments.
 const AUDIO_COALESCE_MS = 10_000;
-const pendingAudio = new Map<string, { buffers: Buffer[]; title: string; calendarEventId?: string; stereo?: boolean; timer: NodeJS.Timeout }>();
+const pendingAudio = new Map<string, { buffers: Buffer[]; title: string; calendarEventId?: string; attendees: string[]; stereo?: boolean; timer: NodeJS.Timeout }>();
 
-ipcMain.on('recording:audio-data', (_e, { buffer, title, calendarEventId, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; stereo?: boolean }) => {
+ipcMain.on('recording:audio-data', (e, { buffer, title, calendarEventId, attendees, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; attendees?: string[]; stereo?: boolean }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   clearRecordingSilenceCheckIn('reset');
   isRecordingActive = false;
   lastRecordingSilenceNotifiedAt = 0;
   mainWindow?.webContents.send('recording:status', { status: 'processing', title });
+  if (closePillAfterAudio.delete(e.sender.id)) {
+    const senderWindow = BrowserWindow.fromWebContents(e.sender);
+    setImmediate(() => {
+      if (senderWindow && !senderWindow.isDestroyed()) senderWindow.close();
+    });
+  }
   const key = `${title}|${stereo ? 1 : 0}`;
   const entry = pendingAudio.get(key);
   if (entry) {
     entry.buffers.push(Buffer.from(buffer));
     if (calendarEventId && !entry.calendarEventId) entry.calendarEventId = calendarEventId;
+    entry.attendees = [...new Set([...entry.attendees, ...(attendees || [])].filter(Boolean))];
     entry.timer.refresh();
     log('info', 'audio-data:coalesced', `title="${title}" segments=${entry.buffers.length}`);
     return;
   }
   const timer = setTimeout(() => { void flushPendingAudio(key); }, AUDIO_COALESCE_MS);
-  pendingAudio.set(key, { buffers: [Buffer.from(buffer)], title, calendarEventId, stereo, timer });
+  pendingAudio.set(key, { buffers: [Buffer.from(buffer)], title, calendarEventId, attendees: (attendees || []).filter(Boolean), stereo, timer });
 });
 
 // Transcriptions run strictly one at a time: whisper is CPU-heavy and two
@@ -3019,7 +3210,7 @@ async function flushPendingAudio(key: string): Promise<void> {
     const calendarAttendees = entry.calendarEventId
       ? calendarWatcher.getUpcomingEvents().find((e: any) => e.id === entry.calendarEventId)?.attendees || []
       : [];
-    const attendees = [...new Set([...calendarAttendees, ...adHocAttendees])];
+    const attendees = [...new Set([...calendarAttendees, ...entry.attendees, ...adHocAttendees])];
     adHocAttendees = [];
 
     const jobId = path.basename(tmpPath);
@@ -3101,7 +3292,10 @@ calendarWatcher.on('meeting-starting', (event: MeetingEvent) => {
 
 function startMeetingRecording(event: MeetingEvent): void {
   clearRecordingSilenceCheckIn('reset');
-  createOverlayWindow(event.title, event.id);
+  // A prior ad-hoc sheet must never leak its participant list into a calendar
+  // recording that starts before the coalescing window drains.
+  adHocAttendees = [];
+  createOverlayWindow(event.title, event.id, event.attendees || []);
   updateTrayMenu(mainWindow!, true);
   isRecordingActive = true;
   lastMicFailureNotifiedAt = 0;
@@ -3418,6 +3612,20 @@ app.whenReady().then(() => {
     });
   }
 
+  // Import new Zoom cloud transcripts directly to the local database. The
+  // listener keeps the renderer and user informed without involving a server.
+  onZoomTranscriptImported(async (recording, meetingId) => {
+    const meeting = await getMeeting(meetingId);
+    mainWindow?.webContents.send('meeting:new', meeting);
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'Zoom transcript imported',
+        body: `“${recording.title}” is ready in Inwise.`,
+      }).show();
+    }
+  });
+  setTimeout(() => startZoomPoller(), 15_000);
+
   // One-time scan for SoR writes stuck in 'pending' / 'pending-approval' / 'retrying'
   // for more than 24 hours â€” these indicate an interrupted/crashed prior session.
   setTimeout(async () => {
@@ -3515,12 +3723,12 @@ ipcMain.handle('slack:listWriteChannels', async () => {
   }
 });
 
-ipcMain.handle('slack:postWiserNote', async (_e, channelId: string, note: string) => {
+ipcMain.handle('slack:postOllieNote', async (_e, channelId: string, note: string) => {
   try {
     if (typeof channelId !== 'string' || typeof note !== 'string') {
       return { ok: false, error: 'Invalid Slack note request' };
     }
-    await postWiserNote(channelId, note);
+    await postOllieNote(channelId, note);
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e.message };
@@ -3561,6 +3769,7 @@ app.on('before-quit', () => {
   calendarWatcher.stop();
   stopSlackPoller();
   void stopMcpServer();
+  stopZoomPoller();
   destroyTray();
   globalShortcut.unregisterAll();
   mainWindow?.removeAllListeners('close');

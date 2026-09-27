@@ -1,5 +1,5 @@
 /**
- * Pure compute for the once-a-day "Wiser planned your day" popup.
+ * Pure compute for the once-a-day "Ollie planned your day" popup.
  * Kept free of electron imports so it can be unit-tested (same pattern as
  * welcome-back.ts / live-meeting-banner.ts).
  *
@@ -49,6 +49,8 @@ export interface DailyPlanEvent {
   startTime: Date;
   endTime: Date;
   attendees: string[];
+  /** Bare calendar-series UID. Null means this is a one-time event. */
+  seriesUid: string | null;
 }
 
 /** Today's meetings that haven't ended yet (includes one currently in progress), soonest first. */
@@ -63,47 +65,92 @@ export function selectTodaysMeetings(
     .slice(0, cap);
 }
 
-interface PastMeetingLike {
+export interface AgendaHistoryMeeting {
+  _id?: string;
   title?: string;
+  date?: string;
   attendees?: string[];
+  seriesUid?: string | null;
+  calendarEventId?: string | null;
+  insights?: {
+    summary?: string;
+    actionItems?: unknown[];
+    decisions?: unknown[];
+    commitments?: unknown[];
+    blockers?: unknown[];
+  } | null;
 }
 
-function norm(s: string): string {
-  return s.trim().toLowerCase();
+function seriesUidOf(meeting: { seriesUid?: string | null; calendarEventId?: string | null }): string | null {
+  if (meeting.seriesUid) return String(meeting.seriesUid);
+
+  // Older recording rows predate the dedicated field but use
+  // `<seriesUid>_<occurrenceEpochMs>` as their calendar event id.
+  const composite = meeting.calendarEventId;
+  if (!composite) return null;
+  const separator = composite.lastIndexOf('_');
+  if (separator <= 0 || !/^\d{10,}$/.test(composite.slice(separator + 1))) return null;
+  return composite.slice(0, separator);
+}
+
+export function hasUsableAgendaEvidence(meeting: AgendaHistoryMeeting): boolean {
+  const insights = meeting.insights;
+  if (!insights) return false;
+  return [insights.actionItems, insights.decisions, insights.commitments, insights.blockers]
+    .some((items) => Array.isArray(items) && items.some((item: any) => {
+      if (typeof item === 'string') return item.trim().length > 0;
+      return typeof item?.text === 'string' && item.text.trim().length > 0;
+    }));
 }
 
 /**
- * "Can we reasonably pre-fill an agenda?" — only when local history gives the
- * LLM something real to work from: a past meeting sharing an attendee, or a
- * past meeting with a matching title (recurring meeting). Without this, the
- * agenda prompt falls back to generic filler, which we'd rather not show.
+ * Select substantive, earlier recordings from this exact recurring calendar
+ * series. Filtering happens before the cap so low-signal recent recordings do
+ * not hide an older meeting that contains useful follow-up material.
  */
-export function hasAgendaHistory(pastMeetings: PastMeetingLike[], event: { title: string; attendees: string[] }): boolean {
-  const evTitle = norm(event.title);
-  const evAttendees = event.attendees.map(norm).filter((a) => a.length > 2);
+export function selectAgendaHistory(
+  pastMeetings: AgendaHistoryMeeting[],
+  event: Pick<DailyPlanEvent, 'seriesUid' | 'startTime'>,
+  cap = 3,
+): AgendaHistoryMeeting[] {
+  if (!event.seriesUid) return [];
+  const eventStart = event.startTime.getTime();
 
-  for (const m of pastMeetings) {
-    if (m.title && evTitle.length > 3) {
-      const mt = norm(m.title);
-      if (mt === evTitle || mt.includes(evTitle) || evTitle.includes(mt)) return true;
-    }
-    for (const raw of m.attendees ?? []) {
-      const a = norm(raw);
-      if (a.length <= 2) continue;
-      for (const b of evAttendees) {
-        if (a === b || a.includes(b) || b.includes(a)) return true;
-      }
-    }
+  return pastMeetings
+    .filter((meeting) => {
+      if (seriesUidOf(meeting) !== event.seriesUid || !hasUsableAgendaEvidence(meeting)) return false;
+      const meetingTime = meeting.date ? new Date(meeting.date).getTime() : Number.NaN;
+      return Number.isFinite(meetingTime) && meetingTime < eventStart;
+    })
+    .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+    .slice(0, cap);
+}
+
+/** Only recurring events with substantive history may trigger an AI agenda. */
+export function hasAgendaHistory(
+  pastMeetings: AgendaHistoryMeeting[],
+  event: Pick<DailyPlanEvent, 'seriesUid' | 'startTime'>,
+): boolean {
+  return selectAgendaHistory(pastMeetings, event, 1).length > 0;
+}
+
+export function buildAgendaBasis(history: AgendaHistoryMeeting[]): string | null {
+  if (history.length === 0) return null;
+  const dates = history.map((meeting) =>
+    new Date(meeting.date || 0).toLocaleDateString([], { month: 'short', day: 'numeric' })
+  );
+  if (history.length === 1) {
+    return `Based on ${dates[0]}: ${history[0].title || 'an earlier meeting in this series'}`;
   }
-  return false;
+  return `Based on ${history.length} earlier meetings in this calendar series: ${dates.join(', ')}`;
 }
 
 const GREETING_SUBS = [
-  'Wiser was up early planning your day. Here it is.',
-  'Wiser lined everything up while you were away. Coffee first, then this.',
-  'Your day, already sorted. Wiser took care of the thinking.',
-  'Wiser mapped out today so you can just start.',
-  'All set — Wiser did the morning shuffle for you.',
+  'Ollie was up early planning your day. Here it is.',
+  'Ollie lined everything up while you were away. Coffee first, then this.',
+  'Your day, already sorted. Ollie took care of the thinking.',
+  'Ollie mapped out today so you can just start.',
+  'All set — Ollie did the morning shuffle for you.',
 ];
 
 export function buildGreeting(now: Date, userName: string): { title: string; sub: string } {

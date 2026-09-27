@@ -15,7 +15,7 @@ interface AiButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 export const AiButton = forwardRef<HTMLButtonElement, AiButtonProps>(function AiButton(
   {
     busy = false,
-    busyLabel = 'Wiser is thinking…',
+    busyLabel = 'Ollie is thinking…',
     tone = 'light',
     size = 'md',
     trailing,

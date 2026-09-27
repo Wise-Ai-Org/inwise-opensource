@@ -275,8 +275,9 @@ async function run(): Promise<void> {
     assert.deepEqual(thread.map(e => e.excerpt), ['first mention', 'second mention', 'third mention']);
     assert.deepEqual(thread.map(e => e.canSplit), [false, true, false], 'only merged mentions offer a split');
 
-    // The common case keeps today's chrome exactly
-    assert.deepEqual(buildMentionThread({ taskMentions: [mentions[1]] }), [], 'one mention renders no thread');
+    const single = buildMentionThread({ taskMentions: [mentions[1]] });
+    assert.equal(single.length, 1, 'one mention renders its provenance');
+    assert.equal(single[0].canSplit, false, 'a single mention cannot be split');
     assert.deepEqual(buildMentionThread({ taskMentions: [] }), []);
     assert.deepEqual(buildMentionThread({}), []);
   }

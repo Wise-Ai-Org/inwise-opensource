@@ -66,6 +66,10 @@ function getAgendaFor(title: string): string[] {
 const DAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
+function localDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 // ── SoR receipts types + helpers (US-005) ─────────────────────────────────
 // 4th surface duplicating this pattern (TranscriptReviewModal, Settings,
 // TaskDetailSidebar are the others). Extraction into components/sor/ left for a
@@ -832,6 +836,9 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
   const [loadingInsightsFor, setLoadingInsightsFor] = useState<string | null>(null);
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [briefing, setBriefing] = useState<any>(null);
+  const [briefingLoading, setBriefingLoading] = useState(true);
+  const [briefingError, setBriefingError] = useState(false);
+  const [briefingRevision, setBriefingRevision] = useState(0);
   const [briefingDismissed, setBriefingDismissed] = useState(false);
   const [jiraConnected, setJiraConnected] = useState(false);
   const [jiraMappingMeeting, setJiraMappingMeeting] = useState<{ id: string; title: string; actionItems: any[] } | null>(null);
@@ -840,6 +847,7 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
 
   const todayStart = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
   const [selectedDate, setSelectedDate] = useState<Date>(todayStart);
+  const selectedDateKey = useMemo(() => localDateKey(selectedDate), [selectedDate]);
   const [calMonth, setCalMonth] = useState<Date>(new Date());
 
   const toast = useToast();
@@ -914,15 +922,28 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
 
   useEffect(() => { fetchMeetings(); }, [fetchMeetings]);
 
-  // Fetch morning briefing + Jira status on mount
+  // Fetch Jira status on mount
   useEffect(() => {
-    api.getBriefing?.().then((b: any) => {
-      if (b) setBriefing(b);
-    }).catch(() => {});
     api.jiraStatus?.().then((s: any) => {
       setJiraConnected(!!s?.connected);
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBriefing(null);
+    setBriefingError(false);
+    setBriefingLoading(true);
+    setBriefingDismissed(false);
+    api.getBriefing?.(selectedDateKey).then((next: any) => {
+      if (!cancelled) setBriefing(next || null);
+    }).catch(() => {
+      if (!cancelled) setBriefingError(true);
+    }).finally(() => {
+      if (!cancelled) setBriefingLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [selectedDateKey, briefingRevision]);
 
   // Listen for new meetings recorded
   useEffect(() => {
@@ -968,7 +989,7 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
     let latestJiraData: any = null;
 
     const onReprioritized = (scored: any[]) => {
-      api.getBriefing?.().then((b: any) => { if (b) setBriefing(b); setBriefingDismissed(false); });
+      setBriefingRevision(revision => revision + 1);
       queueUpdate(`${scored.length} tasks rescored`);
     };
     const onJiraAutoSynced = (data: any) => {
@@ -1446,18 +1467,32 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
       </Flex>
 
       {/* ── Morning Briefing ── */}
-      {briefing && !briefingDismissed && (briefing.topTasks?.length > 0 || briefing.overdueCommitments?.length > 0) && (
+      {!briefingDismissed && (
         <Box mb={5} p={4} bg="white" borderRadius="lg" border="1px solid" borderColor={borderColor} position="relative">
           <IconButton
             aria-label="Dismiss briefing" icon={<CloseIcon />} size="xs" variant="ghost"
             position="absolute" top={2} right={2} onClick={() => setBriefingDismissed(true)}
           />
-          <Text fontSize="lg" fontWeight="bold" color="gray.800" mb={3}>{briefing.greeting}</Text>
+          <Text fontSize="lg" fontWeight="bold" color="gray.800" mb={2}>
+            {briefing?.title || `${formatSelectedDate(selectedDate)} brief`}
+          </Text>
+          <Text fontSize="xs" color={mutedText} mb={(briefing?.topTasks?.length || briefing?.overdueCommitments?.length) ? 3 : 0}>
+            {briefingLoading
+              ? 'Loading brief…'
+              : briefingError
+                ? "Couldn't load this day's brief."
+                : [
+                    briefing?.meetingCount ? `${briefing.meetingCount} meeting${briefing.meetingCount === 1 ? '' : 's'}` : null,
+                    briefing?.actionItemCount ? `${briefing.actionItemCount} action item${briefing.actionItemCount === 1 ? '' : 's'}` : null,
+                    briefing?.decisionCount ? `${briefing.decisionCount} decision${briefing.decisionCount === 1 ? '' : 's'}` : null,
+                    briefing?.blockerCount ? `${briefing.blockerCount} blocker${briefing.blockerCount === 1 ? '' : 's'}` : null,
+                  ].filter(Boolean).join(' · ') || 'Nothing scheduled or due for this day.'}
+          </Text>
 
-          {briefing.topTasks?.length > 0 && (
+          {briefing?.topTasks?.length > 0 && (
             <Box mb={briefing.overdueCommitments?.length > 0 ? 3 : 0}>
               <Text fontSize="xs" fontWeight="semibold" color={sectionHeading} textTransform="uppercase" letterSpacing="wide" mb={2}>
-                Top Priorities ({briefing.totalTasks} total open)
+                {briefing.taskLabel || 'Top priorities'} ({briefing.totalTasks} {briefing.taskLabel === 'Tasks due' ? 'due' : 'total open'})
               </Text>
               <VStack align="stretch" spacing={2}>
                 {briefing.topTasks.map((task: any, idx: number) => (
@@ -1477,7 +1512,7 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
             </Box>
           )}
 
-          {briefing.overdueCommitments?.length > 0 && (
+          {briefing?.overdueCommitments?.length > 0 && (
             <Box>
               <Text fontSize="xs" fontWeight="semibold" color="orange.500" textTransform="uppercase" letterSpacing="wide" mb={2}>
                 Overdue Commitments

@@ -350,15 +350,15 @@ export function isSlackConnected(): boolean {
   return getSlackConnectionInfo().connected;
 }
 
-export interface PostWiserNoteDeps extends SlackApiDeps {
+export interface PostOllieNoteDeps extends SlackApiDeps {
   writeChannels?: string[];
 }
 
-/** Post an explicitly user-requested Wiser note to an allowed write channel. */
-export async function postWiserNote(
+/** Post an explicitly user-requested Ollie note to an allowed write channel. */
+export async function postOllieNote(
   channelId: string,
   note: string,
-  deps: PostWiserNoteDeps = {},
+  deps: PostOllieNoteDeps = {},
 ): Promise<void> {
   const writeChannels = deps.writeChannels ?? (() => {
     const { getConfig } = require('./config') as typeof import('./config');
@@ -372,6 +372,6 @@ export async function postWiserNote(
   const trimmed = note.trim();
   if (!trimmed) throw new Error('Slack note cannot be empty');
 
-  await postMessage(channelId, `*Wiser Note*\n${trimmed}`, deps);
-  appLog('info', 'slack:wiser-note', `Posted to channel ${channelId}`);
+  await postMessage(channelId, `*Ollie Note*\n${trimmed}`, deps);
+  appLog('info', 'slack:ollie-note', `Posted to channel ${channelId}`);
 }

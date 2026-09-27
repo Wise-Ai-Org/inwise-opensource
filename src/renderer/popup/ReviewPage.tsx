@@ -478,7 +478,7 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
 
         {suggested.length > 0 && (
           <div ref={sectionRefs.people} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div className="pp-seclabel">People Wiser keeps hearing</div>
+            <div className="pp-seclabel">People Ollie keeps hearing</div>
             {suggested.map(s => (
               <div key={s.name} className="pp-card">
                 <div className="pp-row" style={{ marginBottom: 6 }}>
