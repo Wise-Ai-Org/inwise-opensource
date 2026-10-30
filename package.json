@@ -102,7 +102,7 @@
     "dmg": {
       "sign": false
     },
-    "asar": true
+    "asar": false
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
