@@ -10,8 +10,8 @@ import {
   RECORDING_SOUND_RMS_THRESHOLD,
 } from './recording-silence';
 
-// Compact recorder pill. Collapsed it is a small capsule with four dots that bob
-// with real audio level; hover expands it to show title, timer, and a stop square.
+// Floating recorder with a dark surface and teal audio glow. Live audio dots,
+// title, timer, stop, and device settings remain visible while recording.
 // Left-click runs a device test, right-click opens the native Inwise menu (built
 // in main), and the pill can be dragged from any area except its buttons.
 type Status = 'idle' | 'preflight' | 'countdown' | 'recording' | 'saving' | 'error' | 'reminder';
@@ -41,11 +41,11 @@ interface SilencePrompt {
 }
 
 const INWISE_TEAL = '#0F738C';
-const PILL_H = 72; // window height (44px pill + halo margin)
-const W_COLLAPSED = 240;
-const W_EXPANDED = 470;
-const W_MEDIUM = 340;
-const W_SILENCE_PROMPT = 520;
+const PILL_H = 100; // 68px recorder plus glow margin
+const W_COLLAPSED = 500;
+const W_EXPANDED = 560;
+const W_MEDIUM = 500;
+const W_SILENCE_PROMPT = 560;
 const W_COMPLETED = 620;
 
 // Pre-flight check: verify the saved (or default) mic exists and getUserMedia succeeds.
@@ -152,10 +152,15 @@ const styles: Record<string, any> = {
     padding: 14,
   },
   pill: {
-    background: 'rgba(15, 23, 42, 0.97)',
-    borderRadius: 22,
-    height: 44,
+    background: 'radial-gradient(ellipse at 16% var(--glow-left-y, 125%), rgba(15,115,140,0.88), transparent 62%), radial-gradient(ellipse at 90% var(--glow-right-y, 135%), rgba(20,184,166,0.55), transparent 62%), linear-gradient(115deg, #0b1622, #0d2935 68%, #10212e)',
+    borderRadius: 16,
+    border: '1px solid rgba(153,246,228,0.22)',
+    height: 68,
+    width: '100%',
+    position: 'relative',
+    overflow: 'hidden',
     padding: '0 14px 0 8px',
+    fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif',
     display: 'flex',
     alignItems: 'center',
     gap: 9,
@@ -193,7 +198,7 @@ const styles: Record<string, any> = {
     textOverflow: 'ellipsis',
   },
   timer: {
-    color: '#94a3b8',
+    color: '#ccfbf1',
     fontSize: 12,
     fontFamily: 'monospace',
     minWidth: 40,
@@ -258,6 +263,7 @@ export default function Badge() {
   const runIdRef = useRef(0);
   const dotRefs = useRef<(HTMLSpanElement | null)[]>([]);
   const levelRef = useRef(0);
+  const recorderRef = useRef<HTMLDivElement | null>(null);
   const testTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestCompletedMeetingRef = useRef<string | undefined>(undefined);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean } | null>(null);
@@ -283,6 +289,8 @@ export default function Badge() {
       titleRef.current = title;
       setState({ status: 'reminder', title });
     });
+
+    api.on('recording:silence-reset', () => silenceWatchdogRef.current.reset());
 
     api.on('recording:stop-request', () => {
       if (statusRef.current === 'preflight' || statusRef.current === 'countdown') {
@@ -431,6 +439,9 @@ export default function Badge() {
   useEffect(() => {
     if (state.status !== 'recording') {
       dotRefs.current.forEach(el => { if (el) el.style.transform = ''; });
+      recorderRef.current?.style.removeProperty('--glow-left-y');
+      recorderRef.current?.style.removeProperty('--glow-right-y');
+      levelRef.current = 0;
       return;
     }
     let raf = 0;
@@ -459,6 +470,13 @@ export default function Badge() {
         levelRef.current = Math.max(rms, levelRef.current * 0.93);
         const lift = Math.min(5, levelRef.current * 160);
         const t = Date.now() / 260;
+        // Speech raises the soft glow; quiet lets it settle below the controls.
+        const strength = Math.min(1, levelRef.current * 18);
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (recorderRef.current && !reducedMotion) {
+          recorderRef.current.style.setProperty('--glow-left-y', `${125 - strength * (43 + 7 * Math.sin(t * 0.35))}%`);
+          recorderRef.current.style.setProperty('--glow-right-y', `${135 - strength * (48 + 8 * Math.sin(t * 0.35 + 1.8))}%`);
+        }
         dotRefs.current.forEach((el, i) => {
           if (!el) return;
           const y = lift * phases[i] * (0.75 + 0.25 * Math.sin(t + i * 1.7));
@@ -1204,11 +1222,17 @@ export default function Badge() {
     body = (
       <>
         {grip}
+        <span style={{ color: '#ecfdf5', display: 'flex', flexShrink: 0 }} title="Inwise recorder">
+          <svg width="16" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+            <rect x="9" y="2" width="6" height="12" rx="3" />
+            <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" />
+          </svg>
+        </span>
         {secondaryDot}
         {renderDots(recording
           ? [TEAL, sysAudioIssue !== 'none' ? AMBER : TEAL, TEAL, TEAL]
           : [DIM, DIM, DIM, DIM])}
-        {recording && hover && (
+        {recording && (
           <>
             <span style={styles.label} title={state.title + (sysAudioIssue === 'waiting' ? ' (waiting for call audio)' : sysAudioIssue === 'unavailable' ? ' (mic only)' : '')}>{truncate(state.title)}</span>
             {busyJob && (
@@ -1253,7 +1277,7 @@ export default function Badge() {
   const pillStyle = state.status === 'recording'
     ? {
         ...styles.pill,
-        boxShadow: '0 0 0 2.5px rgba(20,184,166,0.95), 0 0 14px 5px rgba(20,184,166,0.38), 0 0 26px 10px rgba(15,115,140,0.18), 0 6px 24px rgba(0,0,0,0.4)',
+        boxShadow: '0 0 18px rgba(15,115,140,0.32), 0 6px 24px rgba(0,0,0,0.4)',
       }
     : state.status === 'error'
       ? { ...styles.pill, boxShadow: '0 0 0 1px rgba(239,68,68,0.6), 0 6px 24px rgba(0,0,0,0.4)' }
@@ -1262,6 +1286,12 @@ export default function Badge() {
   return (
     <div style={styles.wrap}>
       <style>{`
+        .pill-root { transition: box-shadow 180ms ease; }
+        .pill-root > span { flex-shrink: 1; }
+        .recorder-settings { margin-left: auto; border: 0; border-radius: 10px; padding: 8px; color: #ecfdf5; background: rgba(255,255,255,.08); cursor: pointer; display: flex; flex-shrink: 0; }
+        .recorder-settings:hover { background: rgba(255,255,255,.2); }
+        button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+        .pill-stop { min-width: 28px; min-height: 28px; }
         @keyframes pill-spin { to { transform: rotate(360deg); } }
         .pill-spinner {
           width: 9px; height: 9px; flex-shrink: 0;
@@ -1291,6 +1321,7 @@ export default function Badge() {
         .pill-stop:hover .pill-stop-inner { background: #ef4444; }
       `}</style>
       <div
+        ref={recorderRef}
         className="pill-root"
         style={pillStyle}
         onClick={onPillClick}
@@ -1303,6 +1334,19 @@ export default function Badge() {
         onMouseLeave={() => setHover(false)}
       >
         {body}
+        <button className="recorder-settings" aria-label="Expand to Inwise" title="Open Inwise"
+          onClick={(e) => { e.stopPropagation(); (window as any).inwiseAPI.openInwise?.(); }}>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" />
+          </svg>
+        </button>
+        <button className="recorder-settings" style={{ marginLeft: 0 }} aria-label="Recorder settings and audio devices" title="Recorder settings and audio devices"
+          onClick={(e) => { e.stopPropagation(); void onContextMenu(e); }}>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+            <path d="m9 3-1 3-3 1-2 3 2 2-1 3 3 2 3-1 2 2 3-1 1-3 3-1 2-3-2-2 1-3-3-2-3 1-2-2Z" />
+            <circle cx="12" cy="11" r="3" />
+          </svg>
+        </button>
       </div>
     </div>
   );

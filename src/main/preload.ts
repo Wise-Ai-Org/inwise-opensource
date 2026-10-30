@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   seedDemoData: () => ipcRenderer.invoke('seed:demo'),
   clearDemoData: () => ipcRenderer.invoke('seed:clear'),
 
+  retryRecording: (id: string) => ipcRenderer.invoke('recording:retry', id),
+
   // Meetings
   getMeetings: () => ipcRenderer.invoke('db:getMeetings'),
   getMeeting: (id: string) => ipcRenderer.invoke('db:getMeeting', id),

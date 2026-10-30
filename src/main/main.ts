@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage, powerMonitor, screen } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage, powerMonitor, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -17,7 +17,7 @@ import { assessTranscriptQuality, normalizeSpeakerLabels } from './transcription
 import { extractInsights, searchMeetings, detectContradictions, generateAgenda, suggestTaskFields, classifyVoiceMemo, VoiceMemoItem } from './extractor';
 import {
   initDatabase,
-  createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus, reviewMeeting,
+  createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus, setRecordingRecovery, reviewMeeting,
   mergeMeetingAttendees,
   findRecentRecordingMeeting, appendMeetingTranscript,
   getMeetings, getMeeting, deleteMeeting, getAllPastDecisions,
@@ -332,8 +332,8 @@ function createReviewWindow(meetingId: string, initialTab?: string): void {
 
 // Recorder pill window: collapsed capsule that the renderer resizes on hover
 // via 'pill:resize'. Height covers the 44px pill plus halo margin.
-const PILL_WIDTH = 240;
-const PILL_HEIGHT = 72;
+const PILL_WIDTH = 500;
+const PILL_HEIGHT = 100;
 
 function clampPillPosition(x: number, y: number, width: number, height: number): { x: number; y: number } {
   const display = screen.getDisplayNearestPoint({ x, y });
@@ -745,6 +745,16 @@ async function autoEnrollVoices(audioPath: string, attendees: string[]): Promise
 
 // â”€â”€ Recording pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// Bring the saved recording directly into view, including recoverable failures.
+function openSavedRecording(meetingId: string): void {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  win.webContents.send('meeting:open-details', { meetingId });
+}
+
 async function runRecordingPipeline(audioPath: string, meetingTitle: string, calendarEventId?: string, stereo?: boolean, attendees?: string[], jobId?: string): Promise<boolean> {
   const job = jobId || path.basename(audioPath);
   emitSecondary({ jobId: job, title: meetingTitle, state: 'transcribing' });
@@ -775,6 +785,8 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
   if (merging) await mergeMeetingAttendees(meetingId, attendees || []);
   await updateMeetingStatus(meetingId, 'transcribing');
   mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+
+  openSavedRecording(meetingId);
 
   try {
     let effectiveStereo = false;
@@ -879,6 +891,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
 
       await saveInsights(meetingId, insights);
       mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+      openSavedRecording(meetingId);
       log('info', 'pipeline:insights-saved', meetingId);
 
       // Auto-push to Jira if enabled â€” match to existing stories first
@@ -1761,6 +1774,38 @@ ipcMain.handle('calendar:active-event', () => {
 ipcMain.handle('db:getMeetings', async () => getMeetings());
 ipcMain.handle('db:getMeeting', async (_e, id) => getMeeting(id));
 ipcMain.handle('db:deleteMeeting', async (_e, id) => { await deleteMeeting(id); return true; });
+const retryingRecordings = new Set<string>();
+ipcMain.handle('recording:retry', async (_event, meetingId: string) => {
+  if (retryingRecordings.has(meetingId)) return { ok: false, error: 'This recording is already processing.' };
+  retryingRecordings.add(meetingId);
+  try {
+    const meeting = await getMeeting(meetingId);
+    if (!meeting) throw new Error('Recording not found.');
+    let transcript = meeting.transcript;
+    if (!transcript) {
+      const recovery = meeting.recordingRecovery;
+      if (!recovery || !fs.existsSync(recovery.audioPath)) throw new Error('Saved audio is unavailable. Please upload a transcript.');
+      await updateMeetingStatus(meetingId, 'transcribing');
+      mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+      transcript = await transcribeAudio(recovery.audioPath, recovery.stereo);
+      if (recovery.stereo) transcript = await replaceSpeakerLabels(transcript, recovery.attendees || []);
+      await updateMeetingTranscript(meetingId, transcript, getAudioDuration(recovery.audioPath));
+    }
+    await updateMeetingStatus(meetingId, 'processing');
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    await saveInsights(meetingId, await extractInsights(transcript));
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    openSavedRecording(meetingId);
+    return { ok: true };
+  } catch (error: any) {
+    await updateMeetingStatus(meetingId, 'error');
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    return { ok: false, error: error.message };
+  } finally {
+    retryingRecordings.delete(meetingId);
+  }
+});
+
 ipcMain.handle('db:reviewMeeting', async (_e, id, reviewedInsights) => {
   await reviewMeeting(id, reviewedInsights);
   return true;
@@ -2737,6 +2782,7 @@ ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string, 
   isRecordingActive = true;
   lastMicFailureNotifiedAt = 0;
   lastSysAudioFailureNotifiedAt = 0;
+  clearRecordingSilenceResponse();
   lastRecordingSilenceNotifiedAt = 0;
   mainWindow?.webContents.send('recording:status', { status: 'recording', title });
   return true;
@@ -2812,6 +2858,7 @@ ipcMain.on('pill:drag-end', (e) => {
 ipcMain.on('pill:cancelled', () => {
   clearRecordingSilenceCheckIn('reset');
   isRecordingActive = false;
+  clearRecordingSilenceResponse();
   lastRecordingSilenceNotifiedAt = 0;
   updateTrayMenu(mainWindow!, false);
   // Re-arm calendar-free VAD in the main window (it waits for a terminal status).
@@ -2932,7 +2979,7 @@ ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
   latestAudioHealth = next;
   mainWindow?.webContents.send('audio:health', next);
 
-  if (!isRecordingActive || !Notification.isSupported()) return;
+  if (!isRecordingActive) return;
   const now = Date.now();
   if (prev?.micOk === true && next.micOk === false && now - lastMicFailureNotifiedAt > AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS) {
     lastMicFailureNotifiedAt = now;
@@ -3164,6 +3211,7 @@ ipcMain.on('recording:audio-data', (e, { buffer, title, calendarEventId, attende
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   clearRecordingSilenceCheckIn('reset');
   isRecordingActive = false;
+  clearRecordingSilenceResponse();
   lastRecordingSilenceNotifiedAt = 0;
   mainWindow?.webContents.send('recording:status', { status: 'processing', title });
   if (closePillAfterAudio.delete(e.sender.id)) {
@@ -3300,6 +3348,7 @@ function startMeetingRecording(event: MeetingEvent): void {
   isRecordingActive = true;
   lastMicFailureNotifiedAt = 0;
   lastSysAudioFailureNotifiedAt = 0;
+  clearRecordingSilenceResponse();
   lastRecordingSilenceNotifiedAt = 0;
   mainWindow?.webContents.send('recording:status', { status: 'recording', title: event.title });
   mainWindow?.webContents.send('badge:show', event.title);

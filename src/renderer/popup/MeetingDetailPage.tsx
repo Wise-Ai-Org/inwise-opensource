@@ -17,6 +17,8 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
   const { pop, popAll } = useNav();
   const [meeting, setMeeting] = useState<any>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [jiraConnected, setJiraConnected] = useState(false);
   const [mappingOpen, setMappingOpen] = useState(false);
@@ -48,6 +50,25 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
       })
       .catch(() => {});
   }, [meetingId]);
+
+  useEffect(() => {
+    const onMeeting = (updated: any) => {
+      if (updated?._id === meetingId) setMeeting(updated);
+    };
+    api().on?.('meeting:new', onMeeting);
+    return () => api().off?.('meeting:new', onMeeting);
+  }, [meetingId]);
+
+  const retryRecording = async () => {
+    setRetrying(true);
+    setRetryError('');
+    try {
+      const result = await api().retryRecording(meetingId);
+      if (!result?.ok) setRetryError(result?.error || 'Could not process this recording.');
+    } catch (error: any) {
+      setRetryError(error.message);
+    } finally { setRetrying(false); }
+  };
 
   const insights: Insights = meeting?.insights || {};
   const when = meeting?.date ? new Date(meeting.date) : null;
@@ -99,6 +120,20 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               {(meeting.status === 'needs_review' || insights.analysisStatus === 'needs_review') && (
                 <div className="pp-meta" style={{ color: 'var(--amber)', marginTop: 5 }}>Some audio or transcript segments need review.</div>
               )}
+              {['transcribing', 'processing'].includes(meeting.status) && (
+                <div className="pp-meta" role="status" style={{ marginTop: 10 }}>
+                  Recording saved in Meetings. {meeting.status === 'transcribing' ? 'Transcribing audio…' : 'Preparing insights…'}
+                </div>
+              )}
+              {meeting.status === 'error' && (
+                <div role="alert" style={{ marginTop: 10 }}>
+                  <div className="pp-meta">Processing failed. Your recording remains saved in Meetings.</div>
+                  <button className="pp-btn pp-solid" disabled={retrying} onClick={retryRecording}>
+                    {retrying ? 'Retrying…' : 'Retry processing'}
+                  </button>
+                </div>
+              )}
+              {retryError && <div role="alert" className="pp-meta">{retryError}</div>}
               {insights.summary && (
                 <div style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.55, marginTop: 8 }}>
                   {insights.summary}
@@ -107,7 +142,7 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               {!insights.summary && meeting.transcript && (
                 <div className="pp-meta" style={{ marginTop: 8 }}>Transcribed — insights not extracted yet.</div>
               )}
-              {!meeting.transcript && meeting.status !== 'recording' && (
+              {!meeting.transcript && !['recording', 'transcribing', 'processing'].includes(meeting.status) && (
                 <div style={{ marginTop: 10 }}>
                   <div className="pp-meta" style={{ lineHeight: 1.5 }}>
                     No transcript was captured for this meeting. If notes or a transcript exist elsewhere, add them here.
