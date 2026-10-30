@@ -783,6 +783,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       });
   log('info', merging ? 'pipeline:meeting-merged' : 'pipeline:meeting-created', meetingId);
   if (merging) await mergeMeetingAttendees(meetingId, attendees || []);
+  await setRecordingRecovery(meetingId, { audioPath, stereo: !!stereo, attendees: attendees || [] });
   await updateMeetingStatus(meetingId, 'transcribing');
   mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
 
@@ -1791,6 +1792,12 @@ ipcMain.handle('recording:retry', async (_event, meetingId: string) => {
       if (recovery.stereo) transcript = await replaceSpeakerLabels(transcript, recovery.attendees || []);
       await updateMeetingTranscript(meetingId, transcript, getAudioDuration(recovery.audioPath));
     }
+    const quality = assessTranscriptQuality(transcript);
+    if (!quality.ok) {
+      await updateMeetingStatus(meetingId, 'needs_review');
+      mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+      return { ok: false, error: 'The transcript needs review before insights can be generated.' };
+    }
     await updateMeetingStatus(meetingId, 'processing');
     mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
     await saveInsights(meetingId, await extractInsights(transcript));
@@ -2782,7 +2789,6 @@ ipcMain.handle('recording:start', (_e, title: string, calendarEventId?: string, 
   isRecordingActive = true;
   lastMicFailureNotifiedAt = 0;
   lastSysAudioFailureNotifiedAt = 0;
-  clearRecordingSilenceResponse();
   lastRecordingSilenceNotifiedAt = 0;
   mainWindow?.webContents.send('recording:status', { status: 'recording', title });
   return true;
@@ -2858,7 +2864,6 @@ ipcMain.on('pill:drag-end', (e) => {
 ipcMain.on('pill:cancelled', () => {
   clearRecordingSilenceCheckIn('reset');
   isRecordingActive = false;
-  clearRecordingSilenceResponse();
   lastRecordingSilenceNotifiedAt = 0;
   updateTrayMenu(mainWindow!, false);
   // Re-arm calendar-free VAD in the main window (it waits for a terminal status).
@@ -3211,7 +3216,6 @@ ipcMain.on('recording:audio-data', (e, { buffer, title, calendarEventId, attende
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   clearRecordingSilenceCheckIn('reset');
   isRecordingActive = false;
-  clearRecordingSilenceResponse();
   lastRecordingSilenceNotifiedAt = 0;
   mainWindow?.webContents.send('recording:status', { status: 'processing', title });
   if (closePillAfterAudio.delete(e.sender.id)) {
@@ -3348,7 +3352,6 @@ function startMeetingRecording(event: MeetingEvent): void {
   isRecordingActive = true;
   lastMicFailureNotifiedAt = 0;
   lastSysAudioFailureNotifiedAt = 0;
-  clearRecordingSilenceResponse();
   lastRecordingSilenceNotifiedAt = 0;
   mainWindow?.webContents.send('recording:status', { status: 'recording', title: event.title });
   mainWindow?.webContents.send('badge:show', event.title);
