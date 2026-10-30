@@ -5,13 +5,13 @@ import {
   RECORDING_SILENCE_RESPONSE_MS,
 } from './recording-silence-policy';
 
-assert.equal(RECORDING_SILENCE_RESPONSE_MS, 30_000, 'the user gets exactly 30 seconds to respond');
+assert.equal(RECORDING_SILENCE_RESPONSE_MS, 120_000, 'the user gets exactly two minutes to respond');
 
 const prompt = buildRecordingSilencePrompt('  Weekly planning  ', 1_000);
 assert.deepEqual(prompt, {
   title: 'Weekly planning',
-  deadlineAt: 31_000,
-  responseMs: 30_000,
+  deadlineAt: 121_000,
+  responseMs: 120_000,
 });
 
 assert.equal(buildRecordingSilencePrompt('', 0).title, 'This recording');

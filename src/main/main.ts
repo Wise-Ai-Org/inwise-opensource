@@ -3028,7 +3028,7 @@ ipcMain.on('recording:silence-check-in', (event, payload: { title?: string; sile
   if (Notification.isSupported()) {
     const notification = new Notification({
       title: 'Are you still there?',
-      body: `"${recordingTitle}" has been quiet for five minutes. Inwise will stop and save in 30 seconds.`,
+      body: `"${recordingTitle}" has been quiet for five minutes. Inwise will stop and save in two minutes.`,
       actions: [
         { type: 'button', text: 'Keep recording' },
         { type: 'button', text: 'Stop & save' },

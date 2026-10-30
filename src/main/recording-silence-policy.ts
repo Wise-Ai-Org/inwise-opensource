@@ -1,4 +1,4 @@
-export const RECORDING_SILENCE_RESPONSE_MS = 30 * 1000;
+export const RECORDING_SILENCE_RESPONSE_MS = 2 * 60 * 1000;
 
 export interface RecordingSilencePrompt {
   title: string;
