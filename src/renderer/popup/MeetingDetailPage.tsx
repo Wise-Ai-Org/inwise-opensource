@@ -1,3 +1,4 @@
+import { decodeVoiceRecording } from '../voice-audio';
 import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
 import JiraMappingModal from '../views/communications/JiraMappingModal';
@@ -63,6 +64,15 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
     setRetrying(true);
     setRetryError('');
     try {
+      if (!meeting?.transcript && meeting?.recordingRecovery?.format) {
+        const saved = await api().getRecordingAudio(meetingId);
+        const bytes = new Uint8Array(saved.bytes);
+        let wav: Uint8Array;
+        try { wav = await decodeVoiceRecording(bytes.buffer, saved.stereo); }
+        catch { await api().reportRecordingFailure(meetingId, 'decode'); throw new Error('The saved audio could not be read. Export it for recovery; you do not need to delete it.'); }
+        const transcribed = await api().transcribeVoiceMemo(wav, saved.durationSec, meetingId);
+        if (!transcribed?.ok) throw new Error(transcribed?.error || 'Transcription failed; audio is saved.');
+      }
       const result = await api().retryRecording(meetingId);
       if (!result?.ok) setRetryError(result?.error || 'Could not process this recording.');
     } catch (error: any) {
@@ -127,12 +137,14 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               )}
               {meeting.status === 'error' && (
                 <div role="alert" style={{ marginTop: 10 }}>
-                  <div className="pp-meta">Processing failed. Your recording remains saved in Meetings.</div>
-                  <button className="pp-btn pp-solid" disabled={retrying} onClick={retryRecording}>
+                  <div className="pp-meta">{meeting.recordingFailure?.message || 'Processing failed. Open this recording to retry.'}</div>
+                  <button className="pp-btn pp-solid" disabled={retrying || meeting.recordingFailure?.retryable === false} onClick={retryRecording}>
                     {retrying ? 'Retrying…' : 'Retry processing'}
                   </button>
                 </div>
               )}
+              {meeting.recordingRecovery && <button className="pp-btn pp-ghost" onClick={() => api().exportRecording(meetingId).then((r: any) => { if (r?.error) setRetryError(r.error); }).catch(() => setRetryError('Could not export audio. The saved original is unchanged.'))}>Export saved audio</button>}
+              {meeting.status === 'transcribed' && !insights.summary && <button className="pp-btn pp-solid" disabled={retrying} onClick={retryRecording}>{retrying ? 'Processing…' : 'Generate insights'}</button>}
               {retryError && <div role="alert" className="pp-meta">{retryError}</div>}
               {insights.summary && (
                 <div style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.55, marginTop: 8 }}>

@@ -40,6 +40,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build:renderer
+      - name: Test recording recovery in Electron
+        if: matrix.platform == 'windows'
+        run: node scripts/run-recording-recovery-tests.cjs
       - name: Package unsigned Windows installer
         if: matrix.platform == 'windows'
         run: npx electron-builder --win --${{ matrix.target_arch }} --publish never

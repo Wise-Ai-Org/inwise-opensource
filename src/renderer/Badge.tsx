@@ -1,3 +1,4 @@
+import { decodeVoiceRecording, stopVoiceRecorder } from './voice-audio';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   classifySystemAudioCapture,
@@ -238,6 +239,10 @@ export default function Badge() {
   const startRef = useRef(Date.now());
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const savedRawRef = useRef<{id: string; duration: number} | null>(null);
+  const finalizingRef = useRef(false);
+  const rawAttemptRef = useRef<string | undefined>();
+  const stopRetryRef = useRef(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const systemStreamRef = useRef<MediaStream | null>(null);
@@ -624,6 +629,9 @@ export default function Badge() {
       const mr = new MediaRecorder(destination.stream, { mimeType: 'audio/webm;codecs=opus' });
       mediaRef.current = mr;
       chunksRef.current = [];
+      savedRawRef.current = null;
+      rawAttemptRef.current = undefined;
+      stopRetryRef.current = false;
       mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       mr.start(250);
     } catch (e: any) {
@@ -794,89 +802,62 @@ export default function Badge() {
 
   const stopRecording = async () => {
     const mr = mediaRef.current;
-    if (!mr) return;
+    if (!mr || finalizingRef.current) return;
+    finalizingRef.current = true;
     silencePromptRef.current = null;
     setSilencePrompt(null);
-    mediaRef.current = null;
-    mr.stop();
-    mr.stream.getTracks().forEach(t => t.stop());
-    if (systemMonitorRef.current) clearInterval(systemMonitorRef.current);
-    systemMonitorRef.current = null;
-    if (systemRecoveryRef.current) clearInterval(systemRecoveryRef.current);
-    systemRecoveryRef.current = null;
-    if (systemWarningTimerRef.current) clearTimeout(systemWarningTimerRef.current);
-    systemWarningTimerRef.current = null;
-    try { systemSourceRef.current?.disconnect(); } catch { /* ignore */ }
-    systemSourceRef.current = null;
-    systemStreamRef.current?.getTracks().forEach(t => t.stop());
-    systemStreamRef.current = null;
-    micStreamRef.current?.getTracks().forEach(t => t.stop());
-    micStreamRef.current = null;
-    audioCtxRef.current?.close();
-    audioCtxRef.current = null;
-    analyserRef.current = null;
-
     setState(s => ({ ...s, status: 'saving' }));
-
-    await new Promise<void>(resolve => { mr.onstop = () => resolve(); });
-
-    const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-    const arrayBuffer = await blob.arrayBuffer();
-
-    // Decode webm/opus → PCM → WAV so Whisper can process it
-    const audioCtx = new AudioContext({ sampleRate: 16000 });
-    const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-    const wav = encodeWav(decoded);
-    audioCtx.close();
-
-    (window as any).electronAPI?.sendAudio({
-      buffer: new Uint8Array(wav),
-      title: titleRef.current,
-      calendarEventId: calendarEventIdRef.current,
-      attendees: attendeesRef.current,
-      stereo: hasStereoRef.current,
-    });
-    // Main owns the window lifecycle from here — it closes the pill once every
-    // queued transcription has drained (never mid-transcription).
+    let stage = 'capture';
+    const details = { title: titleRef.current, calendarEventId: calendarEventIdRef.current, attendees: attendeesRef.current, stereo: hasStereoRef.current, retryId: rawAttemptRef.current };
+    try {
+      try { await stopVoiceRecorder(mr); }
+      finally {
+        mr.stream.getTracks().forEach(t => t.stop());
+        if (systemMonitorRef.current) clearInterval(systemMonitorRef.current);
+        systemMonitorRef.current = null;
+        if (systemRecoveryRef.current) clearInterval(systemRecoveryRef.current);
+        systemRecoveryRef.current = null;
+        if (systemWarningTimerRef.current) clearTimeout(systemWarningTimerRef.current);
+        systemWarningTimerRef.current = null;
+        try { systemSourceRef.current?.disconnect(); } catch {}
+        systemSourceRef.current = null;
+        systemStreamRef.current?.getTracks().forEach(t => t.stop());
+        systemStreamRef.current = null;
+        micStreamRef.current?.getTracks().forEach(t => t.stop());
+        micStreamRef.current = null;
+        await audioCtxRef.current?.close().catch(() => {});
+        audioCtxRef.current = null;
+        analyserRef.current = null;
+      }
+      stage = 'saving';
+      const blob = new Blob(chunksRef.current, { type: mr.mimeType || 'audio/webm' });
+      const bytes = await blob.arrayBuffer();
+      if (!bytes.byteLength) throw new Error('No audio was captured. Start a new recording and speak for at least a second.');
+      if (!savedRawRef.current) {
+        const saved = await (window as any).inwiseAPI.saveRecordingCapture(new Uint8Array(bytes), elapsed, blob.type, details);
+        rawAttemptRef.current = saved?.meetingId;
+        if (!saved?.ok) throw new Error(saved?.error || 'Could not save audio. Keep the recorder open and retry.');
+        savedRawRef.current = {id: saved.meetingId, duration: elapsed};
+      }
+      stage = 'decode';
+      const wav = await decodeVoiceRecording(bytes, true);
+      (window as any).electronAPI.sendAudio({ buffer: wav, ...details, recoveryId: savedRawRef.current!.id });
+      mediaRef.current = null;
+      stopRetryRef.current = false;
+    } catch (error: any) {
+      stopRetryRef.current = true;
+      if (!savedRawRef.current && chunksRef.current.length) {
+        const partial = new Blob(chunksRef.current, {type: mr.mimeType || 'audio/webm'});
+        const saved = await (window as any).inwiseAPI.saveRecordingCapture(new Uint8Array(await partial.arrayBuffer()), elapsed, partial.type, {...details, retryId:rawAttemptRef.current}).catch(() => null);
+        rawAttemptRef.current = saved?.meetingId || rawAttemptRef.current;
+        if (saved?.ok) savedRawRef.current = {id:saved.meetingId,duration:elapsed};
+      }
+      if (savedRawRef.current) await (window as any).inwiseAPI.reportRecordingFailure(savedRawRef.current.id, stage === 'capture' ? 'capture' : 'decode').catch(() => {});
+      setState(current => ({...current, status:'error', message:savedRawRef.current ? 'Audio saved — processing failed. Retry or open Inwise.' : error?.message || 'Audio could not be saved. Keep the recorder open.'}));
+    } finally { finalizingRef.current = false; }
   };
 
   stopRecordingRef.current = stopRecording;
-
-  function encodeWav(audioBuffer: AudioBuffer): ArrayBuffer {
-    const numChannels = audioBuffer.numberOfChannels;
-    const sampleRate = audioBuffer.sampleRate;
-    const length = audioBuffer.getChannelData(0).length;
-    const samples = new Int16Array(length * numChannels);
-
-    if (numChannels === 1) {
-      const pcm = audioBuffer.getChannelData(0);
-      for (let i = 0; i < length; i++) {
-        samples[i] = Math.max(-32768, Math.min(32767, Math.round(pcm[i] * 32767)));
-      }
-    } else {
-      // Interleave channels: L0 R0 L1 R1 ...
-      const channels: Float32Array[] = [];
-      for (let c = 0; c < numChannels; c++) channels.push(audioBuffer.getChannelData(c));
-      for (let i = 0; i < length; i++) {
-        for (let c = 0; c < numChannels; c++) {
-          samples[i * numChannels + c] = Math.max(-32768, Math.min(32767, Math.round(channels[c][i] * 32767)));
-        }
-      }
-    }
-
-    const dataLength = samples.length * 2;
-    const buffer = new ArrayBuffer(44 + dataLength);
-    const view = new DataView(buffer);
-    const write = (offset: number, str: string) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
-    write(0, 'RIFF'); view.setUint32(4, 36 + dataLength, true);
-    write(8, 'WAVE'); write(12, 'fmt '); view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * numChannels * 2, true);
-    view.setUint16(32, numChannels * 2, true); view.setUint16(34, 16, true);
-    write(36, 'data'); view.setUint32(40, dataLength, true);
-    new Int16Array(buffer, 44).set(samples);
-    return buffer;
-  }
 
   // ── Device test (left-click): real signal check, green or red per device ──
 
@@ -1177,10 +1158,11 @@ export default function Badge() {
         <span style={{ ...styles.label, color: '#fca5a5', maxWidth: 210 }} title={state.message}>{state.message || 'Error'}</span>
         <button
           className="pill-btn"
-          onClick={(e) => { e.stopPropagation(); beginFlowRef.current(titleRef.current); }}
+          onClick={(e) => { e.stopPropagation(); if (stopRetryRef.current && chunksRef.current.length) void stopRecording(); else beginFlowRef.current(titleRef.current); }}
         >
           Retry
         </button>
+        {savedRawRef.current && <button className="pill-btn pill-btn-ghost" onClick={e => { e.stopPropagation(); (window as any).inwiseAPI.openInwise(savedRawRef.current!.id); }}>Open saved audio</button>}
         <button
           className="pill-btn pill-btn-ghost"
           onClick={(e) => { e.stopPropagation(); void onContextMenu(e as any); }}
