@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   off: (channel: string, cb: (...args: any[]) => void) => {
     ipcRenderer.removeListener(channel, cb);
   },
+  saveRecordingCapture: (bytes: Uint8Array, duration: number, mime: string, details: any) => ipcRenderer.invoke('voice:save-capture', bytes, duration, mime, details),
+  reportRecordingFailure: (id: string, stage: string) => ipcRenderer.invoke('recording:failure', id, stage),
   getConfig: () => ipcRenderer.invoke('config:get'),
   getDesktopSourceId: () => ipcRenderer.invoke('desktop:getSourceId'),
   getMediaPermissions: () => ipcRenderer.invoke('media:permissions'),
@@ -44,7 +46,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 });
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  sendAudio: (payload: { buffer: Buffer; title: string; calendarEventId?: string; attendees?: string[]; stereo?: boolean }) => {
+  sendAudio: (payload: { buffer: Buffer; title: string; calendarEventId?: string; attendees?: string[]; stereo?: boolean; recoveryId?: string }) => {
     // Must be send(), not invoke(): main listens with ipcMain.on, and invoke only
     // routes to ipcMain.handle — the invoke pairing silently drops the audio.
     ipcRenderer.send('recording:audio-data', payload);

@@ -1,3 +1,4 @@
+import { decodeVoiceRecording, stopVoiceRecorder } from '../voice-audio';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtTime, useNav, VOICE_CAPTURE_TRIGGER_EVENT } from './nav';
 
@@ -83,6 +84,11 @@ const MAX_SECONDS = 300; // whisper time stays bounded; five minutes is a memo, 
 export function VoiceCapturePage() {
   const { pop } = useNav();
   const [phase, setPhase] = useState<Phase>('recording');
+  const [captureReady, setCaptureReady] = useState(false);
+  const [savedCaptureId, setSavedCaptureId] = useState<string | null>(null);
+  const recoveryIdRef = useRef<string | null>(null);
+  const saveAttemptRef = useRef<string | undefined>();
+  const captureGenerationRef = useRef(0);
   const [seconds, setSeconds] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
   const [sortNotice, setSortNotice] = useState<string | null>(null);
@@ -103,9 +109,11 @@ export function VoiceCapturePage() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef(0);
   const stoppingRef = useRef(false);
+  const durationRef = useRef<number | null>(null);
   const memoRef = useRef<{ transcript: string; audioPath: string | null; durationSec: number }>({ transcript: '', audioPath: null, durationSec: 0 });
 
   const cleanupAudio = useCallback(() => {
+    captureGenerationRef.current++;
     cancelAnimationFrame(rafRef.current);
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     try { recorderRef.current?.state !== 'inactive' && recorderRef.current?.stop(); } catch { /* already stopped */ }
@@ -116,16 +124,24 @@ export function VoiceCapturePage() {
   }, []);
 
   const startCapture = useCallback(async () => {
+    cleanupAudio();
+    const generation = captureGenerationRef.current;
+    setCaptureReady(false);
+    setSavedCaptureId(null);
+    recoveryIdRef.current = null;
+    saveAttemptRef.current = undefined;
     setPhase('recording');
     setSeconds(0);
     setErrorMsg('');
     stoppingRef.current = false;
+    durationRef.current = null;
     chunksRef.current = [];
     try {
       const config = await api().getConfig?.().catch(() => ({}));
       const deviceId = config?.micDeviceId;
       const constraint = deviceId && deviceId !== 'default' ? { deviceId: { exact: deviceId } } : true;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: constraint as any });
+      if (generation !== captureGenerationRef.current) { stream.getTracks().forEach(t => t.stop()); return; }
       streamRef.current = stream;
 
       const ctx = new AudioContext();
@@ -145,10 +161,12 @@ export function VoiceCapturePage() {
       };
       tick();
 
-      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'].find(type => MediaRecorder.isTypeSupported(type));
+      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       recorderRef.current = mr;
       mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       mr.start(250);
+      setCaptureReady(true);
 
       startedAtRef.current = Date.now();
       timerRef.current = setInterval(() => {
@@ -165,46 +183,36 @@ export function VoiceCapturePage() {
   }, []);
 
   const finishRecording = useCallback(async () => {
-    if (stoppingRef.current) return;
+    if (stoppingRef.current || !recorderRef.current) return;
     stoppingRef.current = true;
-    const durationSec = Math.max(1, Math.round((Date.now() - startedAtRef.current) / 1000));
+    const durationSec = durationRef.current ?? Math.max(1, Math.round((Date.now() - startedAtRef.current) / 1000));
+    durationRef.current = durationSec;
     const mr = recorderRef.current;
     cancelAnimationFrame(rafRef.current);
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    setCaptureReady(false);
     setPhase('transcribing');
+    let stage = 'capture';
     try {
-      if (mr && mr.state !== 'inactive') {
-        const stopped = new Promise<void>(resolve => { mr.onstop = () => resolve(); });
-        mr.stop();
-        await stopped;
-      }
+      if (mr) await stopVoiceRecorder(mr);
       streamRef.current?.getTracks().forEach(t => t.stop());
-      audioCtxRef.current?.close().catch(() => {});
-
-      // webm/opus → 16 kHz mono 16-bit WAV, the shape whisper.cpp expects.
-      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      await audioCtxRef.current?.close().catch(() => {});
+      audioCtxRef.current = null;
+      stage = 'saving';
+      const blob = new Blob(chunksRef.current, { type: mr?.mimeType || 'audio/webm' });
       const arrayBuffer = await blob.arrayBuffer();
-      const decodeCtx = new AudioContext({ sampleRate: 16000 });
-      const decoded = await decodeCtx.decodeAudioData(arrayBuffer.slice(0));
-      decodeCtx.close();
-      const pcm = decoded.getChannelData(0);
-      const samples = new Int16Array(pcm.length);
-      for (let i = 0; i < pcm.length; i++) {
-        samples[i] = Math.max(-32768, Math.min(32767, Math.round(pcm[i] * 32767)));
+      if (!arrayBuffer.byteLength) throw new Error('No audio was captured. Record for at least a second, then finish.');
+      if (!recoveryIdRef.current) {
+        const saved = await api().saveVoiceCapture(new Uint8Array(arrayBuffer), durationSec, blob.type, saveAttemptRef.current);
+        saveAttemptRef.current = saved?.meetingId;
+        if (!saved?.ok) throw new Error(saved?.error || 'Could not save audio. Keep this window open and retry saving.');
+        recoveryIdRef.current = saved.meetingId;
+        setSavedCaptureId(saved.meetingId);
       }
-      const dataLength = samples.length * 2;
-      const wav = new ArrayBuffer(44 + dataLength);
-      const view = new DataView(wav);
-      const write = (off: number, str: string) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
-      write(0, 'RIFF'); view.setUint32(4, 36 + dataLength, true);
-      write(8, 'WAVE'); write(12, 'fmt '); view.setUint32(16, 16, true);
-      view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-      view.setUint32(24, 16000, true); view.setUint32(28, 32000, true);
-      view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-      write(36, 'data'); view.setUint32(40, dataLength, true);
-      new Int16Array(wav, 44).set(samples);
-
-      const res = await api().transcribeVoiceMemo?.(new Uint8Array(wav), durationSec);
+      stage = 'decode';
+      const wav = await decodeVoiceRecording(arrayBuffer);
+      stage = 'transcribing';
+      const res = await api().transcribeVoiceMemo?.(wav, durationSec, recoveryIdRef.current);
       if (!res?.ok) {
         setErrorMsg(res?.error === 'no_speech'
           ? "Didn't catch any speech — try again a little closer to the mic."
@@ -266,7 +274,15 @@ export function VoiceCapturePage() {
       }
       setPhase('review');
     } catch (e: any) {
-      setErrorMsg(e?.message || 'Processing failed.');
+      cleanupAudio();
+      if (!recoveryIdRef.current && chunksRef.current.length) {
+        const partial = new Blob(chunksRef.current, {type: mr?.mimeType || 'audio/webm'});
+        const saved = await api().saveVoiceCapture(new Uint8Array(await partial.arrayBuffer()), durationSec, partial.type, saveAttemptRef.current).catch(() => null);
+        saveAttemptRef.current = saved?.meetingId || saveAttemptRef.current;
+        if (saved?.ok) { recoveryIdRef.current = saved.meetingId; setSavedCaptureId(saved.meetingId); }
+      }
+      if (recoveryIdRef.current && ['capture', 'decode'].includes(stage)) await api().reportRecordingFailure(recoveryIdRef.current, stage).catch(() => {});
+      setErrorMsg(stage === 'decode' && recoveryIdRef.current ? 'The audio could not be read. Your original recording is saved in Meetings. Retry processing or export it there.' : e?.message || 'Processing failed.');
       setPhase('error');
     }
   }, []);
@@ -351,7 +367,7 @@ export function VoiceCapturePage() {
                 ))}
               </div>
               <div className="vm-timer">{mmss}</div>
-              <button className="vm-stop" aria-label="Finish recording" onClick={finishRecording}>
+              <button className="vm-stop" aria-label="Finish recording" disabled={!captureReady} onClick={finishRecording}>
                 <span className="vm-stop-square" />
               </button>
               <div className="pp-meta">Tap to finish</div>
@@ -370,7 +386,9 @@ export function VoiceCapturePage() {
               <div className="pp-meta" style={{ fontSize: 12.5, textAlign: 'center', padding: '0 24px', color: 'var(--red)' }}>{errorMsg}</div>
               <div className="pp-row" style={{ gap: 8 }}>
                 <button className="pp-btn pp-ghost" onClick={cancel}>Close</button>
-                <button className="pp-btn pp-solid" onClick={startCapture}>Try again</button>
+                {chunksRef.current.length > 0 && <button className="pp-btn pp-solid" onClick={() => { stoppingRef.current = false; void finishRecording(); }}>Retry processing</button>}
+                {savedCaptureId && <button className="pp-btn pp-ghost" onClick={() => api().exportRecording(savedCaptureId).then((r: any) => { if (r?.error) setErrorMsg(r.error); }).catch(() => setErrorMsg('Export failed. Your saved recording is unchanged.'))}>Export audio</button>}
+                <button className="pp-btn pp-ghost" onClick={startCapture}>Record again</button>
               </div>
             </>
           )}

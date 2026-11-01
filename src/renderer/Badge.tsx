@@ -1,3 +1,4 @@
+import { decodeVoiceRecording, stopVoiceRecorder } from './voice-audio';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   classifySystemAudioCapture,
@@ -10,8 +11,8 @@ import {
   RECORDING_SOUND_RMS_THRESHOLD,
 } from './recording-silence';
 
-// Compact recorder pill. Collapsed it is a small capsule with four dots that bob
-// with real audio level; hover expands it to show title, timer, and a stop square.
+// Floating recorder with a dark surface and teal audio glow. Live audio dots,
+// title, timer, stop, and device settings remain visible while recording.
 // Left-click runs a device test, right-click opens the native Inwise menu (built
 // in main), and the pill can be dragged from any area except its buttons.
 type Status = 'idle' | 'preflight' | 'countdown' | 'recording' | 'saving' | 'error' | 'reminder';
@@ -41,11 +42,11 @@ interface SilencePrompt {
 }
 
 const INWISE_TEAL = '#0F738C';
-const PILL_H = 72; // window height (44px pill + halo margin)
-const W_COLLAPSED = 240;
-const W_EXPANDED = 470;
-const W_MEDIUM = 340;
-const W_SILENCE_PROMPT = 520;
+const PILL_H = 100; // 68px recorder plus glow margin
+const W_COLLAPSED = 500;
+const W_EXPANDED = 560;
+const W_MEDIUM = 500;
+const W_SILENCE_PROMPT = 560;
 const W_COMPLETED = 620;
 
 // Pre-flight check: verify the saved (or default) mic exists and getUserMedia succeeds.
@@ -152,14 +153,19 @@ const styles: Record<string, any> = {
     padding: 14,
   },
   pill: {
-    background: 'rgba(15, 23, 42, 0.97)',
-    borderRadius: 22,
-    height: 44,
+    background: 'radial-gradient(ellipse at 16% var(--glow-left-y, 125%), rgba(15,115,140,0.88), transparent 62%), radial-gradient(ellipse at 90% var(--glow-right-y, 135%), rgba(20,184,166,0.55), transparent 62%), linear-gradient(115deg, #0b1622, #0d2935 68%, #10212e)',
+    borderRadius: 16,
+    border: 'none',
+    height: 68,
+    width: '100%',
+    position: 'relative',
+    overflow: 'hidden',
     padding: '0 14px 0 8px',
+    fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif',
     display: 'flex',
     alignItems: 'center',
     gap: 9,
-    boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
+    boxShadow: 'none',
     userSelect: 'none',
     maxWidth: '100%',
     cursor: 'pointer',
@@ -193,7 +199,7 @@ const styles: Record<string, any> = {
     textOverflow: 'ellipsis',
   },
   timer: {
-    color: '#94a3b8',
+    color: '#ccfbf1',
     fontSize: 12,
     fontFamily: 'monospace',
     minWidth: 40,
@@ -233,6 +239,10 @@ export default function Badge() {
   const startRef = useRef(Date.now());
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const savedRawRef = useRef<{id: string; duration: number} | null>(null);
+  const finalizingRef = useRef(false);
+  const rawAttemptRef = useRef<string | undefined>();
+  const stopRetryRef = useRef(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const systemStreamRef = useRef<MediaStream | null>(null);
@@ -258,6 +268,7 @@ export default function Badge() {
   const runIdRef = useRef(0);
   const dotRefs = useRef<(HTMLSpanElement | null)[]>([]);
   const levelRef = useRef(0);
+  const recorderRef = useRef<HTMLDivElement | null>(null);
   const testTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestCompletedMeetingRef = useRef<string | undefined>(undefined);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean } | null>(null);
@@ -283,6 +294,8 @@ export default function Badge() {
       titleRef.current = title;
       setState({ status: 'reminder', title });
     });
+
+    api.on('recording:silence-reset', () => silenceWatchdogRef.current.reset());
 
     api.on('recording:stop-request', () => {
       if (statusRef.current === 'preflight' || statusRef.current === 'countdown') {
@@ -431,6 +444,9 @@ export default function Badge() {
   useEffect(() => {
     if (state.status !== 'recording') {
       dotRefs.current.forEach(el => { if (el) el.style.transform = ''; });
+      recorderRef.current?.style.removeProperty('--glow-left-y');
+      recorderRef.current?.style.removeProperty('--glow-right-y');
+      levelRef.current = 0;
       return;
     }
     let raf = 0;
@@ -459,6 +475,13 @@ export default function Badge() {
         levelRef.current = Math.max(rms, levelRef.current * 0.93);
         const lift = Math.min(5, levelRef.current * 160);
         const t = Date.now() / 260;
+        // Speech raises the soft glow; quiet lets it settle below the controls.
+        const strength = Math.min(1, levelRef.current * 18);
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (recorderRef.current && !reducedMotion) {
+          recorderRef.current.style.setProperty('--glow-left-y', `${125 - strength * (43 + 7 * Math.sin(t * 0.35))}%`);
+          recorderRef.current.style.setProperty('--glow-right-y', `${135 - strength * (48 + 8 * Math.sin(t * 0.35 + 1.8))}%`);
+        }
         dotRefs.current.forEach((el, i) => {
           if (!el) return;
           const y = lift * phases[i] * (0.75 + 0.25 * Math.sin(t + i * 1.7));
@@ -606,6 +629,9 @@ export default function Badge() {
       const mr = new MediaRecorder(destination.stream, { mimeType: 'audio/webm;codecs=opus' });
       mediaRef.current = mr;
       chunksRef.current = [];
+      savedRawRef.current = null;
+      rawAttemptRef.current = undefined;
+      stopRetryRef.current = false;
       mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       mr.start(250);
     } catch (e: any) {
@@ -776,89 +802,62 @@ export default function Badge() {
 
   const stopRecording = async () => {
     const mr = mediaRef.current;
-    if (!mr) return;
+    if (!mr || finalizingRef.current) return;
+    finalizingRef.current = true;
     silencePromptRef.current = null;
     setSilencePrompt(null);
-    mediaRef.current = null;
-    mr.stop();
-    mr.stream.getTracks().forEach(t => t.stop());
-    if (systemMonitorRef.current) clearInterval(systemMonitorRef.current);
-    systemMonitorRef.current = null;
-    if (systemRecoveryRef.current) clearInterval(systemRecoveryRef.current);
-    systemRecoveryRef.current = null;
-    if (systemWarningTimerRef.current) clearTimeout(systemWarningTimerRef.current);
-    systemWarningTimerRef.current = null;
-    try { systemSourceRef.current?.disconnect(); } catch { /* ignore */ }
-    systemSourceRef.current = null;
-    systemStreamRef.current?.getTracks().forEach(t => t.stop());
-    systemStreamRef.current = null;
-    micStreamRef.current?.getTracks().forEach(t => t.stop());
-    micStreamRef.current = null;
-    audioCtxRef.current?.close();
-    audioCtxRef.current = null;
-    analyserRef.current = null;
-
     setState(s => ({ ...s, status: 'saving' }));
-
-    await new Promise<void>(resolve => { mr.onstop = () => resolve(); });
-
-    const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-    const arrayBuffer = await blob.arrayBuffer();
-
-    // Decode webm/opus → PCM → WAV so Whisper can process it
-    const audioCtx = new AudioContext({ sampleRate: 16000 });
-    const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-    const wav = encodeWav(decoded);
-    audioCtx.close();
-
-    (window as any).electronAPI?.sendAudio({
-      buffer: new Uint8Array(wav),
-      title: titleRef.current,
-      calendarEventId: calendarEventIdRef.current,
-      attendees: attendeesRef.current,
-      stereo: hasStereoRef.current,
-    });
-    // Main owns the window lifecycle from here — it closes the pill once every
-    // queued transcription has drained (never mid-transcription).
+    let stage = 'capture';
+    const details = { title: titleRef.current, calendarEventId: calendarEventIdRef.current, attendees: attendeesRef.current, stereo: hasStereoRef.current, retryId: rawAttemptRef.current };
+    try {
+      try { await stopVoiceRecorder(mr); }
+      finally {
+        mr.stream.getTracks().forEach(t => t.stop());
+        if (systemMonitorRef.current) clearInterval(systemMonitorRef.current);
+        systemMonitorRef.current = null;
+        if (systemRecoveryRef.current) clearInterval(systemRecoveryRef.current);
+        systemRecoveryRef.current = null;
+        if (systemWarningTimerRef.current) clearTimeout(systemWarningTimerRef.current);
+        systemWarningTimerRef.current = null;
+        try { systemSourceRef.current?.disconnect(); } catch {}
+        systemSourceRef.current = null;
+        systemStreamRef.current?.getTracks().forEach(t => t.stop());
+        systemStreamRef.current = null;
+        micStreamRef.current?.getTracks().forEach(t => t.stop());
+        micStreamRef.current = null;
+        await audioCtxRef.current?.close().catch(() => {});
+        audioCtxRef.current = null;
+        analyserRef.current = null;
+      }
+      stage = 'saving';
+      const blob = new Blob(chunksRef.current, { type: mr.mimeType || 'audio/webm' });
+      const bytes = await blob.arrayBuffer();
+      if (!bytes.byteLength) throw new Error('No audio was captured. Start a new recording and speak for at least a second.');
+      if (!savedRawRef.current) {
+        const saved = await (window as any).inwiseAPI.saveRecordingCapture(new Uint8Array(bytes), elapsed, blob.type, details);
+        rawAttemptRef.current = saved?.meetingId;
+        if (!saved?.ok) throw new Error(saved?.error || 'Could not save audio. Keep the recorder open and retry.');
+        savedRawRef.current = {id: saved.meetingId, duration: elapsed};
+      }
+      stage = 'decode';
+      const wav = await decodeVoiceRecording(bytes, true);
+      (window as any).electronAPI.sendAudio({ buffer: wav, ...details, recoveryId: savedRawRef.current!.id });
+      mediaRef.current = null;
+      stopRetryRef.current = false;
+    } catch (error: any) {
+      stopRetryRef.current = true;
+      if (!savedRawRef.current && chunksRef.current.length) {
+        const partial = new Blob(chunksRef.current, {type: mr.mimeType || 'audio/webm'});
+        const saved = await (window as any).inwiseAPI.saveRecordingCapture(new Uint8Array(await partial.arrayBuffer()), elapsed, partial.type, {...details, retryId:rawAttemptRef.current}).catch(() => null);
+        rawAttemptRef.current = saved?.meetingId || rawAttemptRef.current;
+        if (saved?.ok) savedRawRef.current = {id:saved.meetingId,duration:elapsed};
+      }
+      if (savedRawRef.current) await (window as any).inwiseAPI.reportRecordingFailure(savedRawRef.current.id, stage === 'capture' ? 'capture' : 'decode').catch(() => {});
+      setState(current => ({...current, status:'error', message:savedRawRef.current ? 'Audio saved — processing failed. Retry or open Inwise.' : error?.message || 'Audio could not be saved. Keep the recorder open.'}));
+    } finally { finalizingRef.current = false; }
   };
 
   stopRecordingRef.current = stopRecording;
-
-  function encodeWav(audioBuffer: AudioBuffer): ArrayBuffer {
-    const numChannels = audioBuffer.numberOfChannels;
-    const sampleRate = audioBuffer.sampleRate;
-    const length = audioBuffer.getChannelData(0).length;
-    const samples = new Int16Array(length * numChannels);
-
-    if (numChannels === 1) {
-      const pcm = audioBuffer.getChannelData(0);
-      for (let i = 0; i < length; i++) {
-        samples[i] = Math.max(-32768, Math.min(32767, Math.round(pcm[i] * 32767)));
-      }
-    } else {
-      // Interleave channels: L0 R0 L1 R1 ...
-      const channels: Float32Array[] = [];
-      for (let c = 0; c < numChannels; c++) channels.push(audioBuffer.getChannelData(c));
-      for (let i = 0; i < length; i++) {
-        for (let c = 0; c < numChannels; c++) {
-          samples[i * numChannels + c] = Math.max(-32768, Math.min(32767, Math.round(channels[c][i] * 32767)));
-        }
-      }
-    }
-
-    const dataLength = samples.length * 2;
-    const buffer = new ArrayBuffer(44 + dataLength);
-    const view = new DataView(buffer);
-    const write = (offset: number, str: string) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
-    write(0, 'RIFF'); view.setUint32(4, 36 + dataLength, true);
-    write(8, 'WAVE'); write(12, 'fmt '); view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * numChannels * 2, true);
-    view.setUint16(32, numChannels * 2, true); view.setUint16(34, 16, true);
-    write(36, 'data'); view.setUint32(40, dataLength, true);
-    new Int16Array(buffer, 44).set(samples);
-    return buffer;
-  }
 
   // ── Device test (left-click): real signal check, green or red per device ──
 
@@ -1159,10 +1158,11 @@ export default function Badge() {
         <span style={{ ...styles.label, color: '#fca5a5', maxWidth: 210 }} title={state.message}>{state.message || 'Error'}</span>
         <button
           className="pill-btn"
-          onClick={(e) => { e.stopPropagation(); beginFlowRef.current(titleRef.current); }}
+          onClick={(e) => { e.stopPropagation(); if (stopRetryRef.current && chunksRef.current.length) void stopRecording(); else beginFlowRef.current(titleRef.current); }}
         >
           Retry
         </button>
+        {savedRawRef.current && <button className="pill-btn pill-btn-ghost" onClick={e => { e.stopPropagation(); (window as any).inwiseAPI.openInwise(savedRawRef.current!.id); }}>Open saved audio</button>}
         <button
           className="pill-btn pill-btn-ghost"
           onClick={(e) => { e.stopPropagation(); void onContextMenu(e as any); }}
@@ -1204,11 +1204,17 @@ export default function Badge() {
     body = (
       <>
         {grip}
+        <span style={{ color: '#ecfdf5', display: 'flex', flexShrink: 0 }} title="Inwise recorder">
+          <svg width="16" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+            <rect x="9" y="2" width="6" height="12" rx="3" />
+            <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" />
+          </svg>
+        </span>
         {secondaryDot}
         {renderDots(recording
           ? [TEAL, sysAudioIssue !== 'none' ? AMBER : TEAL, TEAL, TEAL]
           : [DIM, DIM, DIM, DIM])}
-        {recording && hover && (
+        {recording && (
           <>
             <span style={styles.label} title={state.title + (sysAudioIssue === 'waiting' ? ' (waiting for call audio)' : sysAudioIssue === 'unavailable' ? ' (mic only)' : '')}>{truncate(state.title)}</span>
             {busyJob && (
@@ -1249,19 +1255,17 @@ export default function Badge() {
     );
   }
 
-  // Recording: steady thick teal ring + halo — no pulsing fade, easy to spot at a glance.
-  const pillStyle = state.status === 'recording'
-    ? {
-        ...styles.pill,
-        boxShadow: '0 0 0 2.5px rgba(20,184,166,0.95), 0 0 14px 5px rgba(20,184,166,0.38), 0 0 26px 10px rgba(15,115,140,0.18), 0 6px 24px rgba(0,0,0,0.4)',
-      }
-    : state.status === 'error'
-      ? { ...styles.pill, boxShadow: '0 0 0 1px rgba(239,68,68,0.6), 0 6px 24px rgba(0,0,0,0.4)' }
-      : styles.pill;
+  const pillStyle = styles.pill;
 
   return (
     <div style={styles.wrap}>
       <style>{`
+        .pill-root { transition: box-shadow 180ms ease; }
+        .pill-root > span { flex-shrink: 1; }
+        .recorder-settings { margin-left: auto; border: 0; border-radius: 10px; padding: 8px; color: #ecfdf5; background: rgba(255,255,255,.08); cursor: pointer; display: flex; flex-shrink: 0; }
+        .recorder-settings:hover { background: rgba(255,255,255,.2); }
+        button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+        .pill-stop { min-width: 28px; min-height: 28px; }
         @keyframes pill-spin { to { transform: rotate(360deg); } }
         .pill-spinner {
           width: 9px; height: 9px; flex-shrink: 0;
@@ -1291,6 +1295,7 @@ export default function Badge() {
         .pill-stop:hover .pill-stop-inner { background: #ef4444; }
       `}</style>
       <div
+        ref={recorderRef}
         className="pill-root"
         style={pillStyle}
         onClick={onPillClick}
@@ -1303,6 +1308,19 @@ export default function Badge() {
         onMouseLeave={() => setHover(false)}
       >
         {body}
+        <button className="recorder-settings" aria-label="Expand to Inwise" title="Open Inwise"
+          onClick={(e) => { e.stopPropagation(); (window as any).inwiseAPI.openInwise?.(); }}>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" />
+          </svg>
+        </button>
+        <button className="recorder-settings" style={{ marginLeft: 0 }} aria-label="Recorder settings and audio devices" title="Recorder settings and audio devices"
+          onClick={(e) => { e.stopPropagation(); void onContextMenu(e); }}>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+            <path d="m9 3-1 3-3 1-2 3 2 2-1 3 3 2 3-1 2 2 3-1 1-3 3-1 2-3-2-2 1-3-3-2-3 1-2-2Z" />
+            <circle cx="12" cy="11" r="3" />
+          </svg>
+        </button>
       </div>
     </div>
   );

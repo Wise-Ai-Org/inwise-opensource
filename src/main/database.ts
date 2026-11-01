@@ -2202,3 +2202,11 @@ export async function clearOAuthCredentials(provider: NativeOAuthProvider): Prom
 export function __setCredentialsDbForTests(db: Datastore): void {
   credentialsDb = db;
 }
+
+export async function setRecordingRecovery(id: string, recordingRecovery: { audioPath: string; stereo: boolean; attendees: string[]; format?: string; durationSec?: number }): Promise<void> {
+  await meetingsDb.updateAsync({ _id: id }, { $set: { recordingRecovery } }, {});
+}
+
+export async function setRecordingFailure(id: string, failure: any | null): Promise<void> {
+  await meetingsDb.updateAsync({ _id: id }, { $set: { recordingFailure: failure } }, {});
+}

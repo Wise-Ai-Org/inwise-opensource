@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage, powerMonitor, screen } from 'electron';
+import { recordingFailure, RecordingStage } from './recording-failure';
+import { app, BrowserWindow, dialog, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage, powerMonitor, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -17,7 +18,7 @@ import { assessTranscriptQuality, normalizeSpeakerLabels } from './transcription
 import { extractInsights, searchMeetings, detectContradictions, generateAgenda, suggestTaskFields, classifyVoiceMemo, VoiceMemoItem } from './extractor';
 import {
   initDatabase,
-  createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus, reviewMeeting,
+  createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus, setRecordingRecovery, setRecordingFailure, reviewMeeting,
   mergeMeetingAttendees,
   findRecentRecordingMeeting, appendMeetingTranscript,
   getMeetings, getMeeting, deleteMeeting, getAllPastDecisions,
@@ -332,8 +333,8 @@ function createReviewWindow(meetingId: string, initialTab?: string): void {
 
 // Recorder pill window: collapsed capsule that the renderer resizes on hover
 // via 'pill:resize'. Height covers the 44px pill plus halo margin.
-const PILL_WIDTH = 240;
-const PILL_HEIGHT = 72;
+const PILL_WIDTH = 500;
+const PILL_HEIGHT = 100;
 
 function clampPillPosition(x: number, y: number, width: number, height: number): { x: number; y: number } {
   const display = screen.getDisplayNearestPoint({ x, y });
@@ -745,7 +746,17 @@ async function autoEnrollVoices(audioPath: string, attendees: string[]): Promise
 
 // â”€â”€ Recording pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function runRecordingPipeline(audioPath: string, meetingTitle: string, calendarEventId?: string, stereo?: boolean, attendees?: string[], jobId?: string): Promise<boolean> {
+// Bring the saved recording directly into view, including recoverable failures.
+function openSavedRecording(meetingId: string): void {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  win.webContents.send('meeting:open-details', { meetingId });
+}
+
+async function runRecordingPipeline(audioPath: string, meetingTitle: string, calendarEventId?: string, stereo?: boolean, attendees?: string[], jobId?: string, recoveryId?: string): Promise<boolean> {
   const job = jobId || path.basename(audioPath);
   emitSecondary({ jobId: job, title: meetingTitle, state: 'transcribing' });
   log('info', 'pipeline:start', `title="${meetingTitle}" stereo=${!!stereo} path=${audioPath}`);
@@ -756,8 +767,8 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
   const durationSec = getAudioDuration(audioPath);
   log('info', 'pipeline:transcribe', `duration=${durationSec}s`);
 
-  const existing = await findRecentRecordingMeeting(meetingTitle, calendarEventId, 60 * 60 * 1000);
-  const merging = !!existing;
+  const existing = recoveryId ? await getMeeting(recoveryId) : await findRecentRecordingMeeting(meetingTitle, calendarEventId, 60 * 60 * 1000);
+  const merging = !!existing?.transcript;
   const meetingId = existing
     ? existing._id
     : await createMeeting({
@@ -773,8 +784,11 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       });
   log('info', merging ? 'pipeline:meeting-merged' : 'pipeline:meeting-created', meetingId);
   if (merging) await mergeMeetingAttendees(meetingId, attendees || []);
+  await setRecordingRecovery(meetingId, { audioPath, stereo: !!stereo, attendees: attendees || [] });
   await updateMeetingStatus(meetingId, 'transcribing');
   mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+
+  openSavedRecording(meetingId);
 
   try {
     let effectiveStereo = false;
@@ -841,6 +855,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       return true;
     }
 
+    let insightsFailed = false;
     emitSecondary({ jobId: job, title: meetingTitle, state: 'processing' });
     try {
       // When merging segments, re-extract insights from the combined transcript
@@ -878,7 +893,9 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       }
 
       await saveInsights(meetingId, insights);
+      await setRecordingFailure(meetingId, null);
       mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+      openSavedRecording(meetingId);
       log('info', 'pipeline:insights-saved', meetingId);
 
       // Auto-push to Jira if enabled â€” match to existing stories first
@@ -1070,7 +1087,9 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
         }
       }
     } catch (insightErr: any) {
-      log('error', 'pipeline:insights-failed', insightErr.message);
+      insightsFailed = true;
+      await setRecordingFailure(meetingId, recordingFailure('insights', true));
+      log('error', 'pipeline:insights-failed', `meetingId=${meetingId} code=${insightErr.code || insightErr.name || 'Error'}`);
       await updateMeetingStatus(meetingId, 'error');
       mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
       mainWindow?.webContents.send('pipeline:error', {
@@ -1078,6 +1097,13 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
         error: insightErr.message,
         stage: 'insights'
       });
+    }
+
+    if (insightsFailed) {
+      emitSecondary({ jobId: job, title: meetingTitle, state: 'error', meetingId, message: 'Insights failed. Your transcript is saved; retry in Inwise.' });
+      mainWindow?.webContents.send('recording:status', { status: 'error', message: 'Insights failed. Your transcript is saved.' });
+      showMeetingOverview(meetingId);
+      return false;
     }
 
     // Auto-enroll voices from stereo recordings
@@ -1126,7 +1152,8 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
     showMeetingOverview(meetingId);
     log('info', 'pipeline:done', meetingId);
   } catch (err: any) {
-    log('error', 'pipeline:failed', err.message);
+    await setRecordingFailure(meetingId, recordingFailure('transcribing', true));
+    log('error', 'pipeline:failed', `meetingId=${meetingId} code=${err.code || err.name || 'Error'}`);
     // Mark the meeting as failed so it stays visible in the UI
     try {
       await updateMeetingStatus(meetingId, 'error');
@@ -1194,23 +1221,90 @@ ipcMain.handle('mic:test', async (_e, buffer: Buffer) => {
 
 // ── Voice memos (header mic → capture → review → apply) ─────────────────────
 
-ipcMain.handle('voice:transcribe', async (_e, buffer: Buffer, durationSec: number) => {
-  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-  if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
-  const audioPath = path.join(recordingsDir, `inwise-memo-${Date.now()}.wav`);
+function writeRecordingFile(filePath: string, bytes: Buffer): void {
+  const temporaryPath = filePath + '.pending';
+  try { fs.writeFileSync(temporaryPath, bytes); fs.renameSync(temporaryPath, filePath); }
+  catch (error) { try { fs.unlinkSync(temporaryPath); } catch {} throw error; }
+}
+
+ipcMain.handle('voice:save-capture', async (_e, input: Uint8Array, durationSec: number, mime: string, details?: { title: string; calendarEventId?: string; attendees?: string[]; stereo?: boolean; retryId?: string }, previousAttemptId?: string) => {
+  let meetingId: string | undefined;
   try {
-    fs.writeFileSync(audioPath, buffer);
-    const transcript = (await transcribeAudio(audioPath)).trim();
-    if (!transcript) {
-      fs.unlink(audioPath, () => {});
-      return { ok: false, error: 'no_speech' };
-    }
-    log('info', 'voice:transcribe', `memo transcribed (${durationSec}s, ${transcript.length} chars)`);
-    return { ok: true, transcript, audioPath };
-  } catch (e: any) {
-    fs.unlink(audioPath, () => {});
-    log('error', 'voice:transcribe', e.message);
-    return { ok: false, error: e.message };
+    const buffer = Buffer.from(input);
+    if (!buffer.length || buffer.length > 256 * 1024 * 1024) throw new Error('Invalid recording size');
+    const retryId = details?.retryId || previousAttemptId;
+    meetingId = retryId && await getMeeting(retryId) ? retryId : await createMeeting({ title: details?.title?.slice(0, 200) || 'Voice recording', date: new Date().toISOString(), duration: durationSec, source: details ? 'desktop_recording' : 'voice_capture', calendarEventId: details?.calendarEventId, attendees: details?.attendees || [] });
+    const dir = path.join(app.getPath('userData'), 'recordings');
+    fs.mkdirSync(dir, { recursive: true });
+    const audioPath = path.join(dir, `voice-${meetingId}.capture`);
+    writeRecordingFile(audioPath, buffer);
+    await setRecordingRecovery(meetingId, { audioPath, stereo: !!details?.stereo, attendees: details?.attendees || [], format: mime, durationSec });
+    await updateMeetingStatus(meetingId, 'processing');
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    return { ok: true, meetingId };
+  } catch {
+    if (meetingId) { try { await setRecordingFailure(meetingId, recordingFailure('saving', false)); await updateMeetingStatus(meetingId, 'error'); } catch {} }
+    return { ok: false, meetingId, error: recordingFailure('saving', false).message };
+  }
+});
+
+ipcMain.handle('recording:failure', async (_e, id: string, stage: RecordingStage) => {
+  if (!['capture', 'decode', 'transcribing', 'insights'].includes(stage)) return;
+  const meeting = await getMeeting(id);
+  if (!meeting?.recordingRecovery) return;
+  if (meeting.source === 'desktop_recording' && overlayWindow && !overlayWindow.isDestroyed() && _e.sender.id === overlayWindow.webContents.id) { isRecordingActive = false; clearRecordingSilenceCheckIn('reset'); updateTrayMenu(mainWindow!, false); }
+  await setRecordingFailure(id, recordingFailure(stage, fs.existsSync(meeting.recordingRecovery.audioPath)));
+  await updateMeetingStatus(id, 'error');
+  mainWindow?.webContents.send('meeting:new', await getMeeting(id));
+});
+ipcMain.handle('recording:raw-audio', async (_e, id: string) => {
+  const meeting = await getMeeting(id);
+  if (!meeting?.recordingRecovery) throw new Error('No saved recording is available.');
+  return { bytes: fs.readFileSync(meeting.recordingRecovery.audioPath), durationSec: meeting.recordingRecovery.durationSec || meeting.duration, stereo: !!meeting.recordingRecovery.stereo };
+});
+ipcMain.handle('recording:export', async (_e, id: string) => {
+  const meeting = await getMeeting(id);
+  if (!meeting?.recordingRecovery) return { ok: false };
+  const { canceled, filePath } = await dialog.showSaveDialog({ title: 'Export saved recording', defaultPath: 'Inwise-recording.' + (meeting.recordingRecovery.format?.includes('ogg') ? 'ogg' : meeting.recordingRecovery.format ? 'webm' : 'wav') });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try { fs.copyFileSync(meeting.recordingRecovery.audioPath, filePath); return { ok: true }; }
+  catch { return { ok: false, error: 'Could not export the recording. Choose another location.' }; }
+});
+ipcMain.handle('voice:transcribe', async (_e, input: Uint8Array, durationSec: number, existingId?: string) => {
+  let meetingId = existingId;
+  let stage: RecordingStage = 'saving';
+  try {
+    const buffer = Buffer.from(input);
+    if (buffer.length <= 44 || buffer.toString('ascii', 0, 4) !== 'RIFF') throw new Error('Invalid WAV recording');
+    if (meetingId && !(await getMeeting(meetingId))) throw new Error('Recording not found');
+    if (!meetingId) meetingId = await createMeeting({ title: 'Voice recording', date: new Date().toISOString(), duration: durationSec, source: 'voice_capture' });
+    const dir = path.join(app.getPath('userData'), 'recordings'); fs.mkdirSync(dir, { recursive: true });
+    const audioPath = path.join(dir, `voice-${meetingId}.wav`);
+    writeRecordingFile(audioPath, buffer);
+    const previous = await getMeeting(meetingId);
+    const stereo = !!previous?.recordingRecovery?.stereo;
+    const attendees = previous?.recordingRecovery?.attendees || [];
+    await setRecordingRecovery(meetingId, { audioPath, stereo, attendees, durationSec });
+    stage = 'transcribing';
+    await updateMeetingStatus(meetingId, 'transcribing');
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    let transcript = (await transcribeAudio(audioPath, stereo)).trim();
+    if (stereo) transcript = await replaceSpeakerLabels(transcript, attendees);
+    if (!transcript) throw new Error('No speech detected');
+    await updateMeetingTranscript(meetingId, transcript, durationSec);
+    await setRecordingFailure(meetingId, null);
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    log('info', 'voice:transcribe', `meetingId=${meetingId} durationSec=${durationSec}`);
+    return { ok: true, transcript, audioPath, meetingId };
+  } catch (error: any) {
+    if (meetingId) { try {
+      const m = await getMeeting(meetingId);
+      await setRecordingFailure(meetingId, recordingFailure(stage, !!m?.recordingRecovery && fs.existsSync(m.recordingRecovery.audioPath)));
+      await updateMeetingStatus(meetingId, 'error');
+      mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    } catch {} }
+    log('error', 'voice:transcribe', `meetingId=${meetingId || 'unsaved'} stage=${stage} code=${error.code || error.name || 'Error'}`);
+    return { ok: false, meetingId, error: recordingFailure(stage, stage !== 'saving').message };
   }
 });
 
@@ -1761,6 +1855,47 @@ ipcMain.handle('calendar:active-event', () => {
 ipcMain.handle('db:getMeetings', async () => getMeetings());
 ipcMain.handle('db:getMeeting', async (_e, id) => getMeeting(id));
 ipcMain.handle('db:deleteMeeting', async (_e, id) => { await deleteMeeting(id); return true; });
+const retryingRecordings = new Set<string>();
+ipcMain.handle('recording:retry', async (_event, meetingId: string) => {
+  if (retryingRecordings.has(meetingId)) return { ok: false, error: 'This recording is already processing.' };
+  retryingRecordings.add(meetingId);
+  try {
+    const meeting = await getMeeting(meetingId);
+    if (!meeting) throw new Error('Recording not found.');
+    let transcript = meeting.transcript;
+    if (!transcript) {
+      const recovery = meeting.recordingRecovery;
+      if (!recovery || !fs.existsSync(recovery.audioPath)) throw new Error('Saved audio is unavailable. Please upload a transcript.');
+      await updateMeetingStatus(meetingId, 'transcribing');
+      mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+      transcript = await transcribeAudio(recovery.audioPath, recovery.stereo);
+      if (recovery.stereo) transcript = await replaceSpeakerLabels(transcript, recovery.attendees || []);
+      await updateMeetingTranscript(meetingId, transcript, getAudioDuration(recovery.audioPath));
+    }
+    const quality = assessTranscriptQuality(transcript);
+    if (!quality.ok) {
+      await updateMeetingStatus(meetingId, 'needs_review');
+      mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+      return { ok: false, error: 'The transcript needs review before insights can be generated.' };
+    }
+    await updateMeetingStatus(meetingId, 'processing');
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    await saveInsights(meetingId, await extractInsights(transcript));
+    await setRecordingFailure(meetingId, null);
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    openSavedRecording(meetingId);
+    return { ok: true };
+  } catch (error: any) {
+    const failed = await getMeeting(meetingId);
+    await setRecordingFailure(meetingId, recordingFailure(failed?.transcript ? 'insights' : 'transcribing', !!failed?.recordingRecovery && fs.existsSync(failed.recordingRecovery.audioPath)));
+    await updateMeetingStatus(meetingId, 'error');
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    return { ok: false, error: error.message };
+  } finally {
+    retryingRecordings.delete(meetingId);
+  }
+});
+
 ipcMain.handle('db:reviewMeeting', async (_e, id, reviewedInsights) => {
   await reviewMeeting(id, reviewedInsights);
   return true;
@@ -2932,7 +3067,7 @@ ipcMain.on('audio:health', (_e, payload: AudioHealth) => {
   latestAudioHealth = next;
   mainWindow?.webContents.send('audio:health', next);
 
-  if (!isRecordingActive || !Notification.isSupported()) return;
+  if (!isRecordingActive) return;
   const now = Date.now();
   if (prev?.micOk === true && next.micOk === false && now - lastMicFailureNotifiedAt > AUDIO_HEALTH_NOTIFY_DEBOUNCE_MS) {
     lastMicFailureNotifiedAt = now;
@@ -2976,7 +3111,7 @@ ipcMain.on('recording:silence-check-in', (event, payload: { title?: string; sile
   if (Notification.isSupported()) {
     const notification = new Notification({
       title: 'Are you still there?',
-      body: `"${recordingTitle}" has been quiet for five minutes. Inwise will stop and save in 30 seconds.`,
+      body: `"${recordingTitle}" has been quiet for five minutes. Inwise will stop and save in two minutes.`,
       actions: [
         { type: 'button', text: 'Keep recording' },
         { type: 'button', text: 'Stop & save' },
@@ -3158,9 +3293,9 @@ ipcMain.on('renderer:unhandled-rejection', (_e, payload: { name?: string; messag
 // windows, VAD splits). Hold buffers briefly and stitch them into one WAV so a
 // single meeting is processed once instead of as fragments.
 const AUDIO_COALESCE_MS = 10_000;
-const pendingAudio = new Map<string, { buffers: Buffer[]; title: string; calendarEventId?: string; attendees: string[]; stereo?: boolean; timer: NodeJS.Timeout }>();
+const pendingAudio = new Map<string, { buffers: Buffer[]; title: string; calendarEventId?: string; attendees: string[]; stereo?: boolean; timer: NodeJS.Timeout; recoveryId?: string }>();
 
-ipcMain.on('recording:audio-data', (e, { buffer, title, calendarEventId, attendees, stereo }: { buffer: Buffer; title: string; calendarEventId?: string; attendees?: string[]; stereo?: boolean }) => {
+ipcMain.on('recording:audio-data', (e, { buffer, title, calendarEventId, attendees, stereo, recoveryId }: { buffer: Buffer; title: string; calendarEventId?: string; attendees?: string[]; stereo?: boolean; recoveryId?: string }) => {
   log('info', 'audio-data:received', `title="${title}" size=${buffer?.length ?? 0} stereo=${!!stereo}`);
   clearRecordingSilenceCheckIn('reset');
   isRecordingActive = false;
@@ -3172,7 +3307,7 @@ ipcMain.on('recording:audio-data', (e, { buffer, title, calendarEventId, attende
       if (senderWindow && !senderWindow.isDestroyed()) senderWindow.close();
     });
   }
-  const key = `${title}|${stereo ? 1 : 0}`;
+  const key = `${title}|${stereo ? 1 : 0}|${recoveryId || ""}`;
   const entry = pendingAudio.get(key);
   if (entry) {
     entry.buffers.push(Buffer.from(buffer));
@@ -3183,26 +3318,26 @@ ipcMain.on('recording:audio-data', (e, { buffer, title, calendarEventId, attende
     return;
   }
   const timer = setTimeout(() => { void flushPendingAudio(key); }, AUDIO_COALESCE_MS);
-  pendingAudio.set(key, { buffers: [Buffer.from(buffer)], title, calendarEventId, attendees: (attendees || []).filter(Boolean), stereo, timer });
+  pendingAudio.set(key, { buffers: [Buffer.from(buffer)], title, calendarEventId, attendees: (attendees || []).filter(Boolean), stereo, timer, recoveryId });
 });
 
 // Transcriptions run strictly one at a time: whisper is CPU-heavy and two
 // concurrent runs mid-meeting would chew into the call itself.
 let pipelineChain: Promise<unknown> = Promise.resolve();
 
-async function flushPendingAudio(key: string): Promise<void> {
+async function flushPendingAudio(key: string, destination?: string): Promise<void> {
   const entry = pendingAudio.get(key);
   if (!entry) return;
-  pendingAudio.delete(key);
   try {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
+    if (!destination && !fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
     const wav = stitchWavBuffers(entry.buffers);
     if (entry.buffers.length > 1) {
       log('info', 'audio-data:stitched', `title="${entry.title}" segments=${entry.buffers.length} size=${wav.length}`);
     }
-    const tmpPath = path.join(recordingsDir, `inwise-rec-${Date.now()}.wav`);
-    fs.writeFileSync(tmpPath, wav);
+    const tmpPath = destination || path.join(recordingsDir, `inwise-rec-${Date.now()}.wav`);
+    writeRecordingFile(tmpPath, wav);
+    pendingAudio.delete(key);
     updateTrayMenu(mainWindow!, false);
     // Attendees: calendar event first; for ad-hoc recordings, the people the
     // user tagged on the pre-record sheet. Merged so a linked event plus extra
@@ -3217,7 +3352,7 @@ async function flushPendingAudio(key: string): Promise<void> {
     activePipelineJobs++;
     emitSecondary({ jobId, title: entry.title, state: 'transcribing' });
     pipelineChain = pipelineChain
-      .then(() => runRecordingPipeline(tmpPath, entry.title, entry.calendarEventId, entry.stereo, attendees, jobId))
+      .then(() => runRecordingPipeline(tmpPath, entry.title, entry.calendarEventId, entry.stereo, attendees, jobId, entry.recoveryId))
       .then((ok) => {
         activePipelineJobs--;
         // Failed jobs hold the pill longer so the red state is actually seen;
@@ -3232,7 +3367,14 @@ async function flushPendingAudio(key: string): Promise<void> {
       });
     await pipelineChain;
   } catch (e: any) {
-    log('error', 'audio-data:failed', e.message);
+    log('error', 'audio-data:failed', `stage=saving code=${e.code || e.name || 'Error'}`);
+    mainWindow?.webContents.send('recording:status', { status: 'error', message: 'Recording could not be saved. Keep Inwise open to retry.' });
+    const answer = await dialog.showMessageBox({ type: 'error', title: 'Inwise — recording not saved', message: 'The recording could not be saved.', detail: 'Captured audio is still held in memory. Keep Inwise open and retry, or save it to another location.', buttons: ['Retry saving', 'Save somewhere else', 'Keep for later'], cancelId: 2 });
+    if (answer.response === 0) void flushPendingAudio(key);
+    if (answer.response === 1) {
+      const chosen = await dialog.showSaveDialog({ title: 'Save captured recording', defaultPath: 'Inwise-recording.wav' });
+      if (!chosen.canceled && chosen.filePath) void flushPendingAudio(key, chosen.filePath);
+    }
   }
 }
 
@@ -3536,6 +3678,16 @@ app.whenReady().then(() => {
     }
   });
   initDatabase();
+  void (async () => {
+    for (const meeting of await getMeetings()) {
+      if (!['transcribing', 'processing'].includes(meeting.status) || !meeting.recordingRecovery) continue;
+      const stage: RecordingStage = meeting.transcript ? 'insights' : meeting.recordingRecovery.format ? 'decode' : 'transcribing';
+      await setRecordingFailure(meeting._id, recordingFailure(stage, fs.existsSync(meeting.recordingRecovery.audioPath)));
+      await updateMeetingStatus(meeting._id, 'error');
+      mainWindow?.webContents.send('meeting:new', await getMeeting(meeting._id));
+    }
+  })().catch(() => log('error', 'recording:restart-recovery', 'Could not restore interrupted recording state'));
+
   void dedupePeopleByName().then(n => {
     if (n > 0) log('info', 'people:dedupe', `merged ${n} duplicate person record(s)`);
   }).catch(() => { /* repair pass is best-effort */ });

@@ -21,6 +21,12 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   seedDemoData: () => ipcRenderer.invoke('seed:demo'),
   clearDemoData: () => ipcRenderer.invoke('seed:clear'),
 
+  saveVoiceCapture: (bytes: Uint8Array, duration: number, mime: string, previousId?: string) => ipcRenderer.invoke('voice:save-capture', bytes, duration, mime, undefined, previousId),
+  reportRecordingFailure: (id: string, stage: string) => ipcRenderer.invoke('recording:failure', id, stage),
+  getRecordingAudio: (id: string) => ipcRenderer.invoke('recording:raw-audio', id),
+  exportRecording: (id: string) => ipcRenderer.invoke('recording:export', id),
+  retryRecording: (id: string) => ipcRenderer.invoke('recording:retry', id),
+
   // Meetings
   getMeetings: () => ipcRenderer.invoke('db:getMeetings'),
   getMeeting: (id: string) => ipcRenderer.invoke('db:getMeeting', id),
@@ -203,8 +209,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   testMic: (buffer: Buffer) => ipcRenderer.invoke('mic:test', buffer),
 
   // Voice memos
-  transcribeVoiceMemo: (buffer: Uint8Array, durationSec: number) =>
-    ipcRenderer.invoke('voice:transcribe', buffer, durationSec),
+  transcribeVoiceMemo: (buffer: Uint8Array, durationSec: number, meetingId?: string) =>
+    ipcRenderer.invoke('voice:transcribe', buffer, durationSec, meetingId),
   classifyVoiceMemo: (transcript: string, ctx: any) =>
     ipcRenderer.invoke('voice:classify', transcript, ctx),
   applyVoiceMemo: (payload: any) => ipcRenderer.invoke('voice:applyMemo', payload),

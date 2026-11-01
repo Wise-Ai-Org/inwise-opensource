@@ -1,3 +1,4 @@
+import { decodeVoiceRecording } from '../voice-audio';
 import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
 import JiraMappingModal from '../views/communications/JiraMappingModal';
@@ -17,6 +18,8 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
   const { pop, popAll } = useNav();
   const [meeting, setMeeting] = useState<any>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [jiraConnected, setJiraConnected] = useState(false);
   const [mappingOpen, setMappingOpen] = useState(false);
@@ -48,6 +51,34 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
       })
       .catch(() => {});
   }, [meetingId]);
+
+  useEffect(() => {
+    const onMeeting = (updated: any) => {
+      if (updated?._id === meetingId) setMeeting(updated);
+    };
+    api().on?.('meeting:new', onMeeting);
+    return () => api().off?.('meeting:new', onMeeting);
+  }, [meetingId]);
+
+  const retryRecording = async () => {
+    setRetrying(true);
+    setRetryError('');
+    try {
+      if (!meeting?.transcript && meeting?.recordingRecovery?.format) {
+        const saved = await api().getRecordingAudio(meetingId);
+        const bytes = new Uint8Array(saved.bytes);
+        let wav: Uint8Array;
+        try { wav = await decodeVoiceRecording(bytes.buffer, saved.stereo); }
+        catch { await api().reportRecordingFailure(meetingId, 'decode'); throw new Error('The saved audio could not be read. Export it for recovery; you do not need to delete it.'); }
+        const transcribed = await api().transcribeVoiceMemo(wav, saved.durationSec, meetingId);
+        if (!transcribed?.ok) throw new Error(transcribed?.error || 'Transcription failed; audio is saved.');
+      }
+      const result = await api().retryRecording(meetingId);
+      if (!result?.ok) setRetryError(result?.error || 'Could not process this recording.');
+    } catch (error: any) {
+      setRetryError(error.message);
+    } finally { setRetrying(false); }
+  };
 
   const insights: Insights = meeting?.insights || {};
   const when = meeting?.date ? new Date(meeting.date) : null;
@@ -99,6 +130,22 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               {(meeting.status === 'needs_review' || insights.analysisStatus === 'needs_review') && (
                 <div className="pp-meta" style={{ color: 'var(--amber)', marginTop: 5 }}>Some audio or transcript segments need review.</div>
               )}
+              {['transcribing', 'processing'].includes(meeting.status) && (
+                <div className="pp-meta" role="status" style={{ marginTop: 10 }}>
+                  Recording saved in Meetings. {meeting.status === 'transcribing' ? 'Transcribing audio…' : 'Preparing insights…'}
+                </div>
+              )}
+              {meeting.status === 'error' && (
+                <div role="alert" style={{ marginTop: 10 }}>
+                  <div className="pp-meta">{meeting.recordingFailure?.message || 'Processing failed. Open this recording to retry.'}</div>
+                  <button className="pp-btn pp-solid" disabled={retrying || meeting.recordingFailure?.retryable === false} onClick={retryRecording}>
+                    {retrying ? 'Retrying…' : 'Retry processing'}
+                  </button>
+                </div>
+              )}
+              {meeting.recordingRecovery && <button className="pp-btn pp-ghost" onClick={() => api().exportRecording(meetingId).then((r: any) => { if (r?.error) setRetryError(r.error); }).catch(() => setRetryError('Could not export audio. The saved original is unchanged.'))}>Export saved audio</button>}
+              {meeting.status === 'transcribed' && !insights.summary && <button className="pp-btn pp-solid" disabled={retrying} onClick={retryRecording}>{retrying ? 'Processing…' : 'Generate insights'}</button>}
+              {retryError && <div role="alert" className="pp-meta">{retryError}</div>}
               {insights.summary && (
                 <div style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.55, marginTop: 8 }}>
                   {insights.summary}
@@ -107,7 +154,7 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               {!insights.summary && meeting.transcript && (
                 <div className="pp-meta" style={{ marginTop: 8 }}>Transcribed — insights not extracted yet.</div>
               )}
-              {!meeting.transcript && meeting.status !== 'recording' && (
+              {!meeting.transcript && !['recording', 'transcribing', 'processing'].includes(meeting.status) && (
                 <div style={{ marginTop: 10 }}>
                   <div className="pp-meta" style={{ lineHeight: 1.5 }}>
                     No transcript was captured for this meeting. If notes or a transcript exist elsewhere, add them here.
