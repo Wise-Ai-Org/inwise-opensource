@@ -155,7 +155,7 @@ const styles: Record<string, any> = {
   pill: {
     background: 'radial-gradient(ellipse at 16% var(--glow-left-y, 125%), rgba(15,115,140,0.88), transparent 62%), radial-gradient(ellipse at 90% var(--glow-right-y, 135%), rgba(20,184,166,0.55), transparent 62%), linear-gradient(115deg, #0b1622, #0d2935 68%, #10212e)',
     borderRadius: 16,
-    border: '1px solid rgba(153,246,228,0.22)',
+    border: 'none',
     height: 68,
     width: '100%',
     position: 'relative',
@@ -165,7 +165,7 @@ const styles: Record<string, any> = {
     display: 'flex',
     alignItems: 'center',
     gap: 9,
-    boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
+    boxShadow: 'none',
     userSelect: 'none',
     maxWidth: '100%',
     cursor: 'pointer',
@@ -1255,15 +1255,7 @@ export default function Badge() {
     );
   }
 
-  // Recording: steady thick teal ring + halo — no pulsing fade, easy to spot at a glance.
-  const pillStyle = state.status === 'recording'
-    ? {
-        ...styles.pill,
-        boxShadow: '0 0 18px rgba(15,115,140,0.32), 0 6px 24px rgba(0,0,0,0.4)',
-      }
-    : state.status === 'error'
-      ? { ...styles.pill, boxShadow: '0 0 0 1px rgba(239,68,68,0.6), 0 6px 24px rgba(0,0,0,0.4)' }
-      : styles.pill;
+  const pillStyle = styles.pill;
 
   return (
     <div style={styles.wrap}>

@@ -1,5 +1,18 @@
 # Release Notes
 
+## 1.7.5 — Borderless recorder and safer recovery
+
+- A borderless navy-and-teal recorder with an audio-responsive internal glow, a visible timer and Stop & save, device settings, and two-arrow access to the main app.
+- After five quiet minutes, an Inwise prompt offers two more minutes to respond before stopping and saving. Keep recording or resumed sound cancels the timeout.
+- Original audio is saved before decoding. Empty captures receive a useful message instead of a decoder exception; non-empty audio remains available after processing failures.
+- Recording, saving, decoding, transcription, and insights failures identify the failed step and offer appropriate retry/export actions. Saved work can be recovered after an interrupted app session.
+- Saved recordings open in Inwise; processing and insight updates appear on the recording. Failed insights no longer report successful completion.
+
+Validation: 43 existing test files plus Electron decoder, stereo, save/retry/export, restart-recovery, desktop-pipeline, and simulated-microphone UI checks pass. Speech/AI failure tests use injected failures; this is not a claim that every physical microphone or provider has been tested.
+
+Windows x64 installer. This release is unsigned. Existing saved recordings, meetings, and settings are retained on update. No new macOS binary is included.
+
+
 ## 1.6.0 — Close the Loop
 
 An action item can now move from meeting evidence to approved AI-assisted execution and

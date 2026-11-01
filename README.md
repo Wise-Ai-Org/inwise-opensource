@@ -15,6 +15,14 @@ AI-powered meeting recorder that runs primarily on your machine. Your audio and 
 - **Slack integration** — one-click browser authorization, local channel ingestion, and explicit recap sharing
 - **Local AI access** — connect Claude, Codex, OpenWorker, or another MCP client to search meetings, prepare agendas, and follow up on action items without uploading an Inwise database; optionally write approved execution outcomes back to the originating task ([setup guide](https://github.com/Wise-Ai-Org/inwise-opensource/blob/v1.7.1/docs/openworker.md))
 
+## New in 1.7.5
+
+The recorder now has a borderless navy-and-teal design with an audio-responsive glow. Audio is saved before decoding, and recording-to-insights failures offer clearer recovery, retry, and export options.
+
+![Borderless Inwise recorder](docs/images/recorder-borderless.png)
+
+[Release notes](https://github.com/Wise-Ai-Org/inwise-opensource/releases/tag/v1.7.5)
+
 ---
 
 ## Requirements
