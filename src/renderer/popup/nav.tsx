@@ -4,7 +4,7 @@ export type Tab = 'meetings' | 'tasks' | 'people';
 
 export type SettingsSectionKey =
   | 'ai' | 'startup' | 'transcription' | 'calendar' | 'jira' | 'zoom' | 'teams' | 'meet' | 'slack'
-  | 'ai-connect' | 'integrations' | 'voice' | 'data';
+  | 'ai-connect' | 'integrations' | 'voice' | 'data' | 'notifications';
 
 export type Page =
   | { kind: 'settings-root' }
@@ -80,6 +80,19 @@ export function requestRecordSheet() {
   recordSheetRequest.pending = true;
   window.dispatchEvent(new CustomEvent(OPEN_RECORD_SHEET_EVENT));
 }
+
+// ── Ollie moments bridge ─────────────────────────────────────────────────────
+// A notification click (`ollie:focus-moment`) switches to Meetings first; the
+// pending slot covers MeetingsTab mounting after the event fired.
+export const OLLIE_FOCUS_EVENT = 'pp-ollie-focus';
+export type OllieFocusRequest = { kind: 'prep' | 'wrap' | 'morning' | 'processed'; key?: string; meetingId?: string; eventId?: string };
+export const ollieFocusRequest: { pending: OllieFocusRequest | null } = { pending: null };
+export function requestOllieFocus(detail: OllieFocusRequest) {
+  ollieFocusRequest.pending = detail;
+  window.dispatchEvent(new CustomEvent(OLLIE_FOCUS_EVENT, { detail }));
+}
+// The wrap-up payload carries the last Slack sync time; the shell footer shows it.
+export const OLLIE_SLACK_SYNCED_EVENT = 'pp-ollie-slack-synced';
 
 // ── Small shared helpers ─────────────────────────────────────────────────────
 
