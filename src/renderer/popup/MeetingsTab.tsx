@@ -445,7 +445,7 @@ export default function MeetingsTab() {
   }
 
   return (
-    <div className="pp-body">
+    <div className="pp-body pp-timeline">
       <div className="pp-row" style={{ justifyContent: 'space-between', padding: '0 2px' }}>
         <button className="pp-quiet-action" aria-label="Previous week" onClick={() => shiftWeek(-1)}>‹</button>
         <span className="pp-row" style={{ gap: 8 }}>
@@ -490,7 +490,7 @@ export default function MeetingsTab() {
                 {isToday && review.count > 0 && !briefingLoading && !briefingError && (
                   <>
                     {' · '}
-                    <button className="pp-link" style={{ fontSize: 11.5, padding: 0 }} onClick={() => push({ kind: 'review' })}>
+                    <button className="pp-link" style={{ fontSize: 12, padding: 0 }} onClick={() => push({ kind: 'review' })}>
                       {review.count} to review
                     </button>
                   </>
@@ -609,7 +609,7 @@ export default function MeetingsTab() {
                       {pendingCount} approval{pendingCount === 1 ? '' : 's'} waiting
                     </button>
                   )}
-                  {!isDb && <span style={{ fontSize: 11.5 }}>Not started · will auto-join</span>}
+                  {!isDb && <span style={{ fontSize: 12 }}>Not started · will auto-join</span>}
                   {!isDb && m.meetingUrl && (
                     <button
                       className="pp-chip pp-teal"

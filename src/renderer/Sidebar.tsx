@@ -155,23 +155,23 @@ export default function Sidebar({ activeView, onNavigate }: Props) {
             onClick={e => e.stopPropagation()}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>Meeting search</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-strong)' }}>Meeting search</span>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   onClick={handleCopy}
-                  style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', color: copied ? '#16a34a' : '#334155' }}
+                  style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: copied ? '#16a34a' : 'var(--text-default)' }}
                 >
                   {copied ? 'Copied!' : 'Copy'}
                 </button>
                 <button
                   onClick={() => setSearchResult(null)}
-                  style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#f8fafc', cursor: 'pointer', color: '#334155' }}
+                  style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--text-default)' }}
                 >
                   Close
                 </button>
               </div>
             </div>
-            <div style={{ overflowY: 'auto', fontSize: 13, lineHeight: 1.65, color: '#334155', whiteSpace: 'pre-wrap' }}>
+            <div style={{ overflowY: 'auto', fontSize: 13, lineHeight: 1.65, color: 'var(--text-default)', whiteSpace: 'pre-wrap' }}>
               {searchResult}
             </div>
           </div>
@@ -224,7 +224,7 @@ export default function Sidebar({ activeView, onNavigate }: Props) {
           </button>
         )}
         {searchError && (
-          <div style={{ fontSize: 11, color: '#ef4444', padding: '4px 8px' }}>{searchError}</div>
+          <div style={{ fontSize: 12, color: '#ef4444', padding: '4px 8px' }}>{searchError}</div>
         )}
       </div>
 

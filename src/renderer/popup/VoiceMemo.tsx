@@ -376,14 +376,14 @@ export function VoiceCapturePage() {
           {(phase === 'transcribing' || phase === 'sorting') && (
             <>
               <span className="pp-pulse" style={{ width: 14, height: 14 }} />
-              <div className="pp-meta" style={{ fontSize: 12.5 }}>
+              <div className="pp-meta" style={{ fontSize: 13 }}>
                 {phase === 'transcribing' ? 'Transcribing on this computer…' : 'Ollie is sorting what you said…'}
               </div>
             </>
           )}
           {phase === 'error' && (
             <>
-              <div className="pp-meta" style={{ fontSize: 12.5, textAlign: 'center', padding: '0 24px', color: 'var(--red)' }}>{errorMsg}</div>
+              <div className="pp-meta" style={{ fontSize: 13, textAlign: 'center', padding: '0 24px', color: 'var(--red)' }}>{errorMsg}</div>
               <div className="pp-row" style={{ gap: 8 }}>
                 <button className="pp-btn pp-ghost" onClick={cancel}>Close</button>
                 {chunksRef.current.length > 0 && <button className="pp-btn pp-solid" onClick={() => { stoppingRef.current = false; void finishRecording(); }}>Retry processing</button>}
@@ -480,7 +480,7 @@ export function VoiceCapturePage() {
                         <span className="pp-grow" />
                         <span className="pp-meta">{Math.round(item.match.confidence)}% sure</span>
                       </div>
-                      <div className="pp-title-sm" style={{ fontSize: 12.5, marginTop: 5 }}>
+                      <div className="pp-title-sm" style={{ fontSize: 13, marginTop: 5 }}>
                         {item.match.candidateTitle}
                       </div>
                       <div className="pp-row" style={{ marginTop: 8, gap: 8 }}>
@@ -499,7 +499,7 @@ export function VoiceCapturePage() {
                           {item.match.wasDone ? 'Start a new task' : 'New task'}
                         </button>
                       </div>
-                      <div className="pp-meta" style={{ marginTop: 7, fontSize: 11 }}>
+                      <div className="pp-meta" style={{ marginTop: 7, fontSize: 12 }}>
                         Matched using your key · {item.match.model}
                       </div>
                     </div>
@@ -606,7 +606,7 @@ export function VoiceMemoDetailPage({ memoId }: { memoId: string }) {
               </>
             )}
             <div className="pp-seclabel">Transcript</div>
-            <div className="pp-card" style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--slate-700)', whiteSpace: 'pre-wrap' }}>
+            <div className="pp-card" style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--slate-700)', whiteSpace: 'pre-wrap' }}>
               {memo.transcript || 'No transcript.'}
             </div>
             <div className="pp-meta" style={{ textAlign: 'center', padding: '4px 0 8px' }}>

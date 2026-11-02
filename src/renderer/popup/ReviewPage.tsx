@@ -350,7 +350,13 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
 
   useEffect(() => {
     if (focus && review.loaded) {
-      sectionRefs[focus]?.current?.scrollIntoView({ block: 'start' });
+      const section = sectionRefs[focus]?.current;
+      const body = section?.closest<HTMLElement>('.pp-body');
+      if (section && body) {
+        // scrollIntoView also scrolls the clipped window/root and can move
+        // the entire review page out of view. Only move its content pane.
+        body.scrollTop += section.getBoundingClientRect().top - body.getBoundingClientRect().top;
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus, review.loaded]);
@@ -442,9 +448,9 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
             <div className="pp-card">
               {topScored.map((t, i) => (
                 <div key={t._id} className="pp-row" style={{ padding: '5px 0', alignItems: 'flex-start' }}>
-                  <b style={{ color: 'var(--navy)', fontSize: 12.5, width: 16, flex: 'none' }}>{i + 1}</b>
+                  <b style={{ color: 'var(--navy)', fontSize: 13, width: 16, flex: 'none' }}>{i + 1}</b>
                   <div className="pp-grow">
-                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--navy)', lineHeight: 1.35 }}>{t.title}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--navy)', lineHeight: 1.35 }}>{t.title}</div>
                     {t.priorityReasoning && <div className="pp-meta" style={{ lineHeight: 1.4 }}>{t.priorityReasoning}</div>}
                   </div>
                   {prioritiesExpanded && (

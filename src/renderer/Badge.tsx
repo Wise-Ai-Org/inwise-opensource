@@ -41,7 +41,7 @@ interface SilencePrompt {
   deadlineAt: number;
 }
 
-const INWISE_TEAL = '#0F738C';
+const INWISE_TEAL = '#0f7894';
 const PILL_H = 100; // 68px recorder plus glow margin
 const W_COLLAPSED = 500;
 const W_EXPANDED = 560;
@@ -153,7 +153,7 @@ const styles: Record<string, any> = {
     padding: 14,
   },
   pill: {
-    background: 'radial-gradient(ellipse at 16% var(--glow-left-y, 125%), rgba(15,115,140,0.88), transparent 62%), radial-gradient(ellipse at 90% var(--glow-right-y, 135%), rgba(20,184,166,0.55), transparent 62%), linear-gradient(115deg, #0b1622, #0d2935 68%, #10212e)',
+    background: 'radial-gradient(ellipse at 16% var(--glow-left-y, 125%), rgba(97,178,176,.28), transparent 62%), radial-gradient(ellipse at 90% var(--glow-right-y, 135%), rgba(168,207,193,.25), transparent 62%), #ffffff',
     borderRadius: 16,
     border: 'none',
     height: 68,
@@ -176,7 +176,7 @@ const styles: Record<string, any> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#94a3b8',
+    color: 'var(--text-muted)',
     fontSize: 15,
     cursor: 'grab',
     flexShrink: 0,
@@ -189,25 +189,25 @@ const styles: Record<string, any> = {
     transition: 'background 220ms ease',
   },
   label: {
-    color: '#f8fafc',
+    color: 'var(--owl-deep-teal)',
     fontSize: 12,
     fontWeight: 600,
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    fontFamily: 'var(--font-ui)',
     maxWidth: 160,
     overflow: 'hidden',
     whiteSpace: 'nowrap',
     textOverflow: 'ellipsis',
   },
   timer: {
-    color: '#ccfbf1',
+    color: 'var(--owl-deep-teal)',
     fontSize: 12,
     fontFamily: 'monospace',
     minWidth: 40,
     flexShrink: 0,
   },
   subtext: {
-    color: '#64748b',
-    fontSize: 11,
+    color: 'var(--text-muted)',
+    fontSize: 12,
     fontWeight: 500,
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     overflow: 'hidden',
@@ -1083,8 +1083,8 @@ export default function Badge() {
     </div>
   );
 
-  const DIM = 'rgba(255,255,255,0.16)';
-  const TEAL = '#14b8a6';
+  const DIM = 'rgba(1,61,84,0.16)';
+  const TEAL = '#0f7894';
   const AMBER = '#f59e0b';
 
   let body: React.ReactNode;
@@ -1204,7 +1204,7 @@ export default function Badge() {
     body = (
       <>
         {grip}
-        <span style={{ color: '#ecfdf5', display: 'flex', flexShrink: 0 }} title="Inwise recorder">
+        <span style={{ color: 'var(--owl-teal)', display: 'flex', flexShrink: 0 }} title="Inwise recorder">
           <svg width="16" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
             <rect x="9" y="2" width="6" height="12" rx="3" />
             <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" />
@@ -1262,9 +1262,9 @@ export default function Badge() {
       <style>{`
         .pill-root { transition: box-shadow 180ms ease; }
         .pill-root > span { flex-shrink: 1; }
-        .recorder-settings { margin-left: auto; border: 0; border-radius: 10px; padding: 8px; color: #ecfdf5; background: rgba(255,255,255,.08); cursor: pointer; display: flex; flex-shrink: 0; }
-        .recorder-settings:hover { background: rgba(255,255,255,.2); }
-        button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+        .recorder-settings { margin-left: auto; border: 0; border-radius: 4px; padding: 8px; color: var(--owl-deep-teal); background: var(--surface-status); cursor: pointer; display: flex; flex-shrink: 0; }
+        .recorder-settings:hover { background: var(--owl-ice); }
+        button:focus-visible { outline: 2px solid var(--owl-teal); outline-offset: 3px; }
         .pill-stop { min-width: 28px; min-height: 28px; }
         @keyframes pill-spin { to { transform: rotate(360deg); } }
         .pill-spinner {
@@ -1279,8 +1279,8 @@ export default function Badge() {
           background: ${INWISE_TEAL}; color: #fff; border: none; border-radius: 8px;
           padding: 5px 10px; font-size: 11px; font-weight: 600; cursor: pointer; flex-shrink: 0;
         }
-        .pill-btn-ghost { background: rgba(255,255,255,0.08); color: #cbd5e1; }
-        .pill-btn-ghost:hover { background: rgba(255,255,255,0.15); }
+        .pill-btn-ghost { background: var(--surface-status); color: var(--owl-deep-teal); }
+        .pill-btn-ghost:hover { background: var(--owl-ice); }
         .pill-stop {
           width: 20px; height: 20px; flex-shrink: 0; cursor: pointer;
           background: transparent; border: 1.5px solid #64748b; border-radius: 5px;

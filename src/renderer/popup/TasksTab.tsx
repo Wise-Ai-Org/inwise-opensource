@@ -173,7 +173,7 @@ function CreateTaskSheet({ onClose, onCreated }: { onClose: () => void; onCreate
   };
 
   const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '9px 2px' };
-  const controlStyle: React.CSSProperties = { border: 'none', outline: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit', textAlign: 'right', maxWidth: 170 };
+  const controlStyle: React.CSSProperties = { border: 'none', outline: 'none', fontSize: 13, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit', textAlign: 'right', maxWidth: 170 };
 
   return (
     <>
@@ -219,7 +219,7 @@ function CreateTaskSheet({ onClose, onCreated }: { onClose: () => void; onCreate
             value={description}
             onChange={e => setDescription(e.target.value)}
             rows={2}
-            style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', fontSize: 12.5, fontFamily: 'inherit', color: 'var(--navy)', background: 'transparent' }}
+            style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', fontSize: 13, fontFamily: 'inherit', color: 'var(--navy)', background: 'transparent' }}
           />
         </div>
         {aiFilled && <div className="pp-meta">Ollie filled in a few fields from the title — change anything that's off.</div>}
@@ -309,9 +309,10 @@ export default function TasksTab() {
   };
 
   return (
-    <div className="pp-body">
+    <div className="pp-body pp-taskboard">
       {!showSnoozed && (
         <>
+          <div className="pp-summary"><span className="pp-seclabel">Your commitments</span><strong>{counts.todo ? `${counts.todo} commitment${counts.todo === 1 ? '' : 's'} ready for a next move.` : 'Room for your next move.'}</strong><span className="pp-meta">Grouped from your meetings and linked work</span></div>
           <div className="pp-seg">
             {(['todo', 'inProgress', 'completed'] as Status[]).map(s => (
               <button key={s} className={seg === s ? 'pp-on' : ''} onClick={() => setSeg(s)}>

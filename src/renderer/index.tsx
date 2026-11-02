@@ -5,6 +5,7 @@ import App from './App';
 import ReviewWindow from './ReviewWindow';
 import theme from './theme/theme';
 import './styles.css';
+import './owl.css';
 
 window.addEventListener('unhandledrejection', (event) => {
   const reason: any = event.reason;

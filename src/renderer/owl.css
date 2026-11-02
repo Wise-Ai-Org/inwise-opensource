@@ -1,0 +1,59 @@
+/* Inwise Product Design System 3.0 — desktop-surfaces?v=10.
+   Shared by the popup, standalone review, recorder, and daily plan. */
+:root {
+  color-scheme: light;
+  --owl-ink: #09306a;
+  --owl-deep-teal: #013d54;
+  --owl-teal: #0f7894;
+  --owl-aqua: #61b2b0;
+  --owl-mint: #a8cfc1;
+  --owl-ice: #e9f2ee;
+  --owl-white: #ffffff;
+  --owl-gold: #f9b01f;
+  --text-strong: var(--owl-deep-teal);
+  --text-default: rgba(1,61,84,.82);
+  --text-muted: #557e8c;
+  --text-faint: #688b98;
+  --line: rgba(1,61,84,.14);
+  --line-strong: rgba(1,61,84,.28);
+  --surface: var(--owl-white);
+  --surface-soft: rgba(233,242,238,.56);
+  --surface-status: rgba(168,207,193,.18);
+  --font-ui: 'Inter', 'Segoe UI', sans-serif;
+  --font-story: 'DM Sans', 'Segoe UI', sans-serif;
+  --type-meta: 12px;
+  --type-support: 13px;
+  --type-body: 15px;
+  --type-title: 18px;
+  --radius-control: 4px;
+  --radius-card: 8px;
+  --radius-feature: 16px;
+  --focus-ring: 0 0 0 3px rgba(97,178,176,.3);
+  --teal: var(--owl-teal);
+  --teal-light: var(--owl-aqua);
+  --navy: var(--text-strong);
+  --slate-700: var(--text-default);
+  --slate-500: var(--text-muted);
+  --slate-400: var(--text-faint);
+  --slate-300: var(--line-strong);
+  --slate-200: var(--line);
+  --slate-100: var(--surface-soft);
+  --slate-50: var(--surface);
+  --bg: var(--surface);
+  --white: var(--surface);
+  --radius: var(--radius-card);
+  --pp-teal-tint: var(--surface-status);
+  --pp-teal-line: var(--line);
+  --pp-teal-deep: var(--owl-deep-teal);
+  --pp-amber-bg: var(--surface-status);
+  --pp-amber-ink: var(--owl-deep-teal);
+}
+body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; }
+button, input, textarea, select { font-family: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [role=button]:focus-visible {
+  outline: 2px solid var(--owl-teal); outline-offset: 2px;
+}
+::selection { background: var(--owl-mint); color: var(--owl-deep-teal); }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

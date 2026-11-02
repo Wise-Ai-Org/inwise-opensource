@@ -14,11 +14,11 @@ interface Props {
   onDismiss: () => void;
 }
 
-const TEAL = '#0d9488';
-const TEAL_HOVER = '#14b8a6';
-const INK = '#0f172a';
-const MUTED = '#64748b';
-const BORDER = '#e2e8f0';
+const TEAL = 'var(--owl-teal)';
+const TEAL_HOVER = 'var(--owl-teal)';
+const INK = 'var(--text-strong)';
+const MUTED = 'var(--text-muted)';
+const BORDER = 'var(--line)';
 const BANNER_BG = '#ecfeff';
 
 /**
@@ -49,7 +49,7 @@ export default function LiveMeetingBanner({ meeting, onStartRecording, onDismiss
         color: INK,
       }}
     >
-      <span aria-hidden style={{ color: TEAL, fontSize: 14, lineHeight: 1 }}>●</span>
+      <span aria-hidden style={{ color: TEAL, fontSize: 13, lineHeight: 1 }}>●</span>
       <span style={{ flex: 1, lineHeight: 1.5 }}>
         This looks like your meeting with <strong>{subject}</strong> — want me to start recording?
       </span>

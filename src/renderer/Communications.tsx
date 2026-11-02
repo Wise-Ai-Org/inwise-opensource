@@ -278,7 +278,7 @@ function PendingApprovalsSection() {
       <Flex justify="space-between" align="center" mb={3}>
         <HStack spacing={2}>
           <Text fontSize="sm" fontWeight="700" color="gray.800">Pending approvals</Text>
-          <Badge colorScheme="yellow" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+          <Badge colorScheme="yellow" variant="subtle" fontSize="12px" borderRadius="full" px={2}>
             {rows.length}
           </Badge>
         </HStack>
@@ -304,7 +304,7 @@ function PendingApprovalsSection() {
             >
               <VStack align="stretch" spacing={2}>
                 <HStack spacing={2} flexWrap="wrap">
-                  <Badge colorScheme={meta.color} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                  <Badge colorScheme={meta.color} variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                     {meta.label}
                   </Badge>
                   {entry.targetRecordId && entry.targetRecordId !== '(pending-create)' && (
@@ -313,7 +313,7 @@ function PendingApprovalsSection() {
                       onClick={() => {
                         if (entry.targetRecordUrl) api.openExternal(entry.targetRecordUrl);
                       }}
-                      color="#1a7080"
+                      color="var(--owl-teal)"
                       fontSize="12px"
                       fontWeight="600"
                       cursor={entry.targetRecordUrl ? 'pointer' : 'default'}
@@ -324,11 +324,11 @@ function PendingApprovalsSection() {
                     </Box>
                   )}
                   {typeof entry.confidence === 'number' && (
-                    <Badge variant="outline" colorScheme="gray" fontSize="10px" borderRadius="full" px={2}>
+                    <Badge variant="outline" colorScheme="gray" fontSize="12px" borderRadius="full" px={2}>
                       confidence {Math.round(entry.confidence * 100)}%
                     </Badge>
                   )}
-                  <Text fontSize="10px" color="gray.500">
+                  <Text fontSize="12px" color="gray.500">
                     Pending {pendingDays} day{pendingDays === 1 ? '' : 's'}
                   </Text>
                 </HStack>
@@ -441,8 +441,8 @@ function PendingApprovalsSection() {
                 {entry.sourceTranscriptSpan?.snippet && (
                   <Box
                     borderLeft="3px solid"
-                    borderLeftColor="#9dd4d9"
-                    bg="#f0fafa"
+                    borderLeftColor="var(--owl-aqua)"
+                    bg="var(--surface-status)"
                     pl={3}
                     py={2}
                     borderRadius="0 6px 6px 0"
@@ -605,7 +605,7 @@ export function RecentSyncActivity() {
       <Flex justify="space-between" align="center" mb={collapsed ? 0 : 3}>
         <HStack spacing={2}>
           <Text fontSize="sm" fontWeight="700" color="gray.800">Recent sync activity</Text>
-          <Badge colorScheme="gray" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+          <Badge colorScheme="gray" variant="subtle" fontSize="12px" borderRadius="full" px={2}>
             {visibleEntries.length}
           </Badge>
         </HStack>
@@ -654,7 +654,7 @@ export function RecentSyncActivity() {
 
                   <VStack align="stretch" spacing={1} flex={1} minW={0}>
                     <HStack spacing={2} flexWrap="wrap">
-                      <Badge colorScheme={meta.color} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                      <Badge colorScheme={meta.color} variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                         {meta.label}
                       </Badge>
                       {entry.targetRecordId && entry.targetRecordId !== '(pending-create)' && (
@@ -664,7 +664,7 @@ export function RecentSyncActivity() {
                             e.stopPropagation();
                             if (entry.targetRecordUrl) api.openExternal(entry.targetRecordUrl);
                           }}
-                          color="#1a7080"
+                          color="var(--owl-teal)"
                           fontSize="12px"
                           fontWeight="600"
                           cursor={entry.targetRecordUrl ? 'pointer' : 'default'}
@@ -675,18 +675,18 @@ export function RecentSyncActivity() {
                         </Box>
                       )}
                       {isFailed && (
-                        <Badge colorScheme="red" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                        <Badge colorScheme="red" variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                           Failed
                         </Badge>
                       )}
                       {isPending && (
-                        <Badge colorScheme="yellow" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                        <Badge colorScheme="yellow" variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                           {entry.result === 'pending-approval' ? 'Pending approval' : 'In progress'}
                         </Badge>
                       )}
-                      <Text fontSize="10px" color="gray.400">{formatRelativeTime(entry.createdAt)}</Text>
+                      <Text fontSize="12px" color="gray.400">{formatRelativeTime(entry.createdAt)}</Text>
                       {entry.retryCount > 0 && (
-                        <Text fontSize="10px" color="gray.400">retry #{entry.retryCount}</Text>
+                        <Text fontSize="12px" color="gray.400">retry #{entry.retryCount}</Text>
                       )}
                     </HStack>
 
@@ -695,7 +695,7 @@ export function RecentSyncActivity() {
                     </Text>
 
                     {isFailed && entry.errorMessage && !isExpanded && (
-                      <Text fontSize="11px" color="red.600" noOfLines={1}>{entry.errorMessage}</Text>
+                      <Text fontSize="12px" color="red.600" noOfLines={1}>{entry.errorMessage}</Text>
                     )}
 
                     {isExpanded && (
@@ -715,7 +715,7 @@ export function RecentSyncActivity() {
 
                         {entry.operation !== 'comment' && entry.fieldDiffs.length > 0 && (
                           <Box fontSize="12px">
-                            <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                            <Text fontSize="12px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
                               Field changes
                             </Text>
                             <VStack align="stretch" spacing={1}>
@@ -739,13 +739,13 @@ export function RecentSyncActivity() {
 
                         {entry.sourceTranscriptSpan?.snippet && (
                           <Box>
-                            <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                            <Text fontSize="12px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
                               From transcript
                             </Text>
                             <Box
                               borderLeft="3px solid"
-                              borderLeftColor="#9dd4d9"
-                              bg="#f0fafa"
+                              borderLeftColor="var(--owl-aqua)"
+                              bg="var(--surface-status)"
                               pl={3}
                               py={2}
                               borderRadius="0 6px 6px 0"
@@ -1382,7 +1382,7 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
                   <Text fontSize="xs" fontWeight="semibold" color={sectionHeading} textTransform="uppercase" letterSpacing="wide">
                     Suggested Agenda
                   </Text>
-                  {agenda && <Badge colorScheme="purple" variant="subtle" fontSize="9px" borderRadius="full" px={1.5}>AI</Badge>}
+                  {agenda && <Badge colorScheme="purple" variant="subtle" fontSize="12px" borderRadius="full" px={1.5}>AI</Badge>}
                   {agenda && (
                     <AiButton
                       aria-label="Regenerate agenda"
@@ -1553,7 +1553,7 @@ export default function CommunicationCenter({ pendingOpen, onPendingOpenConsumed
             <Grid templateColumns="repeat(7, 1fr)" mb={1}>
               {DAY_LABELS.map(d => (
                 <Box key={d} textAlign="center">
-                  <Text fontSize="10px" color={mutedText} fontWeight="semibold">{d}</Text>
+                  <Text fontSize="12px" color={mutedText} fontWeight="semibold">{d}</Text>
                 </Box>
               ))}
             </Grid>

@@ -106,14 +106,14 @@ export default function PeopleTab() {
               <div className="pp-rowlabel">{self.name || 'Me'}</div>
               <div className="pp-rowsub">You</div>
             </div>
-            <span className="pp-chevron">â€º</span>
+            <span className="pp-chevron">›</span>
           </button>
         </div>
       )}
 
       {others.length > 0 && (
         <>
-        <div className="pp-seclabel" style={{ padding: '4px 2px 0' }}>People Â· {others.length}</div>
+        <div className="pp-seclabel" style={{ padding: '4px 2px 0' }}>Your collaborators · {others.length}</div>
         <div className="pp-listcard">
           {others.map(p => (
             <button key={p._id} className="pp-setrow" onClick={() => push({ kind: 'person', id: p._id, name: p.name })}>

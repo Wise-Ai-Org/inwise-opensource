@@ -55,7 +55,7 @@ export default function UploadTranscriptSheet({ open, onClose, onUpload, attachT
   };
 
   const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '9px 2px' };
-  const controlStyle: React.CSSProperties = { border: 'none', outline: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit', textAlign: 'right' };
+  const controlStyle: React.CSSProperties = { border: 'none', outline: 'none', fontSize: 13, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit', textAlign: 'right' };
 
   return (
     <>
@@ -96,7 +96,7 @@ export default function UploadTranscriptSheet({ open, onClose, onUpload, attachT
             value={content}
             onChange={e => setContent(e.target.value)}
             rows={7}
-            style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', fontSize: 12.5, lineHeight: 1.5, fontFamily: 'inherit', color: 'var(--navy)', background: 'transparent' }}
+            style={{ flex: 1, border: 'none', outline: 'none', resize: 'none', fontSize: 13, lineHeight: 1.5, fontFamily: 'inherit', color: 'var(--navy)', background: 'transparent' }}
           />
         </div>
         {error && <div className="pp-meta" style={{ color: 'var(--red)' }}>{error}</div>}

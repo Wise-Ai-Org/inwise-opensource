@@ -1,23 +1,23 @@
 .inwise-ai-button {
   --ai-surface: rgba(255, 255, 255, 0.98);
-  --ai-ink: #102b3a;
-  --ai-muted: #0f738c;
+  --ai-ink: var(--owl-deep-teal);
+  --ai-muted: var(--owl-teal);
   display: inline-flex;
   max-width: 100%;
   padding: 1.5px;
   border: 0;
-  border-radius: 999px;
-  background: linear-gradient(115deg, #0f738c 0%, #62cbb9 27%, #f7e731 49%, #23489f 72%, #0f738c 100%);
+  border-radius: var(--radius-control);
+  background: var(--owl-aqua);
   background-size: 260% 260%;
-  box-shadow: 0 7px 18px -14px rgba(15, 115, 140, 0.9);
+  box-shadow: none;
   color: var(--ai-ink);
   cursor: pointer;
   isolation: isolate;
   transition: box-shadow 180ms ease, filter 180ms ease, transform 180ms ease;
 }
 
-.inwise-ai-button[data-tone='dark'] { --ai-surface: #0b1118; --ai-ink: #f8fafc; --ai-muted: #83e4d3; }
-.inwise-ai-button[data-tone='solid'] { --ai-surface: linear-gradient(135deg, #0f738c, #123f63); --ai-ink: #fff; --ai-muted: #b8fff1; }
+.inwise-ai-button[data-tone='dark'] { --ai-surface: #0b1118; --ai-ink: var(--surface); --ai-muted: #83e4d3; }
+.inwise-ai-button[data-tone='solid'] { --ai-surface: linear-gradient(135deg, var(--owl-teal), #123f63); --ai-ink: #fff; --ai-muted: #b8fff1; }
 
 .inwise-ai-button__surface {
   display: inline-flex;
@@ -35,7 +35,7 @@
 }
 
 .inwise-ai-button[data-size='sm'] .inwise-ai-button__surface { min-height: 34px; padding: 0 13px; font-size: 12px; }
-.inwise-ai-button[data-size='md'] .inwise-ai-button__surface { min-height: 42px; padding: 0 17px; font-size: 14px; }
+.inwise-ai-button[data-size='md'] .inwise-ai-button__surface { min-height: 42px; padding: 0 17px; font-size: 13px; }
 
 .inwise-ai-button__spark {
   position: relative;
@@ -48,8 +48,8 @@
 
 .inwise-ai-button__spark i { position: absolute; font-style: normal; line-height: 1; }
 .inwise-ai-button__spark i:nth-child(1) { left: 1px; top: 0; font-size: 15px; }
-.inwise-ai-button__spark i:nth-child(2) { right: 0; bottom: 1px; font-size: 10px; }
-.inwise-ai-button__spark i:nth-child(3) { left: 2px; bottom: 0; font-size: 7px; opacity: 0.72; }
+.inwise-ai-button__spark i:nth-child(2) { right: 0; bottom: 1px; font-size: 12px; }
+.inwise-ai-button__spark i:nth-child(3) { left: 2px; bottom: 0; font-size: 12px; opacity: 0.72; }
 
 .inwise-ai-button__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .inwise-ai-button__trailing { display: inline-flex; align-items: center; transition: transform 180ms ease; }

@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import Badge from './Badge';
+import './owl.css';
 
 window.addEventListener('unhandledrejection', (event) => {
   const reason: any = event.reason;

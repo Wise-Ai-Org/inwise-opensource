@@ -87,7 +87,9 @@ app.whenReady().then(async () => {
   let desktop;
   for(let i=0;i<200;i++){
     desktop=(await invoke('db:getMeetings')).find(m=>m.title==='Synthetic desktop recovery test');
-    if(desktop?.recordingFailure?.stage==='insights')break;
+    // Failure metadata and status are separate durable writes. Wait for both,
+    // rather than racing the status write after observing its metadata.
+    if(desktop?.recordingFailure?.stage==='insights' && desktop?.status==='error')break;
     await new Promise(r=>setTimeout(r,100));
   }
   assert.equal(desktop?._id,desktopCapture.meetingId);

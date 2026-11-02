@@ -12,6 +12,9 @@ import TaskDetailPage from './TaskDetailPage';
 import PersonDetailPage from './PersonDetailPage';
 import { VoiceCapturePage, VoiceMemoDetailPage, MicGlyph } from './VoiceMemo';
 import './popup.css';
+import './owl-desktop.css';
+// @ts-ignore webpack image asset
+import wordmark from '../assets/inwise-wordmark.png';
 
 const ReviewContext = createContext<ReviewItems | null>(null);
 export function useReview(): ReviewItems {
@@ -149,7 +152,7 @@ function CaptureChooser({ onClose }: { onClose: () => void }) {
           className="pp-setrow"
           onClick={() => { onClose(); setTab('meetings'); requestRecordSheet(); }}
         >
-          <span className="pp-seticon" style={{ color: 'var(--red)', fontSize: 11 }}>●</span>
+          <span className="pp-seticon" style={{ color: 'var(--red)', fontSize: 12 }}>●</span>
           <span className="pp-grow">
             <span className="pp-rowlabel" style={{ display: 'block' }}>Record a meeting</span>
             <span className="pp-rowsub" style={{ display: 'block' }}>Mic + system audio, linked to your calendar</span>
@@ -273,7 +276,7 @@ function ShellInner() {
   }, [setTab, openPage]);
 
   const today = new Date();
-  const dateLabel = today.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+  const dateLabel = today.toLocaleDateString([], { month: 'long', day: 'numeric' });
   const topPage = stack.length > 0 ? stack[stack.length - 1] : null;
   const onReviewPage = topPage?.kind === 'review';
 
@@ -282,7 +285,7 @@ function ShellInner() {
       <div className="pp-root">
         <div className="pp-titlebar">
           <div className="pp-titlebar-left">
-            <button className="pp-dots" aria-label="Menu" onClick={() => setMenuOpen(o => !o)}>•••</button>
+            <button className="pp-dots pp-brand-menu" aria-label="Menu" onClick={() => setMenuOpen(o => !o)}><img src={wordmark} alt="Inwise" /></button>
             {review.count > 0 && !onReviewPage && (
               <button className="pp-review-pill" onClick={() => openPage({ kind: 'review' })}>
                 {review.count} to review
@@ -316,7 +319,7 @@ function ShellInner() {
         ) : (
           <>
             <div className="pp-datehead pp-row" style={{ gap: 8 }}>
-              <span className="pp-grow">{dateLabel}</span>
+              <span className="pp-grow"><small className="pp-weekday">{today.toLocaleDateString([], { weekday: 'long' })}</small>{dateLabel}</span>
               <button
                 className="vm-micbtn"
                 aria-label="Capture — voice note or meeting recording"
@@ -340,6 +343,7 @@ function ShellInner() {
             {tab === 'meetings' && <MeetingsTab />}
             {tab === 'tasks' && <TasksTab />}
             {tab === 'people' && <PeopleTab />}
+            <footer className="pp-statusbar"><span>{tab === 'meetings' ? 'Your meeting memory' : tab === 'tasks' ? 'Your commitments' : 'Your collaborators'}</span><button className="pp-link" onClick={() => openPage({ kind: 'settings-root' })}>Controls</button></footer>
           </>
         )}
       </div>

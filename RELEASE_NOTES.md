@@ -1,5 +1,17 @@
 # Release Notes
 
+## 1.7.6 — One Owl design across Inwise Desktop
+
+- Applies Inwise Product Design System 3.0 from the approved compact desktop reference: true-white surfaces, Owl colours, the 12/13/15/18 type scale, quiet dividers, branded window controls, and compact lists.
+- Meetings, tasks, people, detail pages, settings and integration sections, search, review, capture sheets, onboarding, daily plans, and the floating recorder share the same visual roles.
+- Keeps recording controls, the audio-responsive glow, the five-minute silence check with two minutes to respond, saved-audio retry/export, and interrupted-session recovery.
+- Makes standalone review tabs keyboard-accessible and fixes garbled punctuation in the people list.
+- `inwise-opensource` remains the only maintained desktop app; the retired recording SDK is not included.
+
+Validation: automated navigation and screenshots of app screens/states at compact and wider widths; all existing regression tests and Electron decoder, stereo, save/retry/export, restart-recovery, and simulated-microphone checks. Test data, microphone audio, and provider failures are synthetic; live external integrations and physical devices are not exhaustively tested.
+
+Windows x64 installer, unsigned. Existing recordings and settings are retained. No new macOS binary is included in this release.
+
 ## 1.7.5 — Borderless recorder and safer recovery
 
 - A borderless navy-and-teal recorder with an audio-responsive internal glow, a visible timer and Stop & save, device settings, and two-arrow access to the main app.

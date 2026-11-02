@@ -16,7 +16,7 @@ export interface DedupSuggestion {
 /** "Matched using your key · Claude Haiku" — the OSS transparency line. */
 export function MatchAttribution({ model }: { model: string }) {
   return (
-    <div className="pp-meta" style={{ marginTop: 8, fontSize: 11 }}>
+    <div className="pp-meta" style={{ marginTop: 8, fontSize: 12 }}>
       Matched using your key · {model}
     </div>
   );
@@ -161,7 +161,7 @@ export function MentionThread({ taskId, onChanged }: { taskId: string; onChanged
               <span style={{ color: 'var(--teal)', lineHeight: 0 }}>
                 {e.sourceType === 'meeting' ? <MeetingGlyph /> : <NoteGlyph />}
               </span>
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--navy)' }}>{e.sourceTitle}</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--navy)' }}>{e.sourceTitle}</span>
               <span className="pp-grow" />
               <span className="pp-meta">{fmtMentionDate(e.occurredAt)}</span>
             </div>
@@ -236,7 +236,7 @@ export function RepetitionNudge({
     <span className="pp-row" style={{ gap: 6, flexWrap: 'wrap' }} data-testid="repetition-nudge">
       <span className="pp-chip pp-amber">Raised {count}× this week</span>
       <button className="pp-chip pp-teal" disabled={busy} onClick={bump}>Bump priority</button>
-      <button className="pp-quiet-action" style={{ padding: 0, fontSize: 11 }} disabled={busy} onClick={dismiss}>
+      <button className="pp-quiet-action" style={{ padding: 0, fontSize: 12 }} disabled={busy} onClick={dismiss}>
         Dismiss
       </button>
     </span>

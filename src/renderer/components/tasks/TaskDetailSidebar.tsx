@@ -163,8 +163,8 @@ function InlineEdit({
       <HStack spacing={2} align="center" flex={1}>
         {type === 'textarea' ? (
           <Textarea ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)} size="sm" rows={3}
-            borderRadius="8px" fontSize="13px" borderColor="#9dd4d9"
-            _focus={{ borderColor: '#1a7080', boxShadow: '0 0 0 1px #1a7080' }}
+            borderRadius="8px" fontSize="13px" borderColor="var(--owl-aqua)"
+            _focus={{ borderColor: 'var(--owl-teal)', boxShadow: '0 0 0 1px var(--owl-teal)' }}
             onKeyDown={e => { if (e.key === 'Escape') handleCancel(); }} />
         ) : type === 'select' && options ? (
           <Select ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)} size="sm" flex={1} {...SELECT_PROPS}>
@@ -173,12 +173,12 @@ function InlineEdit({
           </Select>
         ) : (
           <Input ref={inputRef} type={type} value={draft} onChange={e => setDraft(e.target.value)} size="sm"
-            flex={1} borderRadius="8px" fontSize="13px" borderColor="#9dd4d9"
-            _focus={{ borderColor: '#1a7080', boxShadow: '0 0 0 1px #1a7080' }}
+            flex={1} borderRadius="8px" fontSize="13px" borderColor="var(--owl-aqua)"
+            _focus={{ borderColor: 'var(--owl-teal)', boxShadow: '0 0 0 1px var(--owl-teal)' }}
             onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') handleCancel(); }} />
         )}
-        <Box as="button" onClick={handleSave} color="#1a7080" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }} flexShrink={0}>
-          {saving ? <Spinner size="xs" color="#1a7080" /> : <CheckIcon boxSize="14px" />}
+        <Box as="button" onClick={handleSave} color="var(--owl-teal)" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }} flexShrink={0}>
+          {saving ? <Spinner size="xs" color="var(--owl-teal)" /> : <CheckIcon boxSize="14px" />}
         </Box>
         <Box as="button" onClick={handleCancel} color="gray.400" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }} flexShrink={0}>
           <CloseIcon boxSize="13px" />
@@ -195,7 +195,7 @@ function InlineEdit({
         : <Text fontSize="13px" color="gray.400">{placeholder}</Text>
       }
       {aiHint && aiHint.confidence > 0.4 && (
-        <Badge bg="#e8f4f5" color="#1a7080" fontSize="9px" borderRadius="full" px={1.5} flexShrink={0}>
+        <Badge bg="var(--surface-status)" color="var(--owl-teal)" fontSize="12px" borderRadius="full" px={1.5} flexShrink={0}>
           AI · {Math.round(aiHint.confidence * 100)}%
         </Badge>
       )}
@@ -376,7 +376,7 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
               </Text>
             </VStack>
           </HStack>
-          <Badge colorScheme={state.color} variant="subtle" borderRadius="full" px={2.5} py={1} fontSize="10px" flexShrink={0}>
+          <Badge colorScheme={state.color} variant="subtle" borderRadius="full" px={2.5} py={1} fontSize="12px" flexShrink={0}>
             ●&nbsp; {state.label}
           </Badge>
         </HStack>
@@ -396,7 +396,7 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
                   boxShadow={step.done ? '0 3px 8px -4px rgba(13, 148, 136, 0.9)' : 'none'}>
                   {step.done ? <CheckIcon color="white" boxSize="9px" /> : <Box w="5px" h="5px" bg="gray.300" borderRadius="full" />}
                 </Flex>
-                <Text fontSize="9px" color={step.done ? 'gray.700' : 'gray.400'} textAlign="center" lineHeight="short">
+                <Text fontSize="12px" color={step.done ? 'gray.700' : 'gray.400'} textAlign="center" lineHeight="short">
                   {step.label}
                 </Text>
               </VStack>
@@ -408,7 +408,7 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
         {hasExternalTools && (
           <HStack spacing={2} px={3} py={2} bg="orange.50" borderRadius="8px" mb={3} align="start">
             <CheckIcon boxSize="11px" mt="3px" color="orange.600" flexShrink={0} />
-            <Text fontSize="11px" color="orange.800" lineHeight="short">
+            <Text fontSize="12px" color="orange.800" lineHeight="short">
               External tool access was limited to the approved scope shown below.
             </Text>
           </HStack>
@@ -417,8 +417,8 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
         {outcome.update && (
           <Box px={3} py={2.5} bg={visual.outcomeBg} border="1px solid" borderColor={visual.outcomeBorder} borderRadius="10px" mb={3}>
             <HStack spacing={1.5} mb={1}>
-              <Flex w="15px" h="15px" borderRadius="full" bg={visual.markColor} color="white" align="center" justify="center" fontSize="8px" fontWeight="800">{state.mark}</Flex>
-              <Text fontSize="9px" fontWeight="800" color={visual.markColor} textTransform="uppercase" letterSpacing="0.075em">{state.outcomeLabel}</Text>
+              <Flex w="15px" h="15px" borderRadius="full" bg={visual.markColor} color="white" align="center" justify="center" fontSize="12px" fontWeight="800">{state.mark}</Flex>
+              <Text fontSize="12px" fontWeight="800" color={visual.markColor} textTransform="uppercase" letterSpacing="0.075em">{state.outcomeLabel}</Text>
             </HStack>
             <Text fontSize="12px" fontWeight="500" color="gray.800" lineHeight="1.55">{outcome.update}</Text>
           </Box>
@@ -429,11 +429,11 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
             <HStack justify="space-between" px={3} py={2} bg="gray.50" borderBottom="1px solid" borderColor="gray.100">
               <HStack spacing={2}>
                 <Icon as={MdEmail} boxSize={3.5} color="gray.500" />
-                <Text fontSize="10px" color="gray.500" fontWeight="700" textTransform="uppercase" letterSpacing="0.06em">
+                <Text fontSize="12px" color="gray.500" fontWeight="700" textTransform="uppercase" letterSpacing="0.06em">
                   Email draft
                 </Text>
               </HStack>
-              <Button size="xs" variant="ghost" colorScheme="teal" h="24px" fontSize="10px" onClick={copyDraft}>
+              <Button size="xs" variant="ghost" colorScheme="teal" h="24px" fontSize="12px" onClick={copyDraft}>
                 Copy draft
               </Button>
             </HStack>
@@ -460,8 +460,8 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
                 onClick={() => api.openExternal(artifact.url)}
               >
                 <VStack align="start" spacing={0} minW={0}>
-                  <Text fontSize="11px" fontWeight="700" color="teal.700" noOfLines={1}>{artifact.label}</Text>
-                  <Text fontSize="9px" fontWeight="500" color="gray.500">{artifact.type || 'Artifact'} · Open verified output</Text>
+                  <Text fontSize="12px" fontWeight="700" color="teal.700" noOfLines={1}>{artifact.label}</Text>
+                  <Text fontSize="12px" fontWeight="500" color="gray.500">{artifact.type || 'Artifact'} · Open verified output</Text>
                 </VStack>
               </Button>
             ))}
@@ -470,10 +470,10 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
 
         {summary.remainingWork && (
           <Box px={3} py={2.5} bg="orange.50" borderRadius="8px" borderLeft="3px solid" borderLeftColor="orange.300" mb={3}>
-            <Text fontSize="10px" fontWeight="700" color="orange.700" textTransform="uppercase" letterSpacing="0.06em" mb={1}>
+            <Text fontSize="12px" fontWeight="700" color="orange.700" textTransform="uppercase" letterSpacing="0.06em" mb={1}>
               Next step
             </Text>
-            <Text fontSize="11px" color="orange.900" lineHeight="1.5">{summary.remainingWork}</Text>
+            <Text fontSize="12px" color="orange.900" lineHeight="1.5">{summary.remainingWork}</Text>
           </Box>
         )}
       </Box>
@@ -495,37 +495,37 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
             <Flex w="15px" h="15px" borderRadius="full" bg="teal.50" color="teal.700" align="center" justify="center">
               <CheckIcon boxSize="7px" />
             </Flex>
-            <Text fontSize="9px" whiteSpace="nowrap">Approved by {summary.approvedBy || 'the user'}</Text>
+            <Text fontSize="12px" whiteSpace="nowrap">Approved by {summary.approvedBy || 'the user'}</Text>
           </HStack>
         </HStack>
 
         {showDetails && (
           <VStack align="stretch" spacing={3} mt={2} pt={3} borderTop="1px solid" borderColor="gray.100">
             <Box>
-              <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Objective</Text>
-              <Text fontSize="11px" color="gray.700" lineHeight="1.5">{summary.objective}</Text>
+              <Text fontSize="12px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Objective</Text>
+              <Text fontSize="12px" color="gray.700" lineHeight="1.5">{summary.objective}</Text>
             </Box>
             {(summary.plan?.length || 0) > 0 && (
               <Box>
-                <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1.5}>Approved plan</Text>
+                <Text fontSize="12px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1.5}>Approved plan</Text>
                 <VStack align="stretch" spacing={1.5}>
                   {summary.plan!.map((step, index) => (
                     <HStack key={index} spacing={2} align="start">
                       <Flex w="17px" h="17px" borderRadius="full" bg="gray.100" align="center" justify="center" flexShrink={0}>
-                        <Text fontSize="9px" fontWeight="700" color="gray.500">{index + 1}</Text>
+                        <Text fontSize="12px" fontWeight="700" color="gray.500">{index + 1}</Text>
                       </Flex>
-                      <Text fontSize="11px" color="gray.600" lineHeight="1.45">{step}</Text>
+                      <Text fontSize="12px" color="gray.600" lineHeight="1.45">{step}</Text>
                     </HStack>
                   ))}
                 </VStack>
               </Box>
             )}
             <Box>
-              <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Approval scope</Text>
-              <Text fontSize="11px" color="gray.700" lineHeight="1.5">
+              <Text fontSize="12px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Approval scope</Text>
+              <Text fontSize="12px" color="gray.700" lineHeight="1.5">
                 {summary.approvalScope || 'The approved execution scope was recorded by the connected AI client.'}
               </Text>
-              <Text fontSize="10px" color="gray.500" mt={1}>
+              <Text fontSize="12px" color="gray.500" mt={1}>
                 {(summary.approvedTools?.length || 0) > 0
                   ? `Approved tools: ${summary.approvedTools!.join(', ')}`
                   : 'Approved tools: none'}
@@ -533,15 +533,15 @@ function ExecutionSummaryCard({ summary }: { summary: ExecutionSummary }) {
             </Box>
             {summary.lastStatusNote && (
               <Box>
-                <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Status note</Text>
-                <Text fontSize="11px" color="gray.700" lineHeight="1.5">{summary.lastStatusNote}</Text>
+                <Text fontSize="12px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb={1}>Status note</Text>
+                <Text fontSize="12px" color="gray.700" lineHeight="1.5">{summary.lastStatusNote}</Text>
               </Box>
             )}
           </VStack>
         )}
 
         {showDetails && (
-          <Text fontSize="9px" color="gray.400" mt={2}>
+          <Text fontSize="12px" color="gray.400" mt={2}>
             Approved {formatRelativeTime(summary.approvedAt || summary.updatedAt)}
           </Text>
         )}
@@ -705,7 +705,7 @@ function SyncHistory({ taskId }: { taskId: string }) {
           <Box
             as="button"
             onClick={() => { if (jiraUrl) api.openExternal(jiraUrl); }}
-            color="#1a7080"
+            color="var(--owl-teal)"
             fontWeight="600"
             cursor={jiraUrl ? 'pointer' : 'default'}
             _hover={{ textDecoration: jiraUrl ? 'underline' : 'none' }}
@@ -754,7 +754,7 @@ function SyncHistory({ taskId }: { taskId: string }) {
 
                 <VStack align="stretch" spacing={1} flex={1} minW={0}>
                   <HStack spacing={2} flexWrap="wrap">
-                    <Badge colorScheme={meta.color} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                    <Badge colorScheme={meta.color} variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                       {meta.label}
                     </Badge>
                     {entry.targetRecordId && entry.targetRecordId !== '(pending-create)' && (
@@ -764,7 +764,7 @@ function SyncHistory({ taskId }: { taskId: string }) {
                           e.stopPropagation();
                           if (entry.targetRecordUrl) api.openExternal(entry.targetRecordUrl);
                         }}
-                        color="#1a7080"
+                        color="var(--owl-teal)"
                         fontSize="12px"
                         fontWeight="600"
                         cursor={entry.targetRecordUrl ? 'pointer' : 'default'}
@@ -775,18 +775,18 @@ function SyncHistory({ taskId }: { taskId: string }) {
                       </Box>
                     )}
                     {isFailed && (
-                      <Badge colorScheme="red" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                      <Badge colorScheme="red" variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                         Failed
                       </Badge>
                     )}
                     {isPending && (
-                      <Badge colorScheme="yellow" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                      <Badge colorScheme="yellow" variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                         {entry.result === 'pending-approval' ? 'Pending approval' : 'In progress'}
                       </Badge>
                     )}
-                    <Text fontSize="10px" color="gray.400">{formatRelativeTime(entry.createdAt)}</Text>
+                    <Text fontSize="12px" color="gray.400">{formatRelativeTime(entry.createdAt)}</Text>
                     {entry.retryCount > 0 && (
-                      <Text fontSize="10px" color="gray.400">retry #{entry.retryCount}</Text>
+                      <Text fontSize="12px" color="gray.400">retry #{entry.retryCount}</Text>
                     )}
                   </HStack>
 
@@ -795,7 +795,7 @@ function SyncHistory({ taskId }: { taskId: string }) {
                   </Text>
 
                   {isFailed && entry.errorMessage && !isExpanded && (
-                    <Text fontSize="11px" color="red.600" noOfLines={1}>{entry.errorMessage}</Text>
+                    <Text fontSize="12px" color="red.600" noOfLines={1}>{entry.errorMessage}</Text>
                   )}
 
                   {isExpanded && (
@@ -815,7 +815,7 @@ function SyncHistory({ taskId }: { taskId: string }) {
 
                       {entry.operation !== 'comment' && entry.fieldDiffs.length > 0 && (
                         <Box fontSize="12px">
-                          <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                          <Text fontSize="12px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
                             Field changes
                           </Text>
                           <VStack align="stretch" spacing={1}>
@@ -839,13 +839,13 @@ function SyncHistory({ taskId }: { taskId: string }) {
 
                       {entry.sourceTranscriptSpan?.snippet && (
                         <Box>
-                          <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                          <Text fontSize="12px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
                             From transcript
                           </Text>
                           <Box
                             borderLeft="3px solid"
-                            borderLeftColor="#9dd4d9"
-                            bg="#f0fafa"
+                            borderLeftColor="var(--owl-aqua)"
+                            bg="var(--surface-status)"
                             pl={3}
                             py={2}
                             borderRadius="0 6px 6px 0"
@@ -897,7 +897,7 @@ function SyncHistory({ taskId }: { taskId: string }) {
       {hasMore && !showAll && (
         <Text
           fontSize="12px"
-          color="#1a7080"
+          color="var(--owl-teal)"
           mt={3}
           cursor="pointer"
           onClick={() => setShowAll(true)}
@@ -1172,20 +1172,20 @@ export default function TaskDetailSidebar({
                   </Text>
                   <VStack align="stretch" spacing={2}>
                     {task.definition.outcome && (
-                      <Box px={3} py={2} bg="gray.50" borderRadius="8px" borderLeft="3px solid" borderLeftColor="#1a7080">
-                        <Text fontSize="10px" fontWeight="700" color="#1a7080" textTransform="uppercase" letterSpacing="0.06em" mb="2px">Outcome</Text>
+                      <Box px={3} py={2} bg="gray.50" borderRadius="8px" borderLeft="3px solid" borderLeftColor="var(--owl-teal)">
+                        <Text fontSize="12px" fontWeight="700" color="var(--owl-teal)" textTransform="uppercase" letterSpacing="0.06em" mb="2px">Outcome</Text>
                         <Text fontSize="13px" color="gray.700">{task.definition.outcome}</Text>
                       </Box>
                     )}
                     {task.definition.scope && (
                       <Box px={3} py={2} bg="gray.50" borderRadius="8px">
-                        <Text fontSize="10px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb="2px">Scope</Text>
+                        <Text fontSize="12px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb="2px">Scope</Text>
                         <Text fontSize="13px" color="gray.700">{task.definition.scope}</Text>
                       </Box>
                     )}
                     {task.definition.acceptanceCriteria && task.definition.acceptanceCriteria.length > 0 && (
                       <Box>
-                        <Text fontSize="10px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb="6px">Criteria</Text>
+                        <Text fontSize="12px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb="6px">Criteria</Text>
                         <VStack align="stretch" spacing={1}>
                           {task.definition.acceptanceCriteria.map((criterion, idx) => (
                             <HStack key={idx} spacing={2} px={1}>

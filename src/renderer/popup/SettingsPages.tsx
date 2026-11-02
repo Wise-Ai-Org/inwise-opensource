@@ -229,7 +229,7 @@ function ZoomConnectHeader() {
         <div className="pp-row">
           <span className="pp-pulse" />
           <div className="pp-grow">
-            <div className="pp-title-sm" style={{ fontSize: 14 }}>Waiting for Zoom…</div>
+            <div className="pp-title-sm" style={{ fontSize: 13 }}>Waiting for Zoom…</div>
             <div className="pp-meta" style={{ marginTop: 3, lineHeight: 1.5 }}>
               Finish signing in in your browser. This window stays open.
             </div>
@@ -246,7 +246,7 @@ function ZoomConnectHeader() {
   if (flow === 'failed') {
     return (
       <div className="pp-card" style={{ marginBottom: 10, padding: '14px' }}>
-        <div className="pp-title-sm" style={{ fontSize: 14 }}>That didn't finish</div>
+        <div className="pp-title-sm" style={{ fontSize: 13 }}>That didn't finish</div>
         <div className="pp-meta" style={{ marginTop: 3, lineHeight: 1.5 }}>
           The sign-in timed out — if you closed the browser tab, that's why.
         </div>

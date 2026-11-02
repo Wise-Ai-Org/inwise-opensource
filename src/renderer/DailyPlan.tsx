@@ -26,13 +26,13 @@ interface Plan {
   hasApiKey: boolean;
 }
 
-const TEAL = '#0d9488';
-const TEAL_TINT = '#f0fdfa';
-const TEAL_LINE = '#99f6e4';
-const SLATE_900 = '#0f172a';
-const SLATE_600 = '#475569';
-const SLATE_500 = '#64748b';
-const SLATE_200 = '#e2e8f0';
+const TEAL = 'var(--owl-teal)';
+const TEAL_TINT = 'var(--surface-status)';
+const TEAL_LINE = 'var(--owl-aqua)';
+const SLATE_900 = 'var(--text-strong)';
+const SLATE_600 = 'var(--owl-deep-teal)';
+const SLATE_500 = 'var(--text-muted)';
+const SLATE_200 = 'var(--line)';
 
 function fmtTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -126,7 +126,7 @@ export default function DailyPlan(): JSX.Element {
             border: 'none',
             background: 'transparent',
             color: SLATE_500,
-            fontSize: 16,
+            fontSize: 15,
             lineHeight: '24px',
             cursor: 'pointer',
             borderRadius: 6,
@@ -134,13 +134,13 @@ export default function DailyPlan(): JSX.Element {
         >
           ×
         </button>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.8, color: TEAL, textTransform: 'uppercase', marginBottom: 4 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.8, color: TEAL, textTransform: 'uppercase', marginBottom: 4 }}>
           Ollie planned your day
         </div>
         <div style={{ fontSize: 18, fontWeight: 700, color: SLATE_900 }}>
           {plan ? plan.greeting.title : 'One moment'}
         </div>
-        <div style={{ fontSize: 12.5, color: SLATE_600, marginTop: 2 }}>
+        <div style={{ fontSize: 13, color: SLATE_600, marginTop: 2 }}>
           {failed
             ? 'Ollie tripped over a wire fetching your plan. Open Inwise to see today.'
             : plan
@@ -165,7 +165,7 @@ export default function DailyPlan(): JSX.Element {
                   <span style={{ fontSize: 12, fontWeight: 600, color: TEAL, whiteSpace: 'nowrap' }}>
                     {fmtTime(m.startTime)}
                   </span>
-                  <span style={{ fontSize: 13.5, fontWeight: 600, color: SLATE_900 }}>{m.title}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: SLATE_900 }}>{m.title}</span>
                 </div>
                 {m.agenda.length > 0 && (
                   <div
@@ -179,11 +179,11 @@ export default function DailyPlan(): JSX.Element {
                       borderRadius: 8,
                     }}
                   >
-                    <div style={{ fontSize: 10.5, fontWeight: 700, color: TEAL, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 4 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: TEAL, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 4 }}>
                       Ollie's draft agenda
                     </div>
                     {m.agenda.map((item, i) => (
-                      <div key={i} style={{ fontSize: 12.5, color: SLATE_600, display: 'flex', gap: 6, marginBottom: 2 }}>
+                      <div key={i} style={{ fontSize: 13, color: SLATE_600, display: 'flex', gap: 6, marginBottom: 2 }}>
                         <span style={{ color: TEAL }}>•</span>
                         <span>{item}</span>
                       </div>
@@ -210,7 +210,7 @@ export default function DailyPlan(): JSX.Element {
                     background: TEAL_TINT,
                     border: `1px solid ${TEAL_LINE}`,
                     color: TEAL,
-                    fontSize: 11,
+                    fontSize: 12,
                     fontWeight: 700,
                     display: 'flex',
                     alignItems: 'center',
@@ -273,7 +273,7 @@ export default function DailyPlan(): JSX.Element {
                             onClick={() => setPriority(t.id, p.value)}
                             style={{
                               padding: '2px 7px',
-                              fontSize: 10,
+                              fontSize: 12,
                               fontWeight: 700,
                               border: 'none',
                               cursor: 'pointer',
@@ -287,7 +287,7 @@ export default function DailyPlan(): JSX.Element {
                       })}
                     </div>
                     {t.dueDate && (
-                      <span style={{ fontSize: 11, fontWeight: 600, color: new Date(t.dueDate).getTime() < Date.now() ? '#dc2626' : SLATE_500 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: new Date(t.dueDate).getTime() < Date.now() ? '#dc2626' : SLATE_500 }}>
                         {fmtDue(t.dueDate)}
                       </span>
                     )}
@@ -303,7 +303,7 @@ export default function DailyPlan(): JSX.Element {
                     border: 'none',
                     background: 'transparent',
                     color: SLATE_500,
-                    fontSize: 14,
+                    fontSize: 13,
                     lineHeight: '20px',
                     cursor: 'pointer',
                     borderRadius: 5,
@@ -367,7 +367,7 @@ function SectionTitle({ children, style }: { children: React.ReactNode; style?: 
   return (
     <div
       style={{
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: 700,
         letterSpacing: 0.8,
         color: SLATE_500,

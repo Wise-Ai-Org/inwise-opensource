@@ -246,7 +246,7 @@ function PriorityReviewModal({
           {loading && (
             <Flex justify="center" align="center" py={12}>
               <VStack spacing={3}>
-                <Spinner size="lg" color="#1a7080" />
+                <Spinner size="lg" color="var(--owl-teal)" />
                 <Text fontSize="sm" color="gray.500">Scoring tasks...</Text>
               </VStack>
             </Flex>
@@ -303,7 +303,7 @@ function PriorityReviewModal({
                       minH={`${Math.max(24, (zone.count / totalItems) * 100)}px`}
                     >
                       <Text
-                        fontSize="9px"
+                        fontSize="12px"
                         fontWeight="800"
                         color={zone.color}
                         textTransform="uppercase"
@@ -1573,9 +1573,9 @@ export default function TasksDashboard({ onNavigate }: { onNavigate?: (view: str
                     <VStack align="stretch" spacing={1}>
                       {jiraSyncDetails.items.map((item: any, i: number) => (
                         <HStack key={i} px={3} py={2} bg="gray.50" borderRadius="6px" spacing={2}>
-                          <Badge colorScheme="gray" fontSize="9px">{item.jiraKey || '—'}</Badge>
+                          <Badge colorScheme="gray" fontSize="12px">{item.jiraKey || '—'}</Badge>
                           <Text fontSize="xs" flex={1} noOfLines={1}>{item.title || item.text || 'Untitled'}</Text>
-                          <Badge colorScheme={item.action === 'created' ? 'green' : item.action === 'linked' ? 'blue' : 'gray'} fontSize="9px">{item.action || 'synced'}</Badge>
+                          <Badge colorScheme={item.action === 'created' ? 'green' : item.action === 'linked' ? 'blue' : 'gray'} fontSize="12px">{item.action || 'synced'}</Badge>
                         </HStack>
                       ))}
                     </VStack>

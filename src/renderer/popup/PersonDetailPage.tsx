@@ -102,7 +102,7 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
           <>
             <div className="pp-card">
               <div className="pp-row">
-                <span className="pp-avatar" style={{ width: 42, height: 42, fontSize: 14 }}>{initials(person.name || '?')}</span>
+                <span className="pp-avatar" style={{ width: 42, height: 42, fontSize: 13 }}>{initials(person.name || '?')}</span>
                 <div className="pp-grow">
                   <div className="pp-title-sm" style={{ fontSize: 15 }}>{person.name}</div>
                   {person.email && person.email !== person.name && (
@@ -148,14 +148,14 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
             {!person.isSelf && (agenda ? (
               <div className="pp-card" style={{ background: 'var(--pp-teal-tint)', borderColor: 'var(--pp-teal-line)' }}>
                 <div className="pp-row" style={{ marginBottom: 8 }}>
-                  <div className="pp-grow" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--pp-teal-deep)' }}>
+                  <div className="pp-grow" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--pp-teal-deep)' }}>
                     Talking points
                   </div>
                   <button className="pp-quiet-action" aria-label="Dismiss" onClick={() => setAgenda(null)}>✕</button>
                 </div>
                 <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {agenda.map((item, i) => (
-                    <li key={i} style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.5 }}>{item}</li>
+                    <li key={i} style={{ fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.5 }}>{item}</li>
                   ))}
                 </ul>
               </div>
@@ -178,7 +178,7 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   {openItems.slice(0, 6).map((item: any, i: number) => (
                     <div key={i} className="pp-setrow" style={{ cursor: 'default' }}>
                       <div className="pp-grow">
-                        <div style={{ fontSize: 12.5, color: 'var(--navy)', lineHeight: 1.4 }}>{item.text}</div>
+                        <div style={{ fontSize: 13, color: 'var(--navy)', lineHeight: 1.4 }}>{item.text}</div>
                         <div className="pp-rowsub">
                           {[item.assignee ? `Owner: ${item.assignee}` : 'Unassigned', item.dueDate || null].filter(Boolean).join(' · ')}
                         </div>
@@ -196,7 +196,7 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   {commitments.slice(0, 6).map((item: any, i: number) => (
                     <div key={i} className="pp-setrow" style={{ cursor: 'default' }}>
                       <div className="pp-grow">
-                        <div className="pp-rowlabel" style={{ fontSize: 12.5 }}>{item.text}</div>
+                        <div className="pp-rowlabel" style={{ fontSize: 13 }}>{item.text}</div>
                         <div className="pp-rowsub">{[item.meetingTitle, item.deadline].filter(Boolean).join(' Â· ')}</div>
                       </div>
                     </div>
@@ -247,7 +247,7 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                 </div>
                 {mergeConfirm ? (
                   <div className="pp-card" style={{ background: 'var(--pp-teal-tint)', borderColor: 'var(--pp-teal-line)' }}>
-                    <div style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.5 }}>
                       Merge <b>{mergeConfirm.name}</b> into <b>{person.name}</b>? Their meetings, open items, and
                       voiceprints combine, and "{mergeConfirm.name}" becomes an alias. This can't be undone.
                     </div>

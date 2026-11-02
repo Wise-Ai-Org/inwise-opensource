@@ -43,6 +43,11 @@ jobs:
       - name: Test recording recovery in Electron
         if: matrix.platform == 'windows'
         run: node scripts/run-recording-recovery-tests.cjs
+      - name: Verify Owl desktop screens and recorder
+        if: matrix.platform == 'windows'
+        run: |
+          npx electron scripts/test-design-ui.cjs
+          npx electron scripts/test-recorder-design.cjs
       - name: Package unsigned Windows installer
         if: matrix.platform == 'windows'
         run: npx electron-builder --win --${{ matrix.target_arch }} --publish never
