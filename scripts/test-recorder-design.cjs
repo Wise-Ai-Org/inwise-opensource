@@ -8,6 +8,8 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
 app.whenReady().then(async()=>{
  const preload=path.join(scratch,'fixture.cjs');
  fs.writeFileSync(preload,`window.callbacks={};window.expanded=false;
+const nativeMatchMedia=window.matchMedia.bind(window);window.originalReducedMotion=nativeMatchMedia('(prefers-reduced-motion: reduce)').matches;window.fixtureReducedMotion=false;
+window.matchMedia=q=>q==='(prefers-reduced-motion: reduce)'?{matches:window.fixtureReducedMotion,media:q,addListener:()=>{},removeListener:()=>{},addEventListener:()=>{},removeEventListener:()=>{},dispatchEvent:()=>true}:nativeMatchMedia(q);
 window.inwiseAPI=new Proxy({on:(c,f)=>window.callbacks[c]=f,getConfig:async()=>({}),getDesktopSourceId:async()=>'fixture',getMediaPermissions:async()=>({microphone:'granted',screen:'granted'}),resizePill:()=>{},showMainWindow:()=>{window.expanded=true}},{get:(o,k)=>o[k]||(()=>{})});
 window.electronAPI={sendAudio:()=>{},sendAudioHealth:()=>{},reportUnhandledRejection:()=>{}};window.fixtureGains=[];
 async function fakeStream(){const c=new AudioContext();await c.resume();const o=c.createOscillator(),g=c.createGain(),d=c.createMediaStreamDestination();window.fixtureGains.push(g);o.frequency.value=180;g.gain.value=.08;o.connect(g);g.connect(d);o.start();return d.stream;}
@@ -22,7 +24,11 @@ Object.defineProperty(navigator.mediaDevices,'getUserMedia',{value:fakeStream});
  for(let i=0;i<120;i++){if(await js("[...document.querySelectorAll('div')].some(e=>e.style.getPropertyValue('--glow-left-y'))"))break;await wait(200);}
  await snap('recorder-recording');
  const state=await js(`(()=>{const el=[...document.querySelectorAll('div')].find(e=>e.style.getPropertyValue('--glow-left-y'));return {glow:!!el,background:el?.style.background,border:el&&getComputedStyle(el).borderTopStyle,shadow:el&&getComputedStyle(el).boxShadow,text:document.body.innerText}})()`);
- assert.ok(state.glow,'audio still drives the soft glow');assert.ok(state.background.includes('255, 255, 255')||state.background.includes('#ffffff'),'white recorder surface');assert.equal(state.border,'none');assert.equal(state.shadow,'none');
+ assert.ok(state.glow,'audio still drives the soft glow: '+JSON.stringify(state));assert.ok(state.background.includes('255, 255, 255')||state.background.includes('#ffffff'),'white recorder surface');assert.equal(state.border,'none');assert.equal(state.shadow,'none');
+ await js("window.fixtureReducedMotion=true");
+ const before=await js("[...document.querySelectorAll('div')].find(e=>e.style.getPropertyValue('--glow-left-y')).style.getPropertyValue('--glow-left-y')");await wait(250);
+ assert.equal(await js("[...document.querySelectorAll('div')].find(e=>e.style.getPropertyValue('--glow-left-y')).style.getPropertyValue('--glow-left-y')"),before,'reduced motion freezes the glow');
+ console.log('Host reduced-motion preference:',await js('window.originalReducedMotion'));
  await js("window.fixtureGains.forEach(g=>g.gain.value=0)");await wait(300);
  await js("window.callbacks['recording:silence-prompt']({title:'Launch readiness sync',deadlineAt:Date.now()+120000})");await wait(200);await snap('recorder-silence-prompt');
  assert.ok(await js("document.body.innerText.includes('Keep recording')"),'silence action remains present');
