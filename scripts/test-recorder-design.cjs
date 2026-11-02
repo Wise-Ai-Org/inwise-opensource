@@ -16,9 +16,11 @@ async function fakeStream(){const c=new AudioContext();await c.resume();const o=
 Object.defineProperty(navigator.mediaDevices,'enumerateDevices',{value:async()=>[{kind:'audioinput',deviceId:'default',label:'Synthetic microphone',groupId:'fixture'},{kind:'audiooutput',deviceId:'default',label:'Synthetic speaker',groupId:'fixture'}]});
 Object.defineProperty(navigator.mediaDevices,'getUserMedia',{value:fakeStream});Object.defineProperty(navigator.mediaDevices,'getDisplayMedia',{value:fakeStream});`);
  const win=new BrowserWindow({width:560,height:100,show:false,frame:false,transparent:true,webPreferences:{preload,contextIsolation:false,offscreen:true,backgroundThrottling:false}});
+ let frame=null;
+ win.webContents.on('paint',(_e,_dirty,image)=>{frame=image.toPNG()});
  win.webContents.setAudioMuted(true);const js=s=>win.webContents.executeJavaScript(s);
  const out=path.resolve(__dirname,'../artifacts/owl-design');fs.mkdirSync(out,{recursive:true});
- const snap=async name=>fs.writeFileSync(path.join(out,name+'.png'),(await win.webContents.capturePage()).toPNG());
+ const snap=async name=>{frame=null;win.webContents.invalidate();for(let i=0;i<60&&!frame;i++)await wait(50);assert.ok(frame,'offscreen paint available: '+name);fs.writeFileSync(path.join(out,name+'.png'),frame);};
  await win.loadFile(path.resolve(__dirname,'../dist/renderer/badge.html'));await wait(250);await snap('recorder-idle');
  await js("window.callbacks['recording:start']('Launch readiness sync')");
  for(let i=0;i<120;i++){if(await js("[...document.querySelectorAll('div')].some(e=>e.style.getPropertyValue('--glow-left-y'))"))break;await wait(200);}
