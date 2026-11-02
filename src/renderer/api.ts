@@ -9,6 +9,16 @@
  * that imports don't break even though these URLs are never fetched on desktop.
  */
 
+import type {
+  CatchUpNote,
+  NotificationSettings,
+  OllieMoment,
+  ProcessedContent,
+} from '../main/ollie-moments-types';
+
+// Ollie moment payload types, re-exported for renderer components.
+export type * from '../main/ollie-moments-types';
+
 const inwiseAPI = (window as any).inwiseAPI;
 
 // ---------------------------------------------------------------------------
@@ -118,6 +128,18 @@ export const api = {
   sorListPendingApprovals: () => inwiseAPI.sorListPendingApprovals(),
   sorApprove: (id: string, overrides?: Record<string, any>) => inwiseAPI.sorApprove(id, overrides),
   sorReject: (id: string) => inwiseAPI.sorReject(id),
+
+  // ── Ollie moments (docs/OLLIE_MOMENTS.md, "IPC contract") ────────────────
+  getOllieMoment: (): Promise<OllieMoment | null> => inwiseAPI.getOllieMoment(),
+  dismissOllieMoment: (key: string): Promise<boolean> => inwiseAPI.dismissOllieMoment(key),
+  getOllieProcessed: (meetingId: string): Promise<ProcessedContent | null> => inwiseAPI.getOllieProcessed(meetingId),
+  getOllieCatchUpNotes: (): Promise<CatchUpNote[]> => inwiseAPI.getOllieCatchUpNotes(),
+  ollieSetRecordAtStart: (eventId: string, armed: boolean): Promise<{ armed: boolean }> =>
+    inwiseAPI.ollieSetRecordAtStart(eventId, armed),
+  ollieAddToTomorrow: (taskId: string): Promise<any> => inwiseAPI.ollieAddToTomorrow(taskId),
+  getNotificationSettings: (): Promise<NotificationSettings> => inwiseAPI.getNotificationSettings(),
+  setNotificationSettings: (patch: Partial<Omit<NotificationSettings, 'prep' | 'recordingProblems'>> & { prep?: Partial<NotificationSettings['prep']> }): Promise<NotificationSettings> =>
+    inwiseAPI.setNotificationSettings(patch),
 
   // ── Desktop Capture ──────────────────────────────────────────────────────
   getDesktopSourceId: () => inwiseAPI.getDesktopSourceId(),
