@@ -119,11 +119,11 @@ function CalendarStatus() {
   return (
     <div style={{
       padding: '12px 16px', borderRadius: 8, marginBottom: 20,
-      background: '#F0FDF9', border: '1px solid #CCFBF1',
+      background: 'var(--surface-status)', border: '1px solid var(--surface-status)',
     }}>
-      <div style={{ fontSize: 13, color: '#115E59' }}>
+      <div style={{ fontSize: 13, color: 'var(--owl-teal)' }}>
         <span style={{ fontWeight: 600 }}>Calendar connected</span> — {health.eventCount} upcoming event{health.eventCount !== 1 ? 's' : ''} found
-        {ago && <span style={{ color: '#5EEAD4', marginLeft: 8 }}>· synced {ago}</span>}
+        {ago && <span style={{ color: 'var(--owl-aqua)', marginLeft: 8 }}>· synced {ago}</span>}
       </div>
     </div>
   );
@@ -490,7 +490,7 @@ function MicTest({ deviceId }: { deviceId: string }) {
       )}
       {status === 'done' && (
         <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--slate-100)', borderRadius: 8, fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.5 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--teal)', display: 'block', marginBottom: 4 }}>TRANSCRIPT</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--teal)', display: 'block', marginBottom: 4 }}>TRANSCRIPT</span>
           {transcript}
         </div>
       )}
@@ -641,7 +641,7 @@ function SystemAudioTest() {
       )}
       {status === 'done' && (
         <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--slate-100)', borderRadius: 8, fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.5 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: '#f59e0b', display: 'block', marginBottom: 4 }}>SYSTEM AUDIO TRANSCRIPT</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#f59e0b', display: 'block', marginBottom: 4 }}>SYSTEM AUDIO TRANSCRIPT</span>
           {transcript}
         </div>
       )}
@@ -1047,7 +1047,7 @@ function JiraSettings({ config, update, savedKey }: { config: Config; update: (k
           <div style={{ padding: '12px 16px', background: 'var(--slate-50)', borderRadius: 8, border: '1px solid var(--slate-200)', marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--navy)' }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--navy)' }}>
                   {status.info?.cloudName || 'Jira Cloud'}
                 </div>
                 {status.info?.email && (
@@ -1056,12 +1056,12 @@ function JiraSettings({ config, update, savedKey }: { config: Config; update: (k
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 {status.info?.cloudUrl && (
-                  <button className="btn btn-secondary btn-sm" style={{ fontSize: 11 }}
+                  <button className="btn btn-secondary btn-sm" style={{ fontSize: 12 }}
                     onClick={() => (window as any).inwiseAPI.openExternal(status.info.cloudUrl)}>
                     Open Jira
                   </button>
                 )}
-                <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, color: 'var(--red)' }}
+                <button className="btn btn-secondary btn-sm" style={{ fontSize: 12, color: 'var(--red)' }}
                   onClick={handleDisconnect}>
                   Disconnect
                 </button>
@@ -1249,10 +1249,10 @@ const SOR_OP_LABEL: Record<SorOp, string> = {
 };
 
 const SOR_OP_COLOR: Record<SorOp, string> = {
-  create: '#0F766E',
+  create: 'var(--owl-teal)',
   update: '#1D4ED8',
   transition: '#7C3AED',
-  comment: '#475569',
+  comment: 'var(--owl-deep-teal)',
 };
 
 function sorOneLineSummary(entry: SorWriteEntry): string {
@@ -1302,7 +1302,7 @@ function SorWriteRow({ entry, onRetry, retrying }: {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 2 }}>
             <span style={{
-              fontSize: 10, fontWeight: 700, color: SOR_OP_COLOR[entry.operation],
+              fontSize: 12, fontWeight: 700, color: SOR_OP_COLOR[entry.operation],
               background: `${SOR_OP_COLOR[entry.operation]}1a`, borderRadius: 4, padding: '2px 6px',
               textTransform: 'uppercase', letterSpacing: '0.04em',
             }}>
@@ -1312,7 +1312,7 @@ function SorWriteRow({ entry, onRetry, retrying }: {
               <button
                 style={{
                   background: 'none', border: 'none', cursor: entry.targetRecordUrl ? 'pointer' : 'default',
-                  color: '#1a7080', fontSize: 12, fontWeight: 600, padding: 0,
+                  color: 'var(--owl-teal)', fontSize: 12, fontWeight: 600, padding: 0,
                   textDecoration: entry.targetRecordUrl ? 'underline' : 'none',
                 }}
                 onClick={() => {
@@ -1325,19 +1325,19 @@ function SorWriteRow({ entry, onRetry, retrying }: {
             )}
             {isFailed && (
               <span style={{
-                fontSize: 10, fontWeight: 700, color: '#DC2626',
+                fontSize: 12, fontWeight: 700, color: '#DC2626',
                 background: 'rgba(220, 38, 38, 0.1)', borderRadius: 4, padding: '2px 6px',
               }}>FAILED</span>
             )}
             {isPending && (
               <span style={{
-                fontSize: 10, fontWeight: 700, color: '#B45309',
+                fontSize: 12, fontWeight: 700, color: 'var(--owl-deep-teal)',
                 background: 'rgba(180, 83, 9, 0.1)', borderRadius: 4, padding: '2px 6px',
               }}>
                 {entry.result === 'pending-approval' ? 'PENDING APPROVAL' : 'IN PROGRESS'}
               </span>
             )}
-            <span style={{ fontSize: 11, color: 'var(--slate-400)', marginLeft: 'auto' }}>
+            <span style={{ fontSize: 12, color: 'var(--slate-400)', marginLeft: 'auto' }}>
               {formatAgo(new Date(entry.createdAt).getTime())}
             </span>
           </div>
@@ -1347,7 +1347,7 @@ function SorWriteRow({ entry, onRetry, retrying }: {
           </div>
 
           {isFailed && entry.errorMessage && !expanded && (
-            <div style={{ fontSize: 11, color: '#991B1B', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <div style={{ fontSize: 12, color: '#991B1B', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {entry.errorMessage}
             </div>
           )}
@@ -1366,7 +1366,7 @@ function SorWriteRow({ entry, onRetry, retrying }: {
               {entry.operation !== 'comment' && entry.fieldDiffs.length > 0 && (
                 <div style={{ fontSize: 12 }}>
                   <div style={{
-                    fontSize: 10, fontWeight: 600, color: 'var(--slate-400)',
+                    fontSize: 12, fontWeight: 600, color: 'var(--slate-400)',
                     textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4,
                   }}>
                     Field changes
@@ -1392,11 +1392,11 @@ function SorWriteRow({ entry, onRetry, retrying }: {
               {entry.sourceTranscriptSpan?.snippet && (
                 <div style={{ marginTop: 8 }}>
                   <div style={{
-                    fontSize: 10, fontWeight: 600, color: 'var(--slate-400)',
+                    fontSize: 12, fontWeight: 600, color: 'var(--slate-400)',
                     textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4,
                   }}>From transcript</div>
                   <div style={{
-                    borderLeft: '3px solid #9dd4d9', background: '#f0fafa',
+                    borderLeft: '3px solid var(--owl-aqua)', background: 'var(--surface-status)',
                     padding: '6px 10px', borderRadius: '0 6px 6px 0',
                     fontSize: 12, color: 'var(--slate-700)', fontStyle: 'italic',
                   }}>
@@ -1421,7 +1421,7 @@ function SorWriteRow({ entry, onRetry, retrying }: {
         {isFailed && (
           <button
             className="btn btn-secondary btn-sm"
-            style={{ fontSize: 11, padding: '2px 8px', color: '#DC2626', flexShrink: 0 }}
+            style={{ fontSize: 12, padding: '2px 8px', color: '#DC2626', flexShrink: 0 }}
             onClick={() => onRetry(entry._id)}
             disabled={retrying}
           >
@@ -1592,8 +1592,8 @@ function ZoomSettings() {
         <div>
           <div style={{ padding: '12px 16px', background: 'var(--slate-50)', borderRadius: 8, border: '1px solid var(--slate-200)', marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--navy)' }}>Zoom Connected</div>
-              <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, color: 'var(--red)' }}
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--navy)' }}>Zoom Connected</div>
+              <button className="btn btn-secondary btn-sm" style={{ fontSize: 12, color: 'var(--red)' }}
                 onClick={handleDisconnect}>
                 Disconnect
               </button>
@@ -1623,13 +1623,13 @@ function ZoomSettings() {
                     style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 12px' }}
                     onClick={() => handleFetchTranscript(r)}>
                     <span style={{ fontWeight: 600, fontSize: 13 }}>{r.title}</span>
-                    <span style={{ fontSize: 11, color: 'var(--slate-400)' }}>
+                    <span style={{ fontSize: 12, color: 'var(--slate-400)' }}>
                       {new Date(r.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                     </span>
                   </button>
                 ))}
               </div>
-              <button className="btn btn-secondary btn-sm" style={{ marginTop: 10, fontSize: 11 }} onClick={resetFetch}>
+              <button className="btn btn-secondary btn-sm" style={{ marginTop: 10, fontSize: 12 }} onClick={resetFetch}>
                 Cancel
               </button>
             </div>
@@ -1761,7 +1761,7 @@ function NativeTranscriptPicker({
               onClick={() => fetchOne(meeting)}
             >
               <span style={{ fontWeight: 600, fontSize: 13 }}>{meeting.title}</span>
-              <span style={{ fontSize: 11, color: 'var(--slate-400)' }}>
+              <span style={{ fontSize: 12, color: 'var(--slate-400)' }}>
                 {new Date(meeting.startedAt).toLocaleString(undefined, {
                   month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
                 })}
@@ -1769,7 +1769,7 @@ function NativeTranscriptPicker({
             </button>
           ))}
         </div>
-        <button className="btn btn-secondary btn-sm" style={{ marginTop: 10, fontSize: 11 }} onClick={reset}>Cancel</button>
+        <button className="btn btn-secondary btn-sm" style={{ marginTop: 10, fontSize: 12 }} onClick={reset}>Cancel</button>
       </div>
     );
   }
@@ -1844,8 +1844,8 @@ function TeamsSettings() {
       <div>
         <div style={{ padding: '12px 16px', background: 'var(--slate-50)', borderRadius: 8, border: '1px solid var(--slate-200)', marginBottom: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--navy)' }}>Microsoft Teams Connected</div>
-            <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, color: 'var(--red)' }} onClick={disconnect}>Disconnect</button>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--navy)' }}>Microsoft Teams Connected</div>
+            <button className="btn btn-secondary btn-sm" style={{ fontSize: 12, color: 'var(--red)' }} onClick={disconnect}>Disconnect</button>
           </div>
         </div>
         <NativeTranscriptPicker
@@ -1951,8 +1951,8 @@ function MeetSettings() {
       <div>
         <div style={{ padding: '12px 16px', background: 'var(--slate-50)', borderRadius: 8, border: '1px solid var(--slate-200)', marginBottom: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--navy)' }}>Google Meet Connected</div>
-            <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, color: 'var(--red)' }} onClick={disconnect}>Disconnect</button>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--navy)' }}>Google Meet Connected</div>
+            <button className="btn btn-secondary btn-sm" style={{ fontSize: 12, color: 'var(--red)' }} onClick={disconnect}>Disconnect</button>
           </div>
         </div>
         <NativeTranscriptPicker
@@ -2022,7 +2022,7 @@ function CopySnippet({ label, text }: { label: string; text: string }) {
         style={{
           margin: 0,
           padding: '10px 12px',
-          background: 'var(--slate-50, #f8fafc)',
+          background: 'var(--slate-50, var(--surface))',
           border: '1px solid var(--slate-200)',
           borderRadius: 6,
           fontSize: 12,
@@ -2178,7 +2178,7 @@ function ConnectToAISection() {
           </span>
         </label>
         {writebackEnabled && (
-          <div style={{ fontSize: 12, marginTop: 8, padding: '8px 10px', borderRadius: 6, background: 'var(--amber-50, #fffbeb)', color: 'var(--amber-800, #92400e)', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 12, marginTop: 8, padding: '8px 10px', borderRadius: 6, background: 'var(--amber-50, var(--surface-status))', color: 'var(--amber-800, #92400e)', lineHeight: 1.5 }}>
             Writeback is enabled. Review every proposed plan, external tool, recipient, and data-sharing scope in your AI client before approving it.
           </div>
         )}
@@ -2219,7 +2219,7 @@ function ConnectToAISection() {
       </div>
 
       <div style={{ fontSize: 12, color: 'var(--slate-500)', lineHeight: 1.7 }}>
-        <strong style={{ color: 'var(--slate-600, #475569)' }}>Things you can ask once connected:</strong>
+        <strong style={{ color: 'var(--slate-600, var(--owl-deep-teal))' }}>Things you can ask once connected:</strong>
         <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
           <li>"What did we decide in last Tuesday's meeting?"</li>
           <li>"Summarize my most recent meeting with Alex."</li>
@@ -2319,7 +2319,7 @@ function IntegrationsSection() {
       return { label: 'Disconnected', bg: 'var(--slate-100)', color: 'var(--slate-500)' };
     }
     const authExpired = jiraStatus.info?.authExpired === true;
-    if (authExpired) return { label: 'Auth expired', bg: '#FEF3C7', color: '#92400E' };
+    if (authExpired) return { label: 'Auth expired', bg: 'var(--surface-status)', color: '#92400E' };
     return { label: 'Connected', bg: 'rgba(13, 148, 136, 0.1)', color: 'var(--teal)' };
   })();
 
@@ -2347,9 +2347,9 @@ function IntegrationsSection() {
         border: '1px solid var(--slate-200)', borderRadius: 10, padding: 14, background: 'white',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--navy)' }}>Jira</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--navy)' }}>Jira</span>
           <span style={{
-            fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999,
+            fontSize: 12, fontWeight: 600, padding: '2px 8px', borderRadius: 999,
             background: connectionPill.bg, color: connectionPill.color,
           }}>
             {connectionPill.label}
@@ -2540,7 +2540,7 @@ function SelfEmailsEditor({ emails, onChange }: { emails: string[]; onChange: (n
                 background: 'transparent',
                 color: 'var(--slate-500)',
                 cursor: 'pointer',
-                fontSize: 14,
+                fontSize: 13,
                 lineHeight: 1,
                 padding: 0,
               }}
@@ -2856,18 +2856,18 @@ function VoiceEnrollment() {
                 <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--navy)' }}>{p.name}</span>
                 {p.isUser && (
                   <span style={{
-                    fontSize: 10, fontWeight: 700, color: 'var(--teal)',
+                    fontSize: 12, fontWeight: 700, color: 'var(--teal)',
                     background: 'rgba(13, 148, 136, 0.1)', borderRadius: 4, padding: '2px 6px', marginLeft: 8,
                   }}>YOU</span>
                 )}
                 {p.name.startsWith('Unidentified') && (
                   <span style={{
-                    fontSize: 10, fontWeight: 700, color: 'var(--slate-400)',
+                    fontSize: 12, fontWeight: 700, color: 'var(--slate-400)',
                     background: 'var(--slate-200)', borderRadius: 4, padding: '2px 6px', marginLeft: 8,
                   }}>PENDING</span>
                 )}
               </div>
-              <span style={{ fontSize: 11, color: 'var(--slate-400)' }}>
+              <span style={{ fontSize: 12, color: 'var(--slate-400)' }}>
                 {new Date(p.createdAt).toLocaleDateString()}
               </span>
               {p.hasAudio && (
@@ -2900,7 +2900,7 @@ function VoiceEnrollment() {
                   {playError[p._id] && (
                     <span
                       style={{
-                        fontSize: 11, color: 'var(--red)',
+                        fontSize: 12, color: 'var(--red)',
                         maxWidth: 180, overflow: 'hidden',
                         textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       }}
@@ -2912,14 +2912,14 @@ function VoiceEnrollment() {
                 </>
               )}
               {p.isUser ? (
-                <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, padding: '2px 8px' }}
+                <button className="btn btn-secondary btn-sm" style={{ fontSize: 12, padding: '2px 8px' }}
                   onClick={() => startEnroll(true)}>
                   Re-record
                 </button>
               ) : (
                 <button style={{
                   background: 'none', border: 'none', cursor: 'pointer',
-                  color: 'var(--slate-400)', fontSize: 14, padding: '2px 6px',
+                  color: 'var(--slate-400)', fontSize: 13, padding: '2px 6px',
                 }} onClick={() => deletePrint(p._id)} title="Delete voice print">
                   ✕
                 </button>
@@ -2950,7 +2950,7 @@ function VoiceEnrollment() {
             <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--navy)' }}>
               {isUserEnroll ? 'Record Your Voice' : 'Record a Voice'}
             </span>
-            <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--slate-400)', fontSize: 16 }}
+            <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--slate-400)', fontSize: 15 }}
               onClick={cancelEnroll}>✕</button>
           </div>
 

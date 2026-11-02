@@ -46,7 +46,7 @@ function MeetingCard({
       p={4}
       bg="white"
     >
-      <Text fontSize="11px" textTransform="uppercase" color="gray.500" mb={1}>{label}</Text>
+      <Text fontSize="12px" textTransform="uppercase" color="gray.500" mb={1}>{label}</Text>
       <Heading as="h4" size="sm" mb={2} noOfLines={2}>{meeting.title || '(no title)'}</Heading>
       <VStack align="start" spacing={1} mb={3}>
         <Text fontSize="12px" color="gray.600">Starts at {formatStart(meeting.startTime)}</Text>
@@ -97,7 +97,7 @@ export default function MeetingConflictModal({ isOpen, active, incoming, autoSel
           </HStack>
         </ModalBody>
         <ModalFooter>
-          <Text fontSize="11px" color="gray.500">
+          <Text fontSize="12px" color="gray.500">
             The meeting you don't pick stays in your upcoming list — you can record it later.
           </Text>
         </ModalFooter>

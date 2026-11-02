@@ -76,19 +76,19 @@ export default function SearchPage() {
 
         {error && (
           <div className="pp-card" style={{ borderColor: '#fecaca' }}>
-            <div style={{ fontSize: 12.5, color: 'var(--red)', lineHeight: 1.5 }}>{error}</div>
+            <div style={{ fontSize: 13, color: 'var(--red)', lineHeight: 1.5 }}>{error}</div>
           </div>
         )}
 
         {answer && (
           <div className="pp-card">
             <div className="pp-row" style={{ marginBottom: 8 }}>
-              <div className="pp-grow" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--pp-teal-deep)' }}>
+              <div className="pp-grow" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--pp-teal-deep)' }}>
                 Answer
               </div>
               <button className="pp-quiet-action" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{answer}</div>
+            <div style={{ fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{answer}</div>
           </div>
         )}
 

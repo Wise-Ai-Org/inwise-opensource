@@ -79,7 +79,7 @@ function SuggestedLabel({
       <FlowFormLabel>
         {label}
         {hasSuggestion && (
-          <Text as="span" fontSize="9px" color="#1a7080" ml={2} fontWeight="500" textTransform="none" letterSpacing="normal">
+          <Text as="span" fontSize="12px" color="var(--owl-teal)" ml={2} fontWeight="500" textTransform="none" letterSpacing="normal">
             AI · {Math.round(confidence * 100)}%
           </Text>
         )}
@@ -87,7 +87,7 @@ function SuggestedLabel({
       {isEditing ? (
         <HStack spacing={2}>
           <Box flex={1}>{children}</Box>
-          <Box as="button" onClick={onConfirm} color="#1a7080" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}>
+          <Box as="button" onClick={onConfirm} color="var(--owl-teal)" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}>
             <CheckIcon boxSize="14px" />
           </Box>
           <Box as="button" onClick={onCancel} color="gray.400" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}>
@@ -103,9 +103,9 @@ function SuggestedLabel({
           py={1.5}
           borderRadius="8px"
           border="1px solid"
-          borderColor="#9dd4d9"
-          bg="#fafffe"
-          _hover={{ borderColor: '#1a7080' }}
+          borderColor="var(--owl-aqua)"
+          bg="var(--surface-status)"
+          _hover={{ borderColor: 'var(--owl-teal)' }}
           onClick={onStartEdit}
         >
           {value}
@@ -319,10 +319,10 @@ export default function CreateTaskModal({
     if (isEnriching) {
       return (
         <motion.div {...fieldAnim(2)}>
-          <Box p={4} borderRadius="10px" border="1px solid" borderColor="#9dd4d9" bg="#f0fafa">
+          <Box p={4} borderRadius="10px" border="1px solid" borderColor="var(--owl-aqua)" bg="var(--surface-status)">
             <HStack spacing={2}>
-              <Spinner size="xs" color="#1a7080" />
-              <Text fontSize="12px" color="#1a7080">Analyzing task...</Text>
+              <Spinner size="xs" color="var(--owl-teal)" />
+              <Text fontSize="12px" color="var(--owl-teal)">Analyzing task...</Text>
             </HStack>
           </Box>
         </motion.div>
@@ -345,45 +345,45 @@ export default function CreateTaskModal({
 
     return (
       <motion.div {...fieldAnim(2)}>
-        <Box p={4} borderRadius="10px" border="1px solid" borderColor="#9dd4d9" bg="#f0fafa">
+        <Box p={4} borderRadius="10px" border="1px solid" borderColor="var(--owl-aqua)" bg="var(--surface-status)">
           <HStack justify="space-between" mb={3}>
             <HStack spacing={2}>
-              <Box w="7px" h="7px" borderRadius="full" bg="#1a7080" />
-              <Text fontSize="11px" fontWeight="700" color="#1a7080" textTransform="uppercase" letterSpacing="0.06em">AI Definition</Text>
+              <Box w="7px" h="7px" borderRadius="full" bg="var(--owl-teal)" />
+              <Text fontSize="12px" fontWeight="700" color="var(--owl-teal)" textTransform="uppercase" letterSpacing="0.06em">AI Definition</Text>
             </HStack>
-            <Text fontSize="10px" color="#1a7080">Click to edit</Text>
+            <Text fontSize="12px" color="var(--owl-teal)">Click to edit</Text>
           </HStack>
 
           <VStack spacing={3} align="stretch">
             <Box>
-              <Text fontSize="10px" fontWeight="700" color="#1a7080" textTransform="uppercase" letterSpacing="0.06em" mb="2px">Outcome</Text>
+              <Text fontSize="12px" fontWeight="700" color="var(--owl-teal)" textTransform="uppercase" letterSpacing="0.06em" mb="2px">Outcome</Text>
               {editingField === 'outcome' ? (
                 <VStack align="stretch" spacing={1}>
-                  <Textarea value={editBuffer} onChange={e => setEditBuffer(e.target.value)} autoFocus rows={2} {...TEXTAREA_PROPS} borderColor="#9dd4d9" />
+                  <Textarea value={editBuffer} onChange={e => setEditBuffer(e.target.value)} autoFocus rows={2} {...TEXTAREA_PROPS} borderColor="var(--owl-aqua)" />
                   <HStack spacing={2} justify="flex-end">
-                    <Box as="button" onClick={() => { setDefinition({ ...definition, outcome: editBuffer }); cancelEdit(); }} color="#1a7080" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}><CheckIcon boxSize="14px" /></Box>
+                    <Box as="button" onClick={() => { setDefinition({ ...definition, outcome: editBuffer }); cancelEdit(); }} color="var(--owl-teal)" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}><CheckIcon boxSize="14px" /></Box>
                     <Box as="button" onClick={cancelEdit} color="gray.400" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}><CloseIcon boxSize="13px" /></Box>
                   </HStack>
                 </VStack>
               ) : (
-                <Text fontSize="13px" lineHeight="20px" color="gray.700" cursor="pointer" _hover={{ bg: '#e8f4f5', borderRadius: '6px' }} px={1} mx={-1} onClick={() => startEdit('outcome', definition.outcome)}>
+                <Text fontSize="13px" lineHeight="20px" color="gray.700" cursor="pointer" _hover={{ bg: 'var(--surface-status)', borderRadius: '6px' }} px={1} mx={-1} onClick={() => startEdit('outcome', definition.outcome)}>
                   {definition.outcome || 'Click to add...'}
                 </Text>
               )}
             </Box>
 
             <Box>
-              <Text fontSize="10px" fontWeight="700" color="#1a7080" textTransform="uppercase" letterSpacing="0.06em" mb="2px">Scope</Text>
+              <Text fontSize="12px" fontWeight="700" color="var(--owl-teal)" textTransform="uppercase" letterSpacing="0.06em" mb="2px">Scope</Text>
               {editingField === 'scope' ? (
                 <VStack align="stretch" spacing={1}>
-                  <Textarea value={editBuffer} onChange={e => setEditBuffer(e.target.value)} autoFocus rows={2} {...TEXTAREA_PROPS} borderColor="#9dd4d9" />
+                  <Textarea value={editBuffer} onChange={e => setEditBuffer(e.target.value)} autoFocus rows={2} {...TEXTAREA_PROPS} borderColor="var(--owl-aqua)" />
                   <HStack spacing={2} justify="flex-end">
-                    <Box as="button" onClick={() => { setDefinition({ ...definition, scope: editBuffer }); cancelEdit(); }} color="#1a7080" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}><CheckIcon boxSize="14px" /></Box>
+                    <Box as="button" onClick={() => { setDefinition({ ...definition, scope: editBuffer }); cancelEdit(); }} color="var(--owl-teal)" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}><CheckIcon boxSize="14px" /></Box>
                     <Box as="button" onClick={cancelEdit} color="gray.400" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}><CloseIcon boxSize="13px" /></Box>
                   </HStack>
                 </VStack>
               ) : (
-                <Text fontSize="13px" lineHeight="20px" color="gray.700" cursor="pointer" _hover={{ bg: '#e8f4f5', borderRadius: '6px' }} px={1} mx={-1} onClick={() => startEdit('scope', definition.scope)}>
+                <Text fontSize="13px" lineHeight="20px" color="gray.700" cursor="pointer" _hover={{ bg: 'var(--surface-status)', borderRadius: '6px' }} px={1} mx={-1} onClick={() => startEdit('scope', definition.scope)}>
                   {definition.scope || 'Click to add...'}
                 </Text>
               )}
@@ -391,11 +391,11 @@ export default function CreateTaskModal({
 
             {definition.acceptanceCriteria.length > 0 && (
               <Box>
-                <Text fontSize="10px" fontWeight="700" color="#1a7080" textTransform="uppercase" letterSpacing="0.06em" mb="4px">Acceptance Criteria</Text>
+                <Text fontSize="12px" fontWeight="700" color="var(--owl-teal)" textTransform="uppercase" letterSpacing="0.06em" mb="4px">Acceptance Criteria</Text>
                 <VStack spacing={1} align="stretch">
                   {definition.acceptanceCriteria.map((c, i) => (
                     <HStack key={i} spacing={2}>
-                      <Box w="5px" h="5px" borderRadius="full" bg="#9dd4d9" mt="7px" flexShrink={0} />
+                      <Box w="5px" h="5px" borderRadius="full" bg="var(--owl-aqua)" mt="7px" flexShrink={0} />
                       <Text fontSize="13px" lineHeight="20px" color="gray.700">{c}</Text>
                     </HStack>
                   ))}
@@ -430,7 +430,7 @@ export default function CreateTaskModal({
                 <FlowFormLabel>Title</FlowFormLabel>
                 <Input placeholder="What needs to be done?" value={title} onChange={e => setTitle(e.target.value)} autoFocus {...INPUT_PROPS} />
                 {title.trim().length > 0 && title.trim().length < 8 && (
-                  <FormHelperText fontSize="11px" color="gray.400">Type 8+ characters for AI suggestions</FormHelperText>
+                  <FormHelperText fontSize="12px" color="gray.400">Type 8+ characters for AI suggestions</FormHelperText>
                 )}
               </FormControl>
             </motion.div>
@@ -547,7 +547,7 @@ export default function CreateTaskModal({
             </motion.div>
           </VStack>
           {pendingDedup && (
-            <Box mt={4} p={3} border="1px solid" borderColor="#9dd4d9" borderRadius="8px" bg="#f0fafa">
+            <Box mt={4} p={3} border="1px solid" borderColor="var(--owl-aqua)" borderRadius="8px" bg="var(--surface-status)">
               <Text fontSize="13px" color="gray.700">
                 Sounds like <b>{pendingDedup.suggestion.candidateTitle}</b> â€” same thing?
               </Text>

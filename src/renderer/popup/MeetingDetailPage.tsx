@@ -147,7 +147,7 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
               {meeting.status === 'transcribed' && !insights.summary && <button className="pp-btn pp-solid" disabled={retrying} onClick={retryRecording}>{retrying ? 'Processing…' : 'Generate insights'}</button>}
               {retryError && <div role="alert" className="pp-meta">{retryError}</div>}
               {insights.summary && (
-                <div style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.55, marginTop: 8 }}>
+                <div style={{ fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.55, marginTop: 8 }}>
                   {insights.summary}
                 </div>
               )}
@@ -173,7 +173,7 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
                   {insights.actionItems!.map((ai, i) => (
                     <div key={i} className="pp-setrow" style={{ cursor: 'default' }}>
                       <div className="pp-grow">
-                        <div style={{ fontSize: 12.5, color: 'var(--navy)', lineHeight: 1.4 }}>{ai.text}</div>
+                        <div style={{ fontSize: 13, color: 'var(--navy)', lineHeight: 1.4 }}>{ai.text}</div>
                         {(ai.owner || ai.assignee) && (
                           <div className="pp-rowsub">
                             {ai.owner || ai.assignee}{ai.isCommitment ? ' · commitment' : ''}
@@ -192,7 +192,7 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
                 <div className="pp-listcard">
                   {insights.decisions!.map((d, i) => (
                     <div key={i} className="pp-setrow" style={{ cursor: 'default' }}>
-                      <div style={{ fontSize: 12.5, color: 'var(--navy)', lineHeight: 1.4 }}>{d.text}</div>
+                      <div style={{ fontSize: 13, color: 'var(--navy)', lineHeight: 1.4 }}>{d.text}</div>
                     </div>
                   ))}
                 </div>
@@ -205,7 +205,7 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
                 <div className="pp-listcard">
                   {insights.blockers!.map((b, i) => (
                     <div key={i} className="pp-setrow" style={{ cursor: 'default' }}>
-                      <div style={{ fontSize: 12.5, color: 'var(--navy)', lineHeight: 1.4 }}>{b.text}</div>
+                      <div style={{ fontSize: 13, color: 'var(--navy)', lineHeight: 1.4 }}>{b.text}</div>
                     </div>
                   ))}
                 </div>
@@ -218,7 +218,7 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
                 <div className="pp-listcard">
                   {insights.contradictions!.map((c, i) => (
                     <div key={i} className="pp-setrow" style={{ cursor: 'default' }}>
-                      <div style={{ fontSize: 12.5, color: 'var(--pp-amber-ink)', lineHeight: 1.4 }}>{c.text}</div>
+                      <div style={{ fontSize: 13, color: 'var(--pp-amber-ink)', lineHeight: 1.4 }}>{c.text}</div>
                     </div>
                   ))}
                 </div>

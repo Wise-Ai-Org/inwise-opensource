@@ -27,11 +27,11 @@ interface Props {
   onDismiss: () => void;
 }
 
-const TEAL = '#0d9488';
-const TEAL_HOVER = '#14b8a6';
-const INK = '#0f172a';
-const MUTED = '#64748b';
-const BORDER = '#e2e8f0';
+const TEAL = 'var(--owl-teal)';
+const TEAL_HOVER = 'var(--owl-teal)';
+const INK = 'var(--text-strong)';
+const MUTED = 'var(--text-muted)';
+const BORDER = 'var(--line)';
 const PAGE_BG = 'rgba(15, 23, 42, 0.55)';
 const CARD_BG = '#ffffff';
 
@@ -49,11 +49,11 @@ function WinLine({ text }: { text: string }) {
       gap: 10,
       padding: '10px 0',
       borderBottom: `1px solid ${BORDER}`,
-      fontSize: 14,
+      fontSize: 13,
       color: INK,
       lineHeight: 1.5,
     }}>
-      <span aria-hidden style={{ color: TEAL, marginTop: 2, fontSize: 16, lineHeight: 1 }}>✓</span>
+      <span aria-hidden style={{ color: TEAL, marginTop: 2, fontSize: 15, lineHeight: 1 }}>✓</span>
       <span>{text}</span>
     </div>
   );
@@ -196,7 +196,7 @@ function AskCard({
 const askCardStyle: React.CSSProperties = {
   marginTop: 18,
   padding: 16,
-  background: '#f8fafc',
+  background: 'var(--surface)',
   border: `1px solid ${BORDER}`,
   borderRadius: 12,
 };
@@ -208,7 +208,7 @@ const askLeadStyle: React.CSSProperties = {
 };
 
 const askBodyStyle: React.CSSProperties = {
-  fontSize: 14,
+  fontSize: 13,
   color: INK,
   marginBottom: 12,
   lineHeight: 1.5,
@@ -321,7 +321,7 @@ export default function WelcomeBack({ onNavigate, onDismiss }: Props) {
           Done
         </button>
 
-        <h2 style={{ fontSize: 20, fontWeight: 700, color: INK, margin: 0, marginBottom: 4 }}>
+        <h2 style={{ fontSize: 18, fontWeight: 700, color: INK, margin: 0, marginBottom: 4 }}>
           {greeting(result.gapDays)}
         </h2>
         <div style={{ fontSize: 13, color: MUTED, marginBottom: 16 }}>
@@ -356,7 +356,7 @@ export default function WelcomeBack({ onNavigate, onDismiss }: Props) {
             <div
               data-testid="welcome-back-empty"
               style={{
-                fontSize: 14,
+                fontSize: 13,
                 color: INK,
                 padding: '16px 0',
                 borderTop: `1px solid ${BORDER}`,
@@ -392,7 +392,7 @@ export default function WelcomeBack({ onNavigate, onDismiss }: Props) {
               data-testid={`welcome-back-chip-${c.label.toLowerCase()}`}
               onClick={() => { handleDone(); onNavigate(c.view); }}
               style={{
-                background: '#f1f5f9',
+                background: 'var(--surface-soft)',
                 color: INK,
                 border: `1px solid ${BORDER}`,
                 borderRadius: 999,
@@ -401,8 +401,8 @@ export default function WelcomeBack({ onNavigate, onDismiss }: Props) {
                 fontWeight: 500,
                 cursor: 'pointer',
               }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#e2e8f0')}
-              onMouseLeave={e => (e.currentTarget.style.background = '#f1f5f9')}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--line)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'var(--surface-soft)')}
             >
               {c.label}
             </button>

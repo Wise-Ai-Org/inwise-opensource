@@ -293,12 +293,12 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                   <option value="critical">Critical</option>
                 </Select>
                 {getSuggestion('priority')?.value && getSuggestion('priority')!.value !== priority && (
-                  <Text fontSize="11px" color="teal.500" mt={1}>
+                  <Text fontSize="12px" color="teal.500" mt={1}>
                     AI suggests: {getSuggestion('priority')!.value!.charAt(0).toUpperCase() + getSuggestion('priority')!.value!.slice(1)} · {Math.round(getSuggestion('priority')!.confidence * 100)}%
                   </Text>
                 )}
                 {getSuggestion('priorityReason')?.value && (
-                  <FormHelperText fontSize="11px" color="gray.500" mt={1}>{getSuggestion('priorityReason')!.value}</FormHelperText>
+                  <FormHelperText fontSize="12px" color="gray.500" mt={1}>{getSuggestion('priorityReason')!.value}</FormHelperText>
                 )}
               </FormControl>
             </motion.div>
@@ -310,7 +310,7 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                   <FlowFormLabel>
                     Complexity
                     {getSuggestion('complexity')?.value && complexity === getSuggestion('complexity')!.value && (
-                      <Text as="span" fontSize="9px" color="#1a7080" ml={2} fontWeight="500" textTransform="none" letterSpacing="normal">
+                      <Text as="span" fontSize="12px" color="var(--owl-teal)" ml={2} fontWeight="500" textTransform="none" letterSpacing="normal">
                         AI · {Math.round(getSuggestion('complexity')!.confidence * 100)}%
                       </Text>
                     )}
@@ -332,7 +332,7 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                         <option value="XL">XL</option>
                       </Select>
                       <CheckIcon
-                        color="#1a7080"
+                        color="var(--owl-teal)"
                         boxSize="14px"
                         cursor="pointer"
                         onClick={() => confirmEdit('complexity')}
@@ -348,8 +348,8 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                     <Box
                       px={3} py={2} borderRadius="8px" cursor="pointer"
                       border="1px solid"
-                      borderColor={getSuggestion('complexity')?.value && complexity === getSuggestion('complexity')!.value ? '#9dd4d9' : 'gray.200'}
-                      bg={getSuggestion('complexity')?.value && complexity === getSuggestion('complexity')!.value ? '#f0fafa' : 'white'}
+                      borderColor={getSuggestion('complexity')?.value && complexity === getSuggestion('complexity')!.value ? 'var(--owl-aqua)' : 'gray.200'}
+                      bg={getSuggestion('complexity')?.value && complexity === getSuggestion('complexity')!.value ? 'var(--surface-status)' : 'white'}
                       onClick={() => startEditing('complexity', complexity)}
                     >
                       <Text fontSize="sm">{complexityLabels[complexity] || complexity}</Text>
@@ -370,7 +370,7 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                   <FlowFormLabel>
                     Estimate
                     {getSuggestion('estimate')?.value && estimate === getSuggestion('estimate')!.value && (
-                      <Text as="span" fontSize="9px" color="#1a7080" ml={2} fontWeight="500" textTransform="none" letterSpacing="normal">
+                      <Text as="span" fontSize="12px" color="var(--owl-teal)" ml={2} fontWeight="500" textTransform="none" letterSpacing="normal">
                         AI · {Math.round(getSuggestion('estimate')!.confidence * 100)}%
                       </Text>
                     )}
@@ -388,7 +388,7 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                         {[1, 2, 3, 5, 8, 13, 21].map(n => <option key={n} value={n}>{n}</option>)}
                       </Select>
                       <CheckIcon
-                        color="#1a7080"
+                        color="var(--owl-teal)"
                         boxSize="14px"
                         cursor="pointer"
                         onClick={() => confirmEdit('estimate')}
@@ -404,8 +404,8 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                     <Box
                       px={3} py={2} borderRadius="8px" cursor="pointer"
                       border="1px solid"
-                      borderColor={getSuggestion('estimate')?.value && estimate === getSuggestion('estimate')!.value ? '#9dd4d9' : 'gray.200'}
-                      bg={getSuggestion('estimate')?.value && estimate === getSuggestion('estimate')!.value ? '#f0fafa' : 'white'}
+                      borderColor={getSuggestion('estimate')?.value && estimate === getSuggestion('estimate')!.value ? 'var(--owl-aqua)' : 'gray.200'}
+                      bg={getSuggestion('estimate')?.value && estimate === getSuggestion('estimate')!.value ? 'var(--surface-status)' : 'white'}
                       onClick={() => startEditing('estimate', estimate)}
                     >
                       <Text fontSize="sm">{estimate} pts</Text>
@@ -433,11 +433,11 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                     <Button
                       size="sm"
                       variant="ghost"
-                      color="#1a7080"
-                      leftIcon={estimating ? <Spinner size="xs" color="#1a7080" /> : <Icon as={MdAutoAwesome} boxSize={3.5} />}
+                      color="var(--owl-teal)"
+                      leftIcon={estimating ? <Spinner size="xs" color="var(--owl-teal)" /> : <Icon as={MdAutoAwesome} boxSize={3.5} />}
                       onClick={fetchTimeEstimate}
                       px={2}
-                      _hover={{ bg: '#e8f4f5' }}
+                      _hover={{ bg: 'var(--surface-status)' }}
                       fontWeight="medium"
                       isDisabled={estimating}
                     >
@@ -452,15 +452,15 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                           exit={{ opacity: 0, scale: 0.97, y: -6 }}
                           transition={FLOW_SPRING}
                         >
-                          <Box mt={2} bg="#e8f4f5" borderRadius="10px" px={3} py={2.5} border="1px solid" borderColor="#9dd4d9">
+                          <Box mt={2} bg="var(--surface-status)" borderRadius="10px" px={3} py={2.5} border="1px solid" borderColor="var(--owl-aqua)">
                             <HStack spacing={2} mb={1.5}>
-                              <Icon as={MdAutoAwesome} color="#1a7080" boxSize={3.5} />
-                              <Text fontSize="md" fontWeight="bold" color="#1a7080">{timeEstimate.label}</Text>
-                              <Badge bg="#1a7080" color="white" fontSize="xs" borderRadius="full" px={2}>
+                              <Icon as={MdAutoAwesome} color="var(--owl-teal)" boxSize={3.5} />
+                              <Text fontSize="md" fontWeight="bold" color="var(--owl-teal)">{timeEstimate.label}</Text>
+                              <Badge bg="var(--owl-teal)" color="white" fontSize="xs" borderRadius="full" px={2}>
                                 {timeEstimate.confidence === 'high' ? 'High confidence' : timeEstimate.confidence === 'medium' ? 'Medium confidence' : 'AI estimate'}
                               </Badge>
                             </HStack>
-                            <Text fontSize="xs" color="#1a7080">{buildEstimateRationale(timeEstimate)}</Text>
+                            <Text fontSize="xs" color="var(--owl-teal)">{buildEstimateRationale(timeEstimate)}</Text>
                           </Box>
                         </motion.div>
                       )}
@@ -483,7 +483,7 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                 <FlowFormLabel>
                   Link to Key Result
                   {getSuggestion('keyResultId')?.value && keyResultId === getSuggestion('keyResultId')!.value && (
-                    <Text as="span" fontSize="9px" color="#1a7080" ml={2} fontWeight="500" textTransform="none" letterSpacing="normal">
+                    <Text as="span" fontSize="12px" color="var(--owl-teal)" ml={2} fontWeight="500" textTransform="none" letterSpacing="normal">
                       AI · {Math.round(getSuggestion('keyResultId')!.confidence * 100)}%
                     </Text>
                   )}
@@ -504,7 +504,7 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                       ))}
                     </Select>
                     <CheckIcon
-                      color="#1a7080"
+                      color="var(--owl-teal)"
                       boxSize="14px"
                       cursor="pointer"
                       onClick={() => confirmEdit('keyResultId')}
@@ -520,8 +520,8 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                   <Box
                     px={3} py={2} borderRadius="8px" cursor="pointer"
                     border="1px solid"
-                    borderColor={getSuggestion('keyResultId')?.value && keyResultId === getSuggestion('keyResultId')!.value ? '#9dd4d9' : 'gray.200'}
-                    bg={getSuggestion('keyResultId')?.value && keyResultId === getSuggestion('keyResultId')!.value ? '#f0fafa' : 'white'}
+                    borderColor={getSuggestion('keyResultId')?.value && keyResultId === getSuggestion('keyResultId')!.value ? 'var(--owl-aqua)' : 'gray.200'}
+                    bg={getSuggestion('keyResultId')?.value && keyResultId === getSuggestion('keyResultId')!.value ? 'var(--surface-status)' : 'white'}
                     onClick={() => startEditing('keyResultId', keyResultId)}
                   >
                     <Text fontSize="sm">
@@ -541,7 +541,7 @@ export default function EditTaskModal({ isOpen, onClose, onTaskUpdated, task }: 
                     ))}
                   </Select>
                 )}
-                <FormHelperText fontSize="11px" color="gray.400">Link this task to an OKR key result to track progress</FormHelperText>
+                <FormHelperText fontSize="12px" color="gray.400">Link this task to an OKR key result to track progress</FormHelperText>
               </FormControl>
             </motion.div>
           </VStack>

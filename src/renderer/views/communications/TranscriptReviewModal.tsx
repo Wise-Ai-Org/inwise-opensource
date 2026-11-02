@@ -180,9 +180,9 @@ function confTier(c: number): 'high' | 'medium' | 'low' {
 }
 
 const CONF_STYLES = {
-  high: { border: '#9dd4d9', bg: '#f0fafa', label: 'High confidence', badge: 'green', dot: '#1a7080' },
-  medium: { border: '#e2e8f0', bg: 'white', label: 'Moderate', badge: 'blue', dot: '#3182CE' },
-  low: { border: '#fbd38d', bg: '#fffff0', label: 'Needs review', badge: 'orange', dot: '#DD6B20' }
+  high: { border: 'var(--owl-aqua)', bg: 'var(--surface-status)', label: 'High confidence', badge: 'green', dot: 'var(--owl-teal)' },
+  medium: { border: 'var(--line)', bg: 'white', label: 'Moderate', badge: 'blue', dot: '#3182CE' },
+  low: { border: '#fbd38d', bg: 'var(--surface-status)', label: 'Needs review', badge: 'orange', dot: '#DD6B20' }
 };
 
 // ── Inline editable field ──────────────────────────────────────────────────
@@ -215,17 +215,17 @@ function InlineText({
           size="sm"
           rows={3}
           autoFocus
-          borderColor="#9dd4d9"
+          borderColor="var(--owl-aqua)"
           borderRadius="8px"
           fontSize="13px"
           lineHeight="20px"
           resize="none"
           minH={measuredHeight ? `${measuredHeight + 16}px` : undefined}
-          _focus={{ borderColor: '#1a7080', boxShadow: '0 0 0 1px #1a7080' }}
+          _focus={{ borderColor: 'var(--owl-teal)', boxShadow: '0 0 0 1px var(--owl-teal)' }}
           placeholder={placeholder}
         />
         <HStack spacing={2} justify="flex-end">
-          <Box as="button" onClick={onConfirm} color="#1a7080" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}>
+          <Box as="button" onClick={onConfirm} color="var(--owl-teal)" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}>
             <CheckIcon boxSize="14px" />
           </Box>
           <Box as="button" onClick={onCancel} color="gray.400" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}>
@@ -241,7 +241,7 @@ function InlineText({
       lineHeight="20px"
       color="gray.800"
       cursor="pointer"
-      _hover={{ bg: '#f7fafc', borderRadius: '6px' }}
+      _hover={{ bg: 'var(--surface)', borderRadius: '6px' }}
       px={1}
       mx={-1}
       onClick={onStartEdit}
@@ -273,14 +273,14 @@ function InlineField({
   return (
     <Box flex={1}>
       {label && (
-        <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb="2px">
+        <Text fontSize="12px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb="2px">
           {label}
         </Text>
       )}
       {isEditing ? (
         <HStack spacing={1}>
           <Box flex={1}>{children}</Box>
-          <Box as="button" onClick={onConfirm} color="#1a7080" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}>
+          <Box as="button" onClick={onConfirm} color="var(--owl-teal)" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}>
             <CheckIcon boxSize="14px" />
           </Box>
           <Box as="button" onClick={onCancel} color="gray.400" cursor="pointer" lineHeight={0} _hover={{ opacity: 0.7 }}>
@@ -292,7 +292,7 @@ function InlineField({
           fontSize="13px"
           color={value ? 'gray.700' : 'gray.400'}
           cursor="pointer"
-          _hover={{ color: '#1a7080' }}
+          _hover={{ color: 'var(--owl-teal)' }}
           onClick={onStartEdit}
         >
           {displayValue || value || 'Not set \u2014 click to add'}
@@ -380,7 +380,7 @@ interface HighlightSpan {
 
 const HIGHLIGHT_COLORS: Record<ItemType, { bg: string; border: string; color: string; label: string }> = {
   blocker:  { bg: '#fee2e2', border: '#fca5a5', color: '#c53030', label: 'Blockers' },
-  action:   { bg: '#dbeafe', border: '#93c5fd', color: '#2b6cb0', label: 'Tasks' },
+  action:   { bg: 'var(--line)', border: '#93c5fd', color: '#2b6cb0', label: 'Tasks' },
   decision: { bg: '#dcfce7', border: '#86efac', color: '#276749', label: 'Decisions' }
 };
 
@@ -521,12 +521,17 @@ function TabNav({
   const tabs = TAB_CONFIG.filter(t => visibleTabs.includes(t.key));
   return (
     <LayoutGroup id="review-tabs">
-      <HStack spacing={0} borderBottom="1px solid" borderColor="gray.200">
+      <HStack role="tablist" aria-label="Meeting review" spacing={0} borderBottom="1px solid" borderColor="gray.200">
         {tabs.map(tab => {
           const isActive = activeTab === tab.key;
           const count = counts[tab.key];
           return (
             <Box
+              as="button"
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              aria-label={tab.label}
               key={tab.key}
               flex={1}
               textAlign="center"
@@ -540,7 +545,7 @@ function TabNav({
               <Text fontSize="13px" fontWeight={isActive ? '600' : '400'} color={isActive ? 'gray.800' : 'gray.400'}>
                 {tab.label}
                 {count > 0 && tab.key !== 'transcript' && (
-                  <Text as="span" fontSize="11px" color={isActive ? 'gray.600' : 'gray.400'} ml={1}>
+                  <Text as="span" fontSize="12px" color={isActive ? 'gray.600' : 'gray.400'} ml={1}>
                     {count}
                   </Text>
                 )}
@@ -548,7 +553,7 @@ function TabNav({
               {isActive && (
                 <motion.div
                   layoutId="review-tab-line"
-                  style={{ position: 'absolute', bottom: 0, left: '20%', right: '20%', height: 2, background: '#3182CE', borderRadius: '2px 2px 0 0' }}
+                  style={{ position: 'absolute', bottom: 0, left: '20%', right: '20%', height: 2, background: 'var(--owl-teal)', borderRadius: '2px 2px 0 0' }}
                 />
               )}
             </Box>
@@ -1028,10 +1033,10 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           <HStack justify="space-between" mb={2}>
             <HStack spacing={2}>
               <Box w="7px" h="7px" borderRadius="full" bg={style.dot} />
-              <Badge colorScheme={style.badge} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+              <Badge colorScheme={style.badge} variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                 {Math.round(item.confidence * 100)}% {style.label.toLowerCase()}
               </Badge>
-              {item.edited && <Badge colorScheme="orange" fontSize="10px" borderRadius="full" px={2}>Edited</Badge>}
+              {item.edited && <Badge colorScheme="orange" fontSize="12px" borderRadius="full" px={2}>Edited</Badge>}
             </HStack>
             <IconButton
               aria-label="Dismiss"
@@ -1060,14 +1065,14 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           {/* Owner + Due Date fields — inline editable */}
           <HStack spacing={4} align="flex-start">
             <Box flex={1}>
-              <Text fontSize="10px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb="2px">
+              <Text fontSize="12px" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="0.06em" mb="2px">
                 Owner
               </Text>
               {item.resolution && !item.ownerOverridden && !isEditing(item.id, 'owner') ? (
                 <HStack spacing={2}>
-                  <Box w="6px" h="6px" borderRadius="full" bg="#1a7080" />
+                  <Box w="6px" h="6px" borderRadius="full" bg="var(--owl-teal)" />
                   <Text fontSize="13px" fontWeight="500" color="gray.700">{item.resolution.userName}</Text>
-                  <Badge colorScheme={item.resolution.confidence >= 0.9 ? 'green' : 'yellow'} variant="subtle" fontSize="9px">
+                  <Badge colorScheme={item.resolution.confidence >= 0.9 ? 'green' : 'yellow'} variant="subtle" fontSize="12px">
                     {Math.round(item.resolution.confidence * 100)}% match
                   </Badge>
                   <Button
@@ -1075,7 +1080,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                     variant="ghost"
                     color="gray.400"
                     fontWeight="normal"
-                    fontSize="11px"
+                    fontSize="12px"
                     onClick={() => { updateActionItem(item.id, { ownerOverridden: true }); startEdit(item.id, 'owner', item.owner); }}
                   >
                     Change
@@ -1114,8 +1119,8 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                       autoFocus
                       borderRadius="6px"
                       fontSize="13px"
-                      borderColor="#9dd4d9"
-                      _focus={{ borderColor: '#1a7080', boxShadow: '0 0 0 1px #1a7080' }}
+                      borderColor="var(--owl-aqua)"
+                      _focus={{ borderColor: 'var(--owl-teal)', boxShadow: '0 0 0 1px var(--owl-teal)' }}
                     />
                   )}
                 </InlineField>
@@ -1139,13 +1144,13 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                 autoFocus
                 borderRadius="6px"
                 fontSize="13px"
-                borderColor="#9dd4d9"
-                _focus={{ borderColor: '#1a7080', boxShadow: '0 0 0 1px #1a7080' }}
+                borderColor="var(--owl-aqua)"
+                _focus={{ borderColor: 'var(--owl-teal)', boxShadow: '0 0 0 1px var(--owl-teal)' }}
               />
             </InlineField>
           </HStack>
           {item.dedupSuggestion && (
-            <Box mt={3} p={3} border="1px solid" borderColor="#9dd4d9" borderRadius="8px" bg="#f0fafa">
+            <Box mt={3} p={3} border="1px solid" borderColor="var(--owl-aqua)" borderRadius="8px" bg="var(--surface-status)">
               <Text fontSize="13px" color="gray.700">
                 Sounds like <b>{item.dedupSuggestion.candidateTitle}</b> â€” same thing?
               </Text>
@@ -1202,11 +1207,11 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
         <Box p={4} bg={style.bg} borderRadius="10px" borderLeft="3px solid" borderLeftColor="#fc8181" border="1px solid" borderColor={style.border}>
           <HStack justify="space-between" mb={2}>
             <HStack spacing={2}>
-              <Badge colorScheme={sevColor} fontSize="10px" borderRadius="full" px={2}>{item.severity}</Badge>
-              <Badge colorScheme={style.badge} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+              <Badge colorScheme={sevColor} fontSize="12px" borderRadius="full" px={2}>{item.severity}</Badge>
+              <Badge colorScheme={style.badge} variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                 {Math.round(item.confidence * 100)}%
               </Badge>
-              {item.edited && <Badge colorScheme="orange" fontSize="10px" borderRadius="full" px={2}>Edited</Badge>}
+              {item.edited && <Badge colorScheme="orange" fontSize="12px" borderRadius="full" px={2}>Edited</Badge>}
             </HStack>
             <IconButton aria-label="Dismiss" icon={<Icon as={MdClose} />} size="xs" variant="ghost" color="gray.400" borderRadius="6px" onClick={() => dismissBlocker(item.id)} />
           </HStack>
@@ -1265,8 +1270,8 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                 autoFocus
                 borderRadius="6px"
                 fontSize="13px"
-                borderColor="#9dd4d9"
-                _focus={{ borderColor: '#1a7080', boxShadow: '0 0 0 1px #1a7080' }}
+                borderColor="var(--owl-aqua)"
+                _focus={{ borderColor: 'var(--owl-teal)', boxShadow: '0 0 0 1px var(--owl-teal)' }}
               />
             </InlineField>
           </HStack>
@@ -1313,10 +1318,10 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
           <HStack justify="space-between" mb={2}>
             <HStack spacing={2}>
               <Box w="7px" h="7px" borderRadius="full" bg="#68d391" />
-              <Badge colorScheme={style.badge} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+              <Badge colorScheme={style.badge} variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                 {Math.round(item.confidence * 100)}%
               </Badge>
-              {item.edited && <Badge colorScheme="orange" fontSize="10px" borderRadius="full" px={2}>Edited</Badge>}
+              {item.edited && <Badge colorScheme="orange" fontSize="12px" borderRadius="full" px={2}>Edited</Badge>}
             </HStack>
             <IconButton aria-label="Dismiss" icon={<Icon as={MdClose} />} size="xs" variant="ghost" color="gray.400" borderRadius="6px" onClick={() => dismissDecision(item.id)} />
           </HStack>
@@ -1353,8 +1358,8 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
               autoFocus
               borderRadius="6px"
               fontSize="13px"
-              borderColor="#9dd4d9"
-              _focus={{ borderColor: '#1a7080', boxShadow: '0 0 0 1px #1a7080' }}
+              borderColor="var(--owl-aqua)"
+              _focus={{ borderColor: 'var(--owl-teal)', boxShadow: '0 0 0 1px var(--owl-teal)' }}
             />
           </InlineField>
         </Box>
@@ -1376,23 +1381,23 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
         )}
         <Box bg="gray.50" borderRadius="10px" px={4} py={3}>
           <HStack justify="space-between" align="flex-start" mb={2}>
-            <Text fontSize="10px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em">Summary</Text>
-            <Badge variant="subtle" colorScheme="blue" fontSize="10px">{suggestions.meetingType.replace(/_/g, ' ')}</Badge>
+            <Text fontSize="12px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em">Summary</Text>
+            <Badge variant="subtle" colorScheme="blue" fontSize="12px">{suggestions.meetingType.replace(/_/g, ' ')}</Badge>
           </HStack>
-          <Text fontSize="14px" lineHeight="1.65" color="gray.700">{suggestions.summary || 'No summary was extracted.'}</Text>
+          <Text fontSize="13px" lineHeight="1.65" color="gray.700">{suggestions.summary || 'No summary was extracted.'}</Text>
         </Box>
 
         {suggestions.signals?.length > 0 && (
           <Box>
-            <Text fontSize="10px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb={2}>Signals</Text>
+            <Text fontSize="12px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb={2}>Signals</Text>
             <VStack spacing={2} align="stretch">
               {suggestions.signals.slice(0, 12).map((signal: any, idx: number) => (
                 <Box key={idx} border="1px solid" borderColor="gray.200" borderRadius="9px" px={3} py={2.5} bg="white">
                   <HStack justify="space-between" align="flex-start">
                     <Text fontSize="12px" fontWeight="600" color="gray.700">{signal.text || 'Signal'}</Text>
-                    <Badge variant="outline" fontSize="9px" colorScheme="gray">{String(signal.type || 'context').replace(/_/g, ' ')}</Badge>
+                    <Badge variant="outline" fontSize="12px" colorScheme="gray">{String(signal.type || 'context').replace(/_/g, ' ')}</Badge>
                   </HStack>
-                  {signal.evidence?.quote && <Text mt={1.5} fontSize="11px" color="gray.500" fontStyle="italic">“{signal.evidence.quote}”</Text>}
+                  {signal.evidence?.quote && <Text mt={1.5} fontSize="12px" color="gray.500" fontStyle="italic">“{signal.evidence.quote}”</Text>}
                 </Box>
               ))}
             </VStack>
@@ -1401,7 +1406,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
 
         {suggestions.openQuestions?.length > 0 && (
           <Box>
-            <Text fontSize="10px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb={2}>Open questions</Text>
+            <Text fontSize="12px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb={2}>Open questions</Text>
             <VStack align="stretch" spacing={1}>
               {suggestions.openQuestions.slice(0, 8).map((question: string, idx: number) => <Text key={idx} fontSize="12px" color="gray.600">• {question}</Text>)}
             </VStack>
@@ -1409,7 +1414,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
         )}
 
         {(coverage || quality) && (
-          <HStack spacing={3} color="gray.500" fontSize="11px">
+          <HStack spacing={3} color="gray.500" fontSize="12px">
             {coverage && <Text>Coverage {Math.round((coverage.score || 0) * 100)}%</Text>}
             {quality && <Text>Transcript quality {Math.round(quality.score ?? 0)}%</Text>}
             {coverage?.missing?.length > 0 && <Text title={coverage.missing.join(', ')}>Needs context</Text>}
@@ -1480,7 +1485,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
               </Text>
               {hasExtracted && (
                 <Box mt={3} pt={3} borderTop="1px solid" borderColor="gray.100">
-                  <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={2}>Extracted Items:</Text>
+                  <Text fontSize="12px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={2}>Extracted Items:</Text>
                   <HStack spacing={2} flexWrap="wrap">
                     {turnBlockers.map((b, j) => (
                       <Badge key={`b-${j}`} bg={HIGHLIGHT_COLORS.blocker.bg} color={HIGHLIGHT_COLORS.blocker.color} borderRadius="full" px={2.5} py={0.5} fontSize="xs" fontWeight="medium" border="1px solid" borderColor={HIGHLIGHT_COLORS.blocker.border}>
@@ -1557,7 +1562,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
 
           <VStack align="stretch" spacing={1} flex={1} minW={0}>
             <HStack spacing={2} flexWrap="wrap">
-              <Badge colorScheme={meta.color} variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+              <Badge colorScheme={meta.color} variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                 {meta.label}
               </Badge>
               {entry.targetRecordId && entry.targetRecordId !== '(pending-create)' && (
@@ -1567,7 +1572,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                     e.stopPropagation();
                     if (entry.targetRecordUrl) api.openExternal(entry.targetRecordUrl);
                   }}
-                  color="#1a7080"
+                  color="var(--owl-teal)"
                   fontSize="12px"
                   fontWeight="600"
                   cursor={entry.targetRecordUrl ? 'pointer' : 'default'}
@@ -1578,17 +1583,17 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                 </Box>
               )}
               {isFailed && (
-                <Badge colorScheme="red" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                <Badge colorScheme="red" variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                   Failed
                 </Badge>
               )}
               {isPending && (
-                <Badge colorScheme="yellow" variant="subtle" fontSize="10px" borderRadius="full" px={2}>
+                <Badge colorScheme="yellow" variant="subtle" fontSize="12px" borderRadius="full" px={2}>
                   {entry.result === 'pending-approval' ? 'Pending approval' : 'In progress'}
                 </Badge>
               )}
               {entry.retryCount > 0 && (
-                <Text fontSize="10px" color="gray.400">retry #{entry.retryCount}</Text>
+                <Text fontSize="12px" color="gray.400">retry #{entry.retryCount}</Text>
               )}
             </HStack>
 
@@ -1597,7 +1602,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
             </Text>
 
             {isFailed && entry.errorMessage && !isExpanded && (
-              <Text fontSize="11px" color="red.600" noOfLines={1}>{entry.errorMessage}</Text>
+              <Text fontSize="12px" color="red.600" noOfLines={1}>{entry.errorMessage}</Text>
             )}
 
             {isExpanded && (
@@ -1617,7 +1622,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
 
                 {entry.operation !== 'comment' && entry.fieldDiffs.length > 0 && (
                   <Box fontSize="12px">
-                    <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                    <Text fontSize="12px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
                       Field changes
                     </Text>
                     <VStack align="stretch" spacing={1}>
@@ -1641,13 +1646,13 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
 
                 {entry.sourceTranscriptSpan?.snippet && (
                   <Box>
-                    <Text fontSize="10px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
+                    <Text fontSize="12px" fontWeight="600" color="gray.400" textTransform="uppercase" letterSpacing="0.05em" mb={1}>
                       From transcript
                     </Text>
                     <Box
                       borderLeft="3px solid"
-                      borderLeftColor="#9dd4d9"
-                      bg="#f0fafa"
+                      borderLeftColor="var(--owl-aqua)"
+                      bg="var(--surface-status)"
                       pl={3}
                       py={2}
                       borderRadius="0 6px 6px 0"
@@ -1707,7 +1712,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
       <VStack spacing={5} align="stretch">
         {systems.map(system => (
           <Box key={system}>
-            <Text fontSize="11px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb={2}>
+            <Text fontSize="12px" fontWeight="700" color="gray.500" textTransform="uppercase" letterSpacing="0.06em" mb={2}>
               {SOR_SYSTEM_LABEL[system] ?? system}
             </Text>
             <VStack spacing={2} align="stretch">
@@ -1748,8 +1753,8 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
               <VStack spacing={3} align="stretch" pb={16}>
                 {/* Summary bar */}
                 {activeTab !== 'overview' && activeTab !== 'transcript' && activeTab !== 'sorWrites' && (
-                  <Box bg="#f7fafc" borderRadius="8px" px={3} py={2}>
-                    <Text fontSize="11px" color="gray.500">
+                  <Box bg="var(--surface)" borderRadius="8px" px={3} py={2}>
+                    <Text fontSize="12px" color="gray.500">
                       AI extracted {tabCounts[activeTab]} item{tabCounts[activeTab] !== 1 ? 's' : ''} from this meeting.
                       {' '}Click any text to edit. Items are included by default — dismiss what you don&apos;t need.
                     </Text>
@@ -1792,7 +1797,7 @@ export default function TranscriptReviewModal({ isOpen, onClose, meetingId, onAp
                   <Button variant="ghost" size="sm" colorScheme="gray" fontSize="12px" onClick={onClose}>Cancel</Button>
                   <Button
                     size="sm"
-                    bg="#1a7080"
+                    bg="var(--owl-teal)"
                     color="white"
                     borderRadius="8px"
                     fontSize="12px"

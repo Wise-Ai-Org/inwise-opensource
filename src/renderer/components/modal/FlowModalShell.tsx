@@ -47,14 +47,14 @@ export const INPUT_PROPS = {
   borderRadius: '8px',
   borderColor: 'gray.200',
   fontSize: '13px',
-  _focus: { borderColor: '#1a7080', boxShadow: '0 0 0 1px #1a7080' }
+  _focus: { borderColor: 'var(--owl-teal)', boxShadow: '0 0 0 1px var(--owl-teal)' }
 };
 
 export const SELECT_PROPS = {
   borderRadius: '8px',
   borderColor: 'gray.200',
   fontSize: '13px',
-  _focus: { borderColor: '#1a7080', boxShadow: '0 0 0 1px #1a7080' }
+  _focus: { borderColor: 'var(--owl-teal)', boxShadow: '0 0 0 1px var(--owl-teal)' }
 };
 
 export const TEXTAREA_PROPS = {
@@ -63,7 +63,7 @@ export const TEXTAREA_PROPS = {
   fontSize: '13px',
   lineHeight: '20px',
   resize: 'none' as const,
-  _focus: { borderColor: '#1a7080', boxShadow: '0 0 0 1px #1a7080' }
+  _focus: { borderColor: 'var(--owl-teal)', boxShadow: '0 0 0 1px var(--owl-teal)' }
 };
 
 /** Staggered entry animation for form fields — pass the field index */
@@ -121,7 +121,7 @@ export const FlowModalHeader: React.FC<FlowModalHeaderProps> = ({ title, subtitl
       {c && statusLabel && (
         <HStack mb="4px" spacing="6px">
           <Box w="7px" h="7px" borderRadius="full" bg={c.dot} />
-          <Text fontSize="10px" fontWeight="700" color={c.label} letterSpacing="0.07em" textTransform="uppercase">
+          <Text fontSize="12px" fontWeight="700" color={c.label} letterSpacing="0.07em" textTransform="uppercase">
             {statusLabel}
           </Text>
         </HStack>
@@ -222,7 +222,7 @@ export const FlowModalFooter: React.FC<FlowModalFooterProps> = ({
 
 export const FlowFormLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <FormLabel
-    fontSize="10.5px"
+    fontSize="12px"
     fontWeight="700"
     color="gray.500"
     textTransform="uppercase"
@@ -242,10 +242,10 @@ export const AiSuggestionBanner: React.FC<{
 }> = ({ isLoading, hasData, noData }) => {
   if (isLoading) {
     return (
-      <Box px={3} py={2} borderRadius="8px" border="1px solid" borderColor="#9dd4d9" bg="#f0fafa">
+      <Box px={3} py={2} borderRadius="8px" border="1px solid" borderColor="var(--owl-aqua)" bg="var(--surface-status)">
         <HStack spacing={2}>
-          <Box w="6px" h="6px" borderRadius="full" bg="#1a7080" />
-          <Text fontSize="12px" color="#1a7080">Analyzing — checking what Inwise knows...</Text>
+          <Box w="6px" h="6px" borderRadius="full" bg="var(--owl-teal)" />
+          <Text fontSize="12px" color="var(--owl-teal)">Analyzing — checking what Inwise knows...</Text>
         </HStack>
       </Box>
     );
@@ -261,8 +261,8 @@ export const AiSuggestionBanner: React.FC<{
   }
   if (hasData) {
     return (
-      <Box px={3} py={2} borderRadius="8px" border="1px solid" borderColor="#9dd4d9" bg="#f0fafa">
-        <Text fontSize="12px" color="#1a7080">
+      <Box px={3} py={2} borderRadius="8px" border="1px solid" borderColor="var(--owl-aqua)" bg="var(--surface-status)">
+        <Text fontSize="12px" color="var(--owl-teal)">
           Fields below are AI-suggested from your meetings. Click any to edit.
         </Text>
       </Box>

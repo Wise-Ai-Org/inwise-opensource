@@ -245,7 +245,7 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
       <div className="pp-drillhead">
         <button className="pp-back" aria-label="Back" onClick={pop}>←</button>
         <div className="pp-drilltitle">Task</div>
-        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--teal)', textAlign: 'right' }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--teal)', textAlign: 'right' }}>
           {savedAt ? '✓ Saved' : ''}
         </span>
       </div>
@@ -257,7 +257,7 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
             <div className="pp-card">
               <div className="pp-title-sm" style={{ fontSize: 15 }}>{task.title}</div>
               {task.description && (
-                <div style={{ fontSize: 12.5, color: 'var(--slate-700)', lineHeight: 1.5, marginTop: 6 }}>{task.description}</div>
+                <div style={{ fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.5, marginTop: 6 }}>{task.description}</div>
               )}
               <div className="pp-row" style={{ marginTop: 8, gap: 6, flexWrap: 'wrap' }}>
                 {task.jiraKey && <span className="pp-chip">Jira · {task.jiraKey}</span>}
@@ -318,7 +318,7 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
                   people={people}
                   onChange={(name) => patch({ owner: name || null })}
                   onPersonAdded={(name) => setPeople(p => (p.includes(name) ? p : [...p, name]))}
-                  style={{ border: 'none', outline: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit', maxWidth: 160 }}
+                  style={{ border: 'none', outline: 'none', fontSize: 13, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit', maxWidth: 160 }}
                 />
               </div>
               <div className="pp-setrow" style={{ cursor: 'default' }}>
@@ -327,7 +327,7 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
                   type="date"
                   value={dueInput}
                   onChange={e => patch({ dueDate: e.target.value ? new Date(e.target.value + 'T12:00:00').toISOString() : null })}
-                  style={{ border: 'none', outline: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit' }}
+                  style={{ border: 'none', outline: 'none', fontSize: 13, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit' }}
                 />
               </div>
               <div className="pp-setrow" style={{ cursor: 'default' }}>
@@ -335,7 +335,7 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
                 <select
                   value={task.priority || 'medium'}
                   onChange={e => patch({ priority: e.target.value })}
-                  style={{ border: 'none', outline: 'none', fontSize: 12.5, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit' }}
+                  style={{ border: 'none', outline: 'none', fontSize: 13, fontWeight: 600, color: 'var(--teal)', background: 'transparent', fontFamily: 'inherit' }}
                 >
                   {PRIORITIES.map(p => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}
                 </select>

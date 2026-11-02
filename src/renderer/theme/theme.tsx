@@ -10,6 +10,7 @@ import { switchStyles } from './components/switch';
 import { linkStyles } from './components/link';
 import { breakpoints } from './foundations/breakpoints';
 import { globalStyles } from './styles';
+import { owlTheme } from './owl';
 
 export default extendTheme(
   { breakpoints }, // Breakpoints
@@ -22,7 +23,8 @@ export default extendTheme(
   inputStyles, // input styles
   textareaStyles, // textarea styles
   switchStyles, // switch styles
-  CardComponent // card component
+  CardComponent,
+  owlTheme
 );
 
 export interface CustomCardProps extends HTMLChakraProps<'div'>, ThemingProps {}

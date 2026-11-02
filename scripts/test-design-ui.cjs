@@ -1,0 +1,79 @@
+// Actual built renderer + real IPC and isolated synthetic data. Never opens user data.
+const {app,BrowserWindow,ipcMain}=require('electron');
+const fs=require('fs'),path=require('path'),os=require('os'),assert=require('assert/strict');
+app.disableHardwareAcceleration();app.setPath('userData',fs.mkdtempSync(path.join(os.tmpdir(),'inwise-owl-')));
+app.setName('Inwise design QA');process.argv.push('--hidden');
+app.commandLine.appendSwitch('use-fake-device-for-media-stream');app.commandLine.appendSwitch('use-fake-ui-for-media-stream');
+const config=require('../dist/main/config');
+config.setConfig({onboardingComplete:true,apiKey:'synthetic-test-placeholder',mcpEnabled:false,calendarFreeRecording:false,calendarUrls:[],userName:'Alex'});
+app.on('browser-window-created',(_e,w)=>{w.show=()=>{};w.focus=()=>{};});
+require('../dist/main/main');
+const delay=ms=>new Promise(r=>setTimeout(r,ms)),out=path.resolve(__dirname,'../artifacts/owl-design');
+fs.mkdirSync(out,{recursive:true});const results=[],errors=[];
+app.whenReady().then(async()=>{
+ const db=require('../dist/main/database');
+ const meetingId=await db.createMeeting({title:'Launch readiness sync',date:new Date().toISOString(),attendees:['Alex','Jordan Lee'],duration:25});
+ await db.updateMeetingTranscript(meetingId,'Alex: We agreed to share the onboarding draft tomorrow. Jordan Lee: I will review the first version.',25);
+ await db.saveInsights(meetingId,{summary:'The team agreed on the next onboarding improvements and a first review tomorrow.',actionItems:[{text:'Share the onboarding draft',owner:'Alex',priority:'high'}],decisions:[{text:'Review the first version tomorrow'}],blockers:[]});
+ await db.createTask({title:'Prepare the pilot invite list',owner:'Alex',priority:'high',meetingId,skipDedup:true});
+ await db.addPerson({firstName:'Jordan',lastName:'Lee',notes:'Product team'});
+ const win=new BrowserWindow({width:380,height:720,show:false,frame:false,webPreferences:{preload:path.resolve(__dirname,'../dist/main/preload.js'),contextIsolation:true,offscreen:true,backgroundThrottling:false}});
+ win.webContents.on('console-message',(_e,...a)=>{const t=a.join(' ');if(/Uncaught|The above error occurred/.test(t))errors.push(t)});
+ const js=s=>win.webContents.executeJavaScript(s);
+ const nav=async view=>{await js("document.querySelector('.pp-menu-backdrop')?.click()");await js(`window.dispatchEvent(new CustomEvent('pp-navigate',{detail:{view:${JSON.stringify(view)}}}))`);await delay(250)};
+ const click=async(text,selector='button')=>{const found=await js(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(selector)})].find(b=>b.textContent.trim().includes(${JSON.stringify(text)}));if(!b)return false;b.click();return true})()`);assert.ok(found,'control exists: '+text);await delay(250)};
+ const snap=async name=>{
+  await delay(100);
+  const state=await js(`(()=>{const b=getComputedStyle(document.body);return {background:b.backgroundColor,text:b.color,overflow:document.documentElement.scrollWidth>innerWidth,visible:document.body.innerText}})()`);
+  assert.equal(state.background,'rgb(255, 255, 255)',name+' white canvas');assert.equal(state.overflow,false,name+' fits width');assert.ok(!state.visible.includes('Something went wrong'),name+' no crash');
+  if(name.startsWith('settings-')||name.startsWith('integration-'))assert.equal(await js("!!document.querySelector('.pp-menu')"),false,name+' unobstructed');
+  fs.writeFileSync(path.join(out,name+'.png'),(await win.webContents.capturePage()).toPNG());results.push({screen:name,passed:true});
+  if(name.startsWith('settings-')||name.startsWith('integration-')){
+   await js("document.querySelectorAll('.pp-body').forEach(x=>x.scrollTop=x.scrollHeight)");await delay(80);
+   fs.writeFileSync(path.join(out,name+'-bottom.png'),(await win.webContents.capturePage()).toPNG());
+  }
+ };
+ await win.loadURL('app://bundle/index.html');await delay(1200);
+ for(const view of ['communications','tasks','people']){await nav(view);await snap(view);}
+ await nav('communications');await js("document.querySelector('.pp-review-pill').click()");await snap('review-queue');
+ await nav('tasks');await click('Review priorities');await snap('review-priorities');
+ await nav('communications');await click('Upload');await snap('upload-sheet');await js("document.querySelector('.pp-sheet-backdrop').click()");
+ await js(`window.dispatchEvent(new CustomEvent('pp-navigate',{detail:{meetingId:${JSON.stringify(meetingId)}}}))`);await delay(350);await snap('meeting-insights');
+ await nav('tasks');await click('Prepare the pilot invite list','[role="button"]');await snap('task-detail');
+ await click('Same as another task');await snap('task-merge-picker');await click('Cancel merge');await click('Snooze until');await snap('task-snooze');
+ await nav('tasks');await click('+ New task');await snap('new-task-sheet');await js("document.querySelector('.pp-sheet-backdrop').click()");
+ await nav('people');await click('Jordan Lee','.pp-setrow');await snap('person-detail');
+ await click('Archive person');await snap('archive-person-confirmation');await click('Cancel');await click('Same as another person');await snap('person-merge-picker');
+ await nav('people');await click('+ Add person');await snap('add-person');
+ await nav('communications');await js("document.querySelector('[aria-label=\"Capture — voice note or meeting recording\"]').click()");await snap('capture-chooser');
+ await win.reload();await delay(600);await js("document.querySelector('[aria-label=Menu]').click()");await snap('menu');
+ const menuText=await js('document.body.innerText');
+ for(const label of ['Search','Review','About']){
+  await win.reload();await delay(500);await js("document.querySelector('[aria-label=Menu]').click()");
+  if(menuText.includes(label)){await click(label);await snap(label.toLowerCase());}
+ }
+ for(const section of ['AI provider','Startup & daily plan','Transcription & recording','Connect to AI','Voice & identity','Data']){await nav('settings');await click(section,'.pp-setrow');await snap('settings-'+section.toLowerCase().replace(/[^a-z]+/g,'-'));}
+ for(const section of ['Calendar','Jira','Slack','Zoom','Microsoft Teams','Google Meet','Approval gates & sync']){
+  await nav('settings');await click('Integrations','.pp-setrow');await click(section,'.pp-setrow');await snap('integration-'+section.toLowerCase().replace(/[^a-z]+/g,'-'));
+ }
+ await nav('settings');await click('Integrations','.pp-setrow');await snap('integrations-hub');
+ await nav('voice-capture');await delay(500);await snap('voice-capture');await nav('communications');
+ await win.loadURL('app://bundle/index.html?review='+meetingId);await delay(700);await snap('transcript-review');
+ const tabs=await js("[...document.querySelectorAll('[role=tab]')].map(x=>x.textContent)");
+ assert.ok(tabs.length>=5,'all review tabs present');
+ for(const title of tabs){await click(title,'[role=tab]');await snap('review-'+title.toLowerCase().replace(/[^a-z]+/g,'-'));}
+ await win.loadURL('app://bundle/index.html');await delay(500);await nav('communications');
+ await js("document.querySelector('[aria-label=\"Next week\"]').click()");await snap('empty-next-week');
+ win.setSize(520,800);await nav('tasks');await snap('wide-tasks');win.setSize(380,720);
+ config.setConfig({onboardingComplete:false});await win.reload();await delay(600);await snap('onboarding-setup');
+ ipcMain.removeHandler('whisper:setup');ipcMain.handle('whisper:setup',async()=>({ok:true}));
+ await click('Continue');await snap('onboarding-connect');await click('Continue - connections optional');await snap('onboarding-ready');
+ // Daily plan is a separate entry point; isolate its data from AI/network work.
+ ipcMain.removeHandler('dailyPlan:get');ipcMain.handle('dailyPlan:get',async()=>({greeting:{title:'Good morning, Alex',sub:'One conversation and two commitments today'},meetings:[{id:meetingId,title:'Launch readiness sync',startTime:Date.now(),endTime:Date.now()+1800000,attendees:['Jordan Lee'],agenda:['Review the draft'],agendaBasis:null}],tasks:[{id:'qa-task',title:'Prepare the pilot invite list',priority:'high',dueDate:null,reasoning:'Ready for a next move'}],hasApiKey:true}));
+ const planWin=new BrowserWindow({width:520,height:720,show:false,frame:false,webPreferences:{preload:path.resolve(__dirname,'../dist/main/dailyplan-preload.js'),contextIsolation:true,offscreen:true}});
+ await planWin.loadFile(path.resolve(__dirname,'../dist/renderer/dailyplan.html'));await delay(500);fs.writeFileSync(path.join(out,'daily-plan.png'),(await planWin.webContents.capturePage()).toPNG());results.push({screen:'daily-plan',passed:true});
+ assert.ok(await js("!!document.querySelector('.onboarding-card')"),'setup screen mounted');assert.deepEqual(errors,[],'no renderer exceptions');
+ fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({passed:true,screens:results,rendererErrors:errors,limitations:['Synthetic data and fake microphone; no real provider credentials or external writes used.']},null,2));
+ console.log('Owl design QA passed: '+results.length+' screen/state captures, real IPC, 380/520px layouts.');app.exit(0);
+}).catch(e=>{console.error(e);fs.writeFileSync(path.join(out,'failure.txt'),e.stack||String(e));app.exit(1)});
+
