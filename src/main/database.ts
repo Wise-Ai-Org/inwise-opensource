@@ -39,8 +39,11 @@ export async function createMeeting(data: {
   seriesUid?: string | null;
   source?: string;
   attendees?: string[];
+  /** Slack thread imports: the channel the thread came from (wrap-up groups by it). */
+  slackChannelId?: string;
 }): Promise<string> {
   const doc = await meetingsDb.insertAsync({
+    ...(data.slackChannelId ? { slackChannelId: data.slackChannelId } : {}),
     _id: uuidv4(),
     title: data.title,
     date: data.date,
@@ -754,7 +757,7 @@ export async function markLikelyDone(taskId: string): Promise<void> {
   const now = new Date().toISOString();
   await tasksDb.updateAsync(
     { _id: taskId },
-    { $set: { likelyDone: true, updatedAt: now } },
+    { $set: { likelyDone: true, likelyDoneAt: now, updatedAt: now } },
     {},
   );
 }
@@ -763,7 +766,7 @@ export async function confirmLikelyDone(taskId: string): Promise<void> {
   const now = new Date().toISOString();
   await tasksDb.updateAsync(
     { _id: taskId },
-    { $set: { likelyDone: false, status: 'done', updatedAt: now } },
+    { $set: { likelyDone: false, likelyDoneAt: null, status: 'done', updatedAt: now } },
     {},
   );
 }
@@ -772,7 +775,7 @@ export async function rejectLikelyDone(taskId: string): Promise<void> {
   const now = new Date().toISOString();
   await tasksDb.updateAsync(
     { _id: taskId },
-    { $set: { likelyDone: false, updatedAt: now } },
+    { $set: { likelyDone: false, likelyDoneAt: null, updatedAt: now } },
     {},
   );
 }

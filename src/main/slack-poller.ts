@@ -199,6 +199,14 @@ async function runPoll(): Promise<void> {
       appLog('error', 'slack:poll', `Error polling channel ${channelId}: ${error.message}`);
     }
   }
+  lastSlackPollAt = Date.now();
+}
+
+let lastSlackPollAt: number | null = null;
+
+/** When the last full poll cycle finished (this session), or null. Feeds "Slack synced N min ago". */
+export function getLastSlackPollAt(): number | null {
+  return lastSlackPollAt;
 }
 
 export function runSlackPollNow(): Promise<void> {

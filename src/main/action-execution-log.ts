@@ -357,3 +357,11 @@ export async function listActionExecutionsByActionItem(actionItemId: string): Pr
     .sort({ createdAt: -1 });
   return rows as ActionExecutionEntry[];
 }
+
+/** Executions touched since `sinceIso` (newest first) — wrap-up receipts. */
+export async function listActionExecutionsUpdatedSince(sinceIso: string): Promise<ActionExecutionEntry[]> {
+  const rows = await (getDb() as any)
+    .findAsync({ updatedAt: { $gte: sinceIso } })
+    .sort({ updatedAt: -1 });
+  return rows as ActionExecutionEntry[];
+}
