@@ -9,6 +9,7 @@ config.setConfig({onboardingComplete:true,apiKey:'synthetic-test-placeholder',mc
 app.on('browser-window-created',(_e,w)=>{w.show=()=>{};w.focus=()=>{};});
 require('../dist/main/main');
 const delay=ms=>new Promise(r=>setTimeout(r,ms)),out=path.resolve(__dirname,'../artifacts/owl-design');
+const capture=async win=>{for(let n=0;n<3;n++){try{return (await win.webContents.capturePage()).toPNG()}catch(e){if(!String(e).includes('UnknownVizError')||n===2)throw e;await delay(250);}}};
 fs.mkdirSync(out,{recursive:true});const results=[],errors=[];
 app.whenReady().then(async()=>{
  const db=require('../dist/main/database');
@@ -26,11 +27,15 @@ app.whenReady().then(async()=>{
   await delay(100);
   const state=await js(`(()=>{const b=getComputedStyle(document.body);return {background:b.backgroundColor,text:b.color,overflow:document.documentElement.scrollWidth>innerWidth,visible:document.body.innerText}})()`);
   assert.equal(state.background,'rgb(255, 255, 255)',name+' white canvas');assert.equal(state.overflow,false,name+' fits width');assert.ok(!state.visible.includes('Something went wrong'),name+' no crash');
+  if(name==='review-priorities'){
+   const geometry=await js("(()=>{const r=document.querySelector('.pp-root'),h=document.querySelector('.pp-drillhead');return {rootScroll:r.scrollTop,headingTop:h.getBoundingClientRect().top,headingBottom:h.getBoundingClientRect().bottom}})()");
+   assert.equal(geometry.rootScroll,0,'priority focus keeps window chrome in place');assert.ok(geometry.headingTop>=40&&geometry.headingBottom<720,'review header remains visible');
+  }
   if(name.startsWith('settings-')||name.startsWith('integration-'))assert.equal(await js("!!document.querySelector('.pp-menu')"),false,name+' unobstructed');
-  fs.writeFileSync(path.join(out,name+'.png'),(await win.webContents.capturePage()).toPNG());results.push({screen:name,passed:true});
+  fs.writeFileSync(path.join(out,name+'.png'),await capture(win));results.push({screen:name,passed:true});
   if(name.startsWith('settings-')||name.startsWith('integration-')){
    await js("document.querySelectorAll('.pp-body').forEach(x=>x.scrollTop=x.scrollHeight)");await delay(80);
-   fs.writeFileSync(path.join(out,name+'-bottom.png'),(await win.webContents.capturePage()).toPNG());
+   fs.writeFileSync(path.join(out,name+'-bottom.png'),await capture(win));
   }
  };
  await win.loadURL('app://bundle/index.html');await delay(1200);
@@ -71,7 +76,7 @@ app.whenReady().then(async()=>{
  // Daily plan is a separate entry point; isolate its data from AI/network work.
  ipcMain.removeHandler('dailyPlan:get');ipcMain.handle('dailyPlan:get',async()=>({greeting:{title:'Good morning, Alex',sub:'One conversation and two commitments today'},meetings:[{id:meetingId,title:'Launch readiness sync',startTime:Date.now(),endTime:Date.now()+1800000,attendees:['Jordan Lee'],agenda:['Review the draft'],agendaBasis:null}],tasks:[{id:'qa-task',title:'Prepare the pilot invite list',priority:'high',dueDate:null,reasoning:'Ready for a next move'}],hasApiKey:true}));
  const planWin=new BrowserWindow({width:520,height:720,show:false,frame:false,webPreferences:{preload:path.resolve(__dirname,'../dist/main/dailyplan-preload.js'),contextIsolation:true,offscreen:true}});
- await planWin.loadFile(path.resolve(__dirname,'../dist/renderer/dailyplan.html'));await delay(500);fs.writeFileSync(path.join(out,'daily-plan.png'),(await planWin.webContents.capturePage()).toPNG());results.push({screen:'daily-plan',passed:true});
+ await planWin.loadFile(path.resolve(__dirname,'../dist/renderer/dailyplan.html'));await delay(500);fs.writeFileSync(path.join(out,'daily-plan.png'),await capture(planWin));results.push({screen:'daily-plan',passed:true});
  assert.ok(await js("!!document.querySelector('.onboarding-card')"),'setup screen mounted');assert.deepEqual(errors,[],'no renderer exceptions');
  fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({passed:true,screens:results,rendererErrors:errors,limitations:['Synthetic data and fake microphone; no real provider credentials or external writes used.']},null,2));
  console.log('Owl design QA passed: '+results.length+' screen/state captures, real IPC, 380/520px layouts.');app.exit(0);

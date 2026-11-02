@@ -350,7 +350,13 @@ export default function ReviewPage({ focus }: { focus?: 'approvals' | 'prioritie
 
   useEffect(() => {
     if (focus && review.loaded) {
-      sectionRefs[focus]?.current?.scrollIntoView({ block: 'start' });
+      const section = sectionRefs[focus]?.current;
+      const body = section?.closest<HTMLElement>('.pp-body');
+      if (section && body) {
+        // scrollIntoView also scrolls the clipped window/root and can move
+        // the entire review page out of view. Only move its content pane.
+        body.scrollTop += section.getBoundingClientRect().top - body.getBoundingClientRect().top;
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus, review.loaded]);
