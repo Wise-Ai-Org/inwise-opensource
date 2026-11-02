@@ -1,10 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, useNav, SettingsSectionKey } from './nav';
 import Settings from '../Settings';
+import type { NotificationSettings } from '../api';
+import './ollie.css';
 
 const SECTIONS: Array<{ key: SettingsSectionKey | 'integrations-hub'; icon: string; label: string }> = [
   { key: 'ai', icon: '✦', label: 'AI provider' },
   { key: 'startup', icon: '▸', label: 'Startup & daily plan' },
+  { key: 'notifications', icon: '◔', label: 'Notifications' },
   { key: 'transcription', icon: '◉', label: 'Transcription & recording' },
   { key: 'integrations-hub', icon: '⚏', label: 'Integrations' },
   { key: 'ai-connect', icon: '⌘', label: 'Connect to AI' },
@@ -62,8 +65,10 @@ export function SettingsRootPage() {
       a.mcpStatus?.(),
       a.getVoicePrints?.(),
       fetchIntegrationStatuses(),
-    ]).then(([cfg, mcp, prints, integrations]) => {
+      a.getNotificationSettings?.(),
+    ]).then(([cfg, mcp, prints, integrations, notifications]) => {
       const next: Record<string, string> = {};
+      if (notifications.status === 'fulfilled' && notifications.value) next['notifications'] = notificationSummary(notifications.value);
       if (cfg.status === 'fulfilled' && cfg.value) {
         const c = cfg.value;
         next['ai'] = c.apiKey ? (c.apiProvider === 'openai' ? 'OpenAI · key added' : 'Anthropic · key added') : 'No API key yet';
@@ -154,6 +159,98 @@ export function IntegrationsHubPage() {
         </div>
       </div>
     </>
+  );
+}
+
+// ── Notifications (docs/OLLIE_MOMENTS.md, "Settings · Notifications") ──────
+
+type Choice<T> = { label: string; value: T };
+const MODE3: Array<Choice<'notify' | 'tray' | 'off'>> = [
+  { label: 'Notify', value: 'notify' }, { label: 'Tray only', value: 'tray' }, { label: 'Off', value: 'off' },
+];
+const MORNING: Array<Choice<NotificationSettings['morning']>> = [
+  { label: 'Window', value: 'window' }, { label: 'Tray only', value: 'tray' }, { label: 'Off', value: 'off' },
+];
+type PrepChoice = '5' | '10' | '15' | 'tray' | 'off';
+const PREP: Array<Choice<PrepChoice>> = [
+  { label: '5 min', value: '5' }, { label: '10 min', value: '10' }, { label: '15 min', value: '15' },
+  { label: 'Tray only', value: 'tray' }, { label: 'Off', value: 'off' },
+];
+
+function notificationSummary(n: NotificationSettings): string {
+  const prep = n.prep.mode === 'notify' ? `${n.prep.leadMinutes} min before meetings` : n.prep.mode === 'tray' ? 'Prep in tray only' : 'Prep off';
+  const morning = n.morning === 'window' ? 'Morning plan window' : n.morning === 'tray' ? 'Morning plan in tray' : 'Morning plan off';
+  return `${morning} · ${prep}`;
+}
+
+function Segmented<T extends string>({ label, sub, choices, value, onChange, disabled }: {
+  label: string;
+  sub?: string;
+  choices: Array<Choice<T>>;
+  value: T;
+  onChange?: (value: T) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="ol-setting">
+      <div>
+        <div className="pp-title-sm">{label}</div>
+        {sub && <div className="pp-meta" style={{ marginTop: 2 }}>{sub}</div>}
+      </div>
+      <div className="pp-seg" role="radiogroup" aria-label={label}>
+        {choices.map(c => (
+          <button
+            key={c.value}
+            role="radio"
+            aria-checked={value === c.value}
+            className={value === c.value ? 'pp-on' : ''}
+            disabled={disabled}
+            onClick={() => onChange?.(c.value)}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NotificationsSettings() {
+  const [settings, setSettings] = useState<NotificationSettings | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api().getNotificationSettings?.().then((s: NotificationSettings) => setSettings(s || null)).catch(() => setError("Couldn't load notification settings."));
+  }, []);
+
+  const save = async (patch: Record<string, unknown>) => {
+    setError('');
+    try {
+      const next = await api().setNotificationSettings?.(patch);
+      if (next) setSettings(next);
+    } catch {
+      setError("Couldn't save that change.");
+    }
+  };
+
+  if (!settings) return error ? <div className="pp-meta">{error}</div> : null;
+  const prepValue: PrepChoice = settings.prep.mode === 'notify' ? (String(settings.prep.leadMinutes) as PrepChoice) : settings.prep.mode;
+
+  return (
+    <div>
+      <Segmented label="Morning plan" sub="Window opens the daily plan when your day starts." choices={MORNING} value={settings.morning} onChange={v => save({ morning: v })} />
+      <Segmented
+        label="Before a meeting"
+        sub="Prep card with what's owed and waiting on your OK."
+        choices={PREP}
+        value={prepValue}
+        onChange={v => save({ prep: v === 'tray' || v === 'off' ? { mode: v } : { mode: 'notify', leadMinutes: Number(v) } })}
+      />
+      <Segmented label="After a meeting" sub="When a transcript finishes processing." choices={MODE3} value={settings.processed} onChange={v => save({ processed: v })} />
+      <Segmented label="End of day" sub="Wrap-up and what tomorrow needs." choices={MODE3} value={settings.wrapUp} onChange={v => save({ wrapUp: v })} />
+      <Segmented label="Recording problems" sub="Mic lost, missing speaker audio, conflicts. Always notifies." choices={[{ label: 'Always on', value: 'on' }]} value="on" disabled />
+      {error && <div className="pp-meta" style={{ color: 'var(--red)', marginTop: 8 }}>{error}</div>}
+    </div>
   );
 }
 
@@ -294,7 +391,7 @@ export function SettingsSectionPage({ section, title }: { section: SettingsSecti
       </div>
       <div className="pp-body" style={{ paddingTop: 4 }}>
         {section === 'zoom' && <ZoomConnectHeader />}
-        <Settings only={section} />
+        {section === 'notifications' ? <NotificationsSettings /> : <Settings only={section} />}
       </div>
     </>
   );
