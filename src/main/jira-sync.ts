@@ -39,7 +39,8 @@ import type { PushParams } from './sor-write-log';
 
 export const STRONG_MATCH = 0.85;
 export const MIDDLE_BAND_LOW = 0.3;
-const INTENT_MATCH_MIN = 0.5;
+// Keyword-only similarity tops out at 0.5 (no key mention), so 0.3 is a solid hint match.
+const INTENT_MATCH_MIN = 0.3;
 const SKIP_SOURCES = new Set(['demo_seed', 'slack_thread', 'voice_memo']);
 
 export interface StoryLike { jiraKey: string; title: string; description: string; jiraUrl: string; statusCategory?: string | null }
@@ -245,7 +246,7 @@ async function proposeIntent(
   let match = key ? 1 : 0;
   const keySpoken = !!key;
   if (!key) {
-    const best = matchItemToStories(`${intent.ticketHint || ''} ${intent.text || ''}`.trim(), stories)[0];
+    const best = matchItemToStories((intent.ticketHint || intent.text || '').trim(), stories)[0];
     if (!best || best.similarity < INTENT_MATCH_MIN) return null; // no ticket we can name with confidence: no row
     key = best.jiraKey;
     match = best.similarity;

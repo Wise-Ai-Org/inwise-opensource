@@ -49,7 +49,7 @@ export function normalizeCertainty(value: unknown, fallback = DEFAULT_EXTRACTION
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
- * create:    0.55 * extraction + 0.20 * owner + 0.15 * due + 0.10 * (1 - bestMatch)
+ * create:    0.50 * extraction + 0.15 * owner + 0.10 * due + 0.25 * (1 - bestMatch)
  * otherwise: 0.45 * extraction + 0.35 * target + 0.10 * owner + 0.10 * due
  *            where target = 1 when the key was spoken, else matchStrength.
  */
@@ -60,7 +60,7 @@ export function computeWriteConfidence(s: ConfidenceSignals): ConfidenceResult {
   const match = normalizeCertainty(s.matchStrength, 0);
   if (s.operation === 'create') {
     const novelty = s.keySpoken ? 0 : 1 - match;
-    const confidence = 0.55 * extraction + 0.2 * owner + 0.15 * due + 0.1 * novelty;
+    const confidence = 0.5 * extraction + 0.15 * owner + 0.1 * due + 0.25 * novelty;
     return { confidence: round2(Math.max(0, Math.min(1, confidence))), parts: { extraction, owner, due, target: novelty } };
   }
   const target = s.keySpoken ? 1 : match;
