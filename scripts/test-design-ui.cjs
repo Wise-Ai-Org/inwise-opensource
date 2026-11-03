@@ -32,7 +32,8 @@ app.whenReady().then(async()=>{
  // Moment cards are time-driven; these forced payloads (real seeded ids) override only ollie:getMoment / ollie:catchUpNotes in this QA process.
  const ollie=require('../dist/main/ollie-moments-service'),forced={moment:null,catchUp:null};
  ipcMain.removeHandler('ollie:getMoment');ipcMain.handle('ollie:getMoment',async()=>forced.moment||ollie.getOllieMoment());
- ipcMain.removeHandler('ollie:getProcessed');ipcMain.handle('ollie:getProcessed',async(_e,id)=>{const p=await ollie.getProcessedSummary(id);return p&&id===pilotId?{...p,jira:jiraRecap}:p});
+ ipcMain.removeHandler('ollie:getProcessed');ipcMain.handle('ollie:getProcessed',async(_e,id)=>{const p=await ollie.getProcessedSummary(id);return p&&id===pilotId?{...p,jira:jiraRecap}:p&&id===meetingId?{...p,jira:jiraActionsRecap}:p});
+ ipcMain.removeHandler('jira:searchUsers');ipcMain.handle('jira:searchUsers',async(_e,q)=>({ok:true,users:[{accountId:'qa-acc-jordan',displayName:'Jordan Lee',email:'jordan.lee@example.invalid'},{accountId:'qa-acc-jordan-2',displayName:'Jordan Leeds',email:null}].filter(u=>u.displayName.toLowerCase().includes(String(q||'').toLowerCase().split(' ')[0]))}));
  // Jira settings screen without a real connection: status and projects are synthetic in this QA process only.
  ipcMain.removeHandler('jira:status');ipcMain.handle('jira:status',()=>({connected:true,info:{cloudName:'Example Jira',email:'alex@example.invalid',cloudUrl:'https://example.invalid'}}));
  ipcMain.removeHandler('jira:getProjects');ipcMain.handle('jira:getProjects',async()=>({ok:true,projects:[{id:'1',key:'PILOT',name:'Pilot'}]}));
@@ -42,13 +43,23 @@ app.whenReady().then(async()=>{
  const surveyRef={taskId:surveyTask,title:'Book the pilot customer calls',dueDate:null,daysLate:null};
  const approval={id:'qa-approval',operation:'create',summary:'Create ticket “Prepare the pilot invite list”?',issueKey:null,meetingId,meetingTitle:'Launch readiness sync',createdAt:now.toISOString(),issueTitle:null,evidence:'I will pull the invite list together this week',suggestion:null,intent:'new',confidence:0.72,url:null};
  // Jira fixtures (docs/JIRA_SAFETY.md): synthetic keys and example.invalid links only; no Jira connection or writes.
+ const jfmt=require('../dist/main/jira-format');
+ // The quote says Thursday, so the proposed date is the coming Thursday.
+ const nextThursday=(()=>{const d=new Date();d.setDate(d.getDate()+(((4-d.getDay())+7)%7||7));return dayKey(d)})();
  const jurl=k=>'https://example.invalid/browse/'+k,jrow=(key,title,kind,detail,owner=null)=>({key,title,url:jurl(key),kind,detail,owner});
  const jiraPending=[
   {id:'qa-jira-done',operation:'transition',summary:'Move PILOT-42 to Done?',issueKey:'PILOT-42',issueTitle:'Send onboarding survey to pilot customers',url:jurl('PILOT-42'),evidence:'the survey went out yesterday, so that one is done',suggestion:null,intent:'done',confidence:0.84,meetingId:pilotId,meetingTitle:'Pilot planning',createdAt:now.toISOString()},
-  {id:'qa-jira-due',operation:'update',summary:'Move the due date on PILOT-51 to '+dayKey(new Date(Date.now()+2*86400000))+'?',issueKey:'PILOT-51',issueTitle:'Pilot customer calls',url:jurl('PILOT-51'),evidence:'the calls slipped to Thursday',suggestion:null,intent:'due_moved',confidence:0.78,meetingId:pilotId,meetingTitle:'Pilot planning',createdAt:now.toISOString()},
+  {id:'qa-jira-due',operation:'update',summary:'Move the due date on PILOT-51 to '+jfmt.formatJiraDate(nextThursday)+'?',issueKey:'PILOT-51',issueTitle:'Pilot customer calls',url:jurl('PILOT-51'),evidence:'the calls slipped to Thursday',suggestion:null,intent:'due_moved',confidence:0.78,meetingId:pilotId,meetingTitle:'Pilot planning',createdAt:now.toISOString()},
   {id:'qa-jira-sug',operation:'comment',summary:'Update PILOT-38 instead?',issueKey:'PILOT-38',issueTitle:'Draft the pilot survey questions',url:jurl('PILOT-38'),evidence:'Jordan will draft the survey',suggestion:'Update PILOT-38 instead?',intent:'new',confidence:0.61,meetingId:pilotId,meetingTitle:'Pilot planning',createdAt:now.toISOString()},
  ];
  const jiraRecap={pushedCount:1,failedCount:1,pushed:[{id:'qa-pushed',issueKey:'PILOT-44',url:jurl('PILOT-44'),operation:'comment'}],pending:jiraPending,failed:[{id:'qa-failed',issueKey:'PILOT-12',operation:'transition',message:'PILOT-12 has no transition to Done'}]};
+ const act=(id,operation,args,extra)=>({id,operation,summary:jfmt.describeJiraChange({operation,args}),issueKey:args.issueKey||args.blockedKey,url:jurl(args.issueKey||args.blockedKey),suggestion:null,confidence:0.8,meetingId,meetingTitle:'Launch readiness sync',createdAt:now.toISOString(),blockedReason:null,needs:null,assigneeName:args.assigneeName||null,...extra});
+ const jiraActionsRecap={pushedCount:0,failedCount:0,pushed:[],failed:[],pending:[
+  act('qa-assign','assign',{issueKey:'PILOT-40',accountId:null,assigneeName:'Jordan Lee'},{issueTitle:'Pilot onboarding emails',evidence:'Jordan will take PILOT-40',intent:'reassign',needs:'jira-user',blockedReason:'Jordan Lee is not linked to Jira yet. Find them in Jira first'}),
+  act('qa-link','link',{blockedKey:'PILOT-33',blockerKey:'OPS-12'},{issueTitle:'Pilot SSO setup',evidence:'PILOT-33 is blocked on the SSO work in OPS-12',intent:'blocked_by'}),
+  act('qa-sprint','sprint',{issueKey:'PILOT-41',sprintId:14,sprintName:'Sprint 14'},{issueTitle:'Pilot pricing page',evidence:"let's pull PILOT-41 into this sprint",intent:'sprint'}),
+  act('qa-nosprint','sprint',{issueKey:'OPS-7',sprintId:null,sprintName:null},{issueTitle:'Vendor review',evidence:'OPS-7 should go in the next sprint',intent:'sprint',blockedReason:"OPS's board has no active or upcoming sprint"}),
+ ]};
  const morningJira={dueToday:[jrow('PILOT-51','Pilot customer calls','due_today','Due today · In Progress')],overdue:[jrow('PILOT-47','Fix invite email links','overdue','2 days overdue · In Review')],
   sprintEnding:{name:'Pilot sprint 4',endsAt:new Date(new Date().setHours(17,0,0,0)).toISOString(),openCount:2,rows:[jrow('PILOT-49','Pilot analytics dashboard','sprint','In Progress')]},
   mentions:[jrow('PILOT-38','Draft the pilot survey questions','mention','Jordan Lee mentioned you')]};
@@ -117,6 +128,22 @@ app.whenReady().then(async()=>{
  await js(`document.querySelector('[data-meeting-id="${failedId}"]').scrollIntoView({block:'start'})`);await snap('ollie-failure-card');
  forced.catchUp=[{personId,weeksSinceMet:3,waitingOn:'the onboarding draft',text:'3 weeks since you met · waiting on the onboarding draft'}];
  await nav('people');await delay(250);assert.ok(await js("!!document.querySelector('.ol-person-note')"),'catch-up note rendered');await snap('ollie-people-catch-up');forced.catchUp=null;
+ // Recap Jira actions: assign (person not linked yet), blocking link, sprint found, sprint missing.
+ await nav('communications');await delay(300);
+ assert.ok(await js(`!!document.querySelector('[data-meeting-id="${meetingId}"] .ol-card')`),'actions recap rendered');
+ await js(`(()=>{const c=document.querySelector('[data-meeting-id="${meetingId}"]');const l=[...c.querySelectorAll('.ol-seclabel')].find(x=>x.textContent.trim()==='Jira from this meeting');l.scrollIntoView({block:'start'})})()`);await delay(120);
+ const actionsText=await js(`document.querySelector('[data-meeting-id="${meetingId}"]').innerText`);
+ for(const t of ['Assign PILOT-40 to Jordan Lee?','Mark PILOT-33 as blocked by OPS-12?','Add PILOT-41 to Sprint 14?','Find in Jira',"OPS's board has no active or upcoming sprint"])assert.ok(actionsText.includes(t),'actions recap shows '+t);
+ await snap('jira-recap-actions');
+ await js(`[...document.querySelectorAll('[data-meeting-id="${meetingId}"] button')].find(b=>b.textContent.trim()==='Find in Jira').click()`);await delay(500);
+ assert.ok((await js(`document.querySelector('[data-meeting-id="${meetingId}"]').innerText`)).includes('jordan.lee@example.invalid'),'Find in Jira lists Jira people');
+ // People tab: a person Jira could not match by email.
+ await db.setPersonJiraLink(personId,{status:'unresolved',accountId:null,displayName:null,checkedAt:now.toISOString()});
+ await nav('people');await delay(400);
+ assert.ok((await js("document.body.innerText")).includes('Not linked to Jira yet'),'People row offers the Jira link');
+ await click('Find in Jira');await delay(500);
+ assert.ok((await js("document.body.innerText")).includes('jordan.lee@example.invalid'),'Jira people search results');
+ await snap('people-jira-link');
  await nav('communications');await js("document.querySelector('.pp-review-pill').click()");await snap('review-queue');
  await nav('tasks');await click('Review priorities');await snap('review-priorities');
  await nav('communications');await click('Upload');await snap('upload-sheet');await js("document.querySelector('.pp-sheet-backdrop').click()");

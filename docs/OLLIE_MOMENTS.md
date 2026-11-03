@@ -30,7 +30,7 @@ Dismissing (×) hides the card until the next moment begins. Dismissal is stored
 - **Ollie's draft agenda**: existing draft agenda for the event if present.
 - **<Name> owes you**: open commitments/tasks owned by an attendee that the user is waiting on, with "N days late" chip when past due.
 - **You owe <Name>**: open commitments/tasks owned by the user tied to those attendees, with Overdue chip.
-- **Their Jira**: up to 4 ticket rows for the attendees, in this order: their tickets that are blocked (status says blocked, with days blocked, or an open "is blocked by" link), your open tickets that involve them (they reported it or commented), their tickets whose status category moved since you last met, their open tickets with no update for 7+ days. Tap opens the issue.
+- **Their Jira**: up to 4 ticket rows for the attendees, in this order: their tickets that are blocked (status says blocked, with days blocked, or an open "is blocked by" link), your open tickets that involve them (they reported it or commented), their tickets whose status changed since you last met ("Moved from In Review to QA since you last met", from the changelog; the status-category time when the changelog is unavailable), their open tickets with no update for 7+ days. Attendees linked to a Jira account match by accountId. Tap opens the issue.
 - **Waiting on your OK**: pending Jira approvals (`sor-pending-approvals`) whose source meeting included any of these attendees. Approve / Skip.
 - Buttons: **Record when it starts** (arms auto-start for that event), **Copy agenda**.
 - During the meeting the card stays, with kicker "Now · HH:MM to HH:MM". The record button becomes **Recording** while one runs, **Record now** if the meeting has not been recorded, and disappears once it has.
@@ -40,7 +40,7 @@ Dismissing (×) hides the card until the next moment begins. Dismissal is stored
 - Trigger: a meeting's transcript finishes processing (recorded, Zoom, Teams, Meet).
 - Inline recap card on that meeting's row in Meetings (the old separate Review page entry point remains reachable but the card is primary).
 - Contents: kicker "Processed · HH:MM–HH:MM"; "Inwise found N tasks and N decision(s)"; **patchy-audio warning** when transcription quality flags a stretch; **Tasks found** with Keep / Skip; possible duplicates with Merge / Keep both; **Decision(s)**; **Jira from this meeting**; buttons **Post recap to #<channel>** (reuses existing Slack recap send, only when Slack is connected) and Open meeting.
-- **Jira from this meeting**: a receipt line for writes already applied (keys link to Jira), an orange line per failed write with its reason ("PILOT-42 has no transition to Done"), and one row per change waiting for an OK. Rows read as questions: "Move PILOT-42 to Done?" (someone said it is done), "Move the due date on PILOT-42 to 2026-11-04?" (it slipped), "Add the decision to PILOT-42 as a comment?", "Create ticket “…”?" (new work), "Update PILOT-42 instead?" (Inwise thinks the work already has a ticket). Each row shows the target key and title and the quote behind it, with Approve / Skip, plus Create new on suggestions. All of it goes through the Jira gate (docs/JIRA_SAFETY.md).
+- **Jira from this meeting**: a receipt line for writes already applied (keys link to Jira), an orange line per failed write with its reason ("PILOT-42 has no transition to Done"), and one row per change waiting for an OK. Rows read as questions: "Move PILOT-42 to Done?" (someone said it is done), "Move the due date on PILOT-42 to 2026-11-04?" (it slipped), "Add the decision to PILOT-42 as a comment?", "Create ticket “…”?" (new work), "Update PILOT-42 instead?" (Inwise thinks the work already has a ticket). It also offers "Assign PILOT-40 to Jordan Lee?", "Mark PILOT-33 as blocked by OPS-12?" and "Add PILOT-41 to Sprint 14?". Each row shows the target key and title and the quote behind it, with Approve / Skip, plus Create new on suggestions. A row that cannot go through yet shows the reason in orange: an assignee not linked to Jira gets **Find in Jira** (search by name, pick, then Approve) instead of Approve; a missing sprint gets only Skip. Dates read like "Wed, Nov 4". All of it goes through the Jira gate (docs/JIRA_SAFETY.md).
 - **Failure**: if processing failed but audio is saved, an orange "Needs a retry" card with **Retry** and **Export audio** (existing recovery actions).
 - Notification (one per meeting): title "Inwise processed <Meeting>", body "Found N tasks and N decision(s). Pushed N Jira update(s), N need(s) your OK." Failure variant: "Couldn't process <Meeting>. The audio is saved." This replaces the separate "Zoom transcript imported", "N updates pushed to Jira" and "Transcription failed" notifications.
 
@@ -60,6 +60,7 @@ Jira adds no notifications of its own. The prep body mentions a blocked ticket (
 
 ### People tab
 - A small teal note under a person's row when they are in the Catch up set: "N weeks since you met · waiting on <thing>".
+- When Jira is connected and Inwise could not match a person to a Jira account by email: "Not linked to Jira yet" with **Find in Jira** (search by name, pick one; stored on the person). The person page shows "Linked to Jira as <name>" with **Unlink**.
 
 ## Notifications
 
@@ -105,6 +106,9 @@ The main-process half is built. Payload types live in `src/main/ollie-moments-ty
 | `jiraSetWriteMode(mode)` | `jira:setWriteMode` | same shape, after saving |
 | `jiraCreateInstead(id)` | `jira:createInstead` | `{ ok, key?, error? }`. Skips the held suggestion `id` and creates a new ticket for its task (a click). |
 | `jiraPullNow()` | `jira:pullNow` | pull summary; the scheduled pull runs at launch and every 30 min |
+| `jiraSearchUsers(query)` | `jira:searchUsers` | `{ ok, users?: { accountId, displayName, email }[], error? }` |
+| `jiraResolveAssignee(id, user)` | `jira:resolveAssignee` | `{ ok, error? }`. Fills the account on a held assign row and stores it on the person. The row still needs Approve. |
+| `peopleSetJiraAccount(personId, user)` / `peopleUnlinkJira(personId)` | `people:setJiraAccount` / `people:unlinkJira` | `{ ok, person }`. `person.jiraLink = { status: 'linked' \| 'email' \| 'unresolved' \| 'unlinked', accountId, displayName, checkedAt }` |
 | `getNotificationSettings()` | `notifications:get` | `NotificationSettings` |
 | `setNotificationSettings(patch)` | `notifications:set` | normalized `NotificationSettings`. The patch may be partial and `prep` merges (e.g. `{prep:{mode:'tray'}}`). Invalid values fall back to defaults. |
 
@@ -172,12 +176,15 @@ type PrepContent = {
 type OwedItem = { kind: 'task' | 'commitment'; taskId: string | null; meetingId: string | null; text: string; dueDate: string | null; daysLate: number | null };
 // owesYou with daysLate -> "N days late" chip; youOwe with daysLate -> "Overdue" chip
 type PendingJiraApproval = {
-  id: string; operation: 'create' | 'update' | 'transition' | 'comment';
+  id: string; operation: 'create' | 'update' | 'transition' | 'comment' | 'assign' | 'link' | 'sprint';
   summary: string;               // a question: "Move PILOT-42 to Done?", or the suggestion text
   issueKey: string | null; issueTitle: string | null; url: string | null;
   evidence: string | null;       // quote from the meeting
   suggestion: string | null;     // "Update PILOT-42 instead?" -> also offer Create new
-  intent: string | null;         // done | due_moved | decision | new
+  intent: string | null;         // done | due_moved | decision | new | reassign | blocked_by | sprint
+  blockedReason: string | null;  // why it cannot be approved yet; hide Approve
+  needs: 'jira-user' | null;     // show Find in Jira (jiraSearchUsers + jiraResolveAssignee)
+  assigneeName: string | null;   // assign rows: the name to search for
   confidence: number | null;
   meetingId: string | null; meetingTitle: string | null; createdAt: string;
 };

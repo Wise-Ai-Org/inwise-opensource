@@ -63,6 +63,29 @@ For each item, using the task local dedup produced:
 
 Ticket intents from the extraction (done, due moved, decision) target the key that was said, or a ticket the hint matches at 0.3 or more; with no confident target there is no row. Done on a ticket that is already done is skipped.
 
+## More suggestion types
+
+Ticket intents can also become:
+- **Assign** ("Jordan will take PILOT-40" -> "Assign PILOT-40 to Jordan Lee?"). The person is resolved like the pull does (stored id, then email). If they cannot be resolved the row says so and offers **Find in Jira** instead of Approve; Inwise never guesses an account. Picking someone fills the row and stores the id on the person.
+- **Blocking link** ("PILOT-33 is blocked on the SSO work" -> "Mark PILOT-33 as blocked by OPS-12?"), link type "Blocks". Only when both tickets are identified: a spoken key, a Jira-linked task or ticket whose title matches at 0.85 or more, or an LLM match. Otherwise no row.
+- **Sprint** ("let's pull PILOT-41 into this sprint" -> "Add PILOT-41 to Sprint 14?") through the Agile API, using the active (or, for "next sprint", the next future) sprint of a board on the issue's project. With no board or open sprint the row stays with the reason ("OPS's board has no active or upcoming sprint") and only Skip.
+
+Rows that cannot go through yet carry `blockedReason` (and `needs: 'jira-user'` for an unresolved assignee). They are held under both settings, Approve is refused, and a click cannot push them either. Their confidence uses the same non-create formula, so a fully certain assignment with a spoken key lands at 0.88 and still waits under the auto setting.
+
+These need extra OAuth scopes (`read:jira-user`, `read:board-scope:jira-software`, `read:sprint:jira-software`, `write:sprint:jira-software`), which are now requested at connect time and must also be enabled on the Atlassian app. Existing connections must reconnect; until then the rows say "Reconnect Jira in Settings".
+
+## People and Jira accounts
+
+`jira-people.ts` resolves a person to a Jira accountId in this order: an id stored on the person (picked with Find in Jira, or cached from an earlier email match), then an email lookup, then unresolved. Unresolved people are re-checked at most weekly. The People tab shows "Not linked to Jira yet" with Find in Jira for unresolved people (Jira hides their email); the person page shows the linked account with Unlink. An unlinked person is never re-matched by email silently. Stored ids are used for the pull scope and for "Their Jira", which matches linked people by accountId only.
+
+## Moved since you last met
+
+The prep card reads each candidate issue's changelog (`GET /issue/{key}/changelog`, jumping to the newest page on long histories), so any status change counts, including within a category (In Review to QA). Candidates are bounded to the 4 newest open, unblocked attendee issues updated since the last meeting, and results are cached per issue and its `updated` timestamp. When the changelog call fails, the status-category change time is used as before.
+
+## Dates
+
+Every Jira date shown (recap, prep, wrap, Review, notification copy) reads like "Wed, Nov 4" (`jira-format.ts formatJiraDate`).
+
 ## Transitions
 
 `pickTransition` (`jira-transitions.ts`) reads the issue's own transitions (`GET /rest/api/3/issue/{key}/transitions`) and picks: an exact transition or destination-status name, then the destination status category (`new`, `indeterminate`, `done`), then common names. If nothing fits, the write fails with "PILOT-42 has no transition to Done", shown in the recap and on the Review page.
@@ -80,4 +103,4 @@ Ticket intents from the extraction (done, due moved, decision) target the key th
 
 ## What this does not cover
 
-There is no test against a real Jira site; the HTTP layer is exercised with mocked `fetch`. Jira sites with hidden emails will not resolve attendee accounts, so "Their Jira" may be empty for those people.
+There is no test against a real Jira site; the HTTP layer is exercised with mocked `fetch`. People whose email Jira hides need a one-time Find in Jira. The issue-link direction for "Blocks" (outward = blocker) follows Atlassian's documentation and has not been checked against a live site.
