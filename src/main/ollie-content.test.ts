@@ -8,6 +8,7 @@ import {
   computeCatchUp,
   computeCrunch,
   computeGoneQuiet,
+  countDayMeetings,
   daysLate,
   identitiesMatch,
   parseIdentity,
@@ -244,5 +245,21 @@ assert.deepEqual(wrap.snoozedToday.map((t) => t.taskId), ['snoozed-today']);
 assert.deepEqual(wrap.receipts.map((r) => [r.executionId, r.summary]), [['x1', 'Drafted and saved']]);
 assert.deepEqual(wrap.needsRetry.map((r) => r.meetingId), ['failed-rec']);
 assert.equal(wrap.slackSyncedAt, d(2, 17, 50).getTime());
+
+// One meeting count for morning and wrap: an event recorded twice is one meeting,
+// placeholders and Slack threads don't count, an unscheduled recording does.
+{
+  const day = d(2, 9, 0);
+  const ev = { id: 'ev-a', title: 'Kickoff', startTime: d(2, 16, 0), endTime: d(2, 16, 30) };
+  const meetings = [
+    { _id: 'r1', date: d(2, 16, 1).toISOString(), calendarEventId: 'ev-a', source: 'desktop_recording' },
+    { _id: 'r2', date: d(2, 16, 5).toISOString(), calendarEventId: 'ev-a', source: 'desktop_recording' },
+    { _id: 'r3', date: d(2, 11, 0).toISOString(), calendarEventId: 'ev-gone', source: 'desktop_recording' },
+    { _id: 'p1', date: d(2, 16, 0).toISOString(), calendarEventId: 'ev-a', status: 'calendar_sync' },
+    { _id: 's1', date: d(2, 12, 0).toISOString(), source: 'slack_thread' },
+    { _id: 'adhoc', date: d(2, 13, 0).toISOString(), source: 'desktop_recording' },
+  ];
+  assert.equal(countDayMeetings(meetings, [ev], day), 3);
+}
 
 console.log('ollie-content tests passed');

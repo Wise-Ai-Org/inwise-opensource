@@ -121,22 +121,36 @@ export interface SelectedMoment {
   dateKey: string;
 }
 
-/** Prep window for an event: [start - lead, start). */
+/** Without an end time, a meeting is assumed to run this long. */
+const DEFAULT_MEETING_MS = 30 * 60_000;
+
+/**
+ * Prep window for an event: [start - lead, end). The card stays through the
+ * meeting itself so the tray keeps showing the meeting you are in.
+ */
 export function prepWindow(event: MomentEvent, leadMinutes: number): { from: number; to: number } | null {
   const start = toMs(event.startTime);
   if (start === null) return null;
-  return { from: start - leadMinutes * 60_000, to: start };
+  const end = toMs(event.endTime);
+  return { from: start - leadMinutes * 60_000, to: end !== null && end > start ? end : start + DEFAULT_MEETING_MS };
 }
 
-/** Events in the prep window right now, soonest first. */
+/**
+ * Events in the prep window right now. Upcoming meetings come first (soonest
+ * start), so prep for the next meeting replaces one that is running over.
+ */
 export function eventsInPrepWindow(events: MomentEvent[], now: Date, leadMinutes: number): MomentEvent[] {
   const nowMs = now.getTime();
+  const rank = (e: MomentEvent) => {
+    const s = toMs(e.startTime) ?? 0;
+    return s > nowMs ? s - 1e15 : -s;
+  };
   return events
     .filter((e) => {
       const w = prepWindow(e, leadMinutes);
       return !!w && nowMs >= w.from && nowMs < w.to;
     })
-    .sort((a, b) => (toMs(a.startTime) ?? 0) - (toMs(b.startTime) ?? 0));
+    .sort((a, b) => rank(a) - rank(b));
 }
 
 /** End (ms) of the last calendar meeting that starts on `now`'s local day, or null. */

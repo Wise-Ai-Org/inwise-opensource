@@ -337,7 +337,7 @@ async function firePrep(event: CalendarEventLike): Promise<void> {
 }
 
 function onEventStart(event: CalendarEventLike): void {
-  emitChanged({ reason: 'prep-end' });
+  emitChanged({ reason: 'meeting-start' });
   if (!armedEvents.has(event.id) || !deps) return;
   armedEvents.delete(event.id);
   log('info', 'ollie:record-at-start', `starting armed recording for "${event.title}"`);
@@ -414,8 +414,15 @@ function rearmTimers(): void {
   clearPrepTimers();
   for (const event of events) {
     const start = toMs(event.startTime);
-    if (start === null || start <= nowMs || start - nowMs > PREP_HORIZON_MS) continue;
+    if (start === null || start - nowMs > PREP_HORIZON_MS) continue;
+    const end = toMs(event.endTime);
     const timers: NodeJS.Timeout[] = [];
+    // Refresh the card when the meeting ends; it shows the meeting until then.
+    if (end !== null && end > nowMs) timers.push(setTimeout(() => emitChanged({ reason: 'meeting-end' }), end - nowMs));
+    if (start <= nowMs) {
+      if (timers.length) prepTimers.set(event.id, timers);
+      continue;
+    }
     if (settings.prep.mode !== 'off') {
       const fireAt = start - settings.prep.leadMinutes * 60_000;
       if (fireAt <= nowMs) void firePrep(event);

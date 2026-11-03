@@ -42,7 +42,13 @@ const base = { events, settings: DEFAULT_NOTIFICATION_SETTINGS, dismissedKeys: [
 assert.deepEqual(selectOllieMoment({ ...base, now: at(8) }), { kind: 'morning', key: 'morning:2026-11-02', dateKey: '2026-11-02' });
 assert.deepEqual(selectOllieMoment({ ...base, now: at(8, 51) }), { kind: 'prep', key: 'prep:a', eventId: 'a', dateKey: '2026-11-02' });
 assert.equal(selectOllieMoment({ ...base, now: at(8, 49) })!.kind, 'morning', 'outside 10-min lead');
-assert.equal(selectOllieMoment({ ...base, now: at(9) })!.kind, 'morning', 'prep ends at start');
+assert.equal(selectOllieMoment({ ...base, now: at(9) })!.key, 'prep:a', 'card stays while the meeting is on');
+assert.equal(selectOllieMoment({ ...base, now: at(9, 29) })!.key, 'prep:a');
+assert.equal(selectOllieMoment({ ...base, now: at(9, 30) })!.kind, 'morning', 'card ends with the meeting');
+// A meeting running over yields to prep for the next one.
+const overrun = [{ id: 'x', title: 'Long', startTime: at(13), endTime: at(14, 30) }, events[1]];
+assert.equal(selectOllieMoment({ ...base, events: overrun, now: at(13, 20) })!.key, 'prep:x');
+assert.equal(selectOllieMoment({ ...base, events: overrun, now: at(13, 51) })!.key, 'prep:b');
 assert.equal(wrapUpStartsAt(events, at(8)), at(15, 5).getTime());
 assert.equal(selectOllieMoment({ ...base, now: at(15, 4) })!.kind, 'morning');
 assert.deepEqual(selectOllieMoment({ ...base, now: at(15, 5) }), { kind: 'wrap', key: 'wrap:2026-11-02', dateKey: '2026-11-02' });
@@ -53,7 +59,8 @@ const lateEvents = [...events, { id: 'c', title: 'Late call', startTime: at(15, 
 assert.equal(selectOllieMoment({ ...base, events: lateEvents, now: at(15, 1) })!.kind, 'prep');
 // Dismissal hides the card until the next moment begins.
 assert.equal(selectOllieMoment({ ...base, now: at(8, 55), dismissedKeys: ['prep:a'] }), null);
-assert.equal(selectOllieMoment({ ...base, now: at(9, 5), dismissedKeys: ['prep:a'] })!.kind, 'morning');
+assert.equal(selectOllieMoment({ ...base, now: at(9, 5), dismissedKeys: ['prep:a'] }), null);
+assert.equal(selectOllieMoment({ ...base, now: at(9, 35), dismissedKeys: ['prep:a'] })!.kind, 'morning');
 assert.equal(selectOllieMoment({ ...base, now: at(16), dismissedKeys: ['wrap:2026-11-02'] }), null);
 // Settings off removes moments.
 const off = { ...DEFAULT_NOTIFICATION_SETTINGS, prep: { mode: 'off' as const, leadMinutes: 10 as const }, morning: 'off' as const };

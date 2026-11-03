@@ -418,7 +418,11 @@ function createPillWindow(): BrowserWindow {
   return win;
 }
 
+/** Calendar events recorded this session, so the tray never offers to record them again. */
+const recordedEventIds = new Set<string>();
+
 function createOverlayWindow(title: string, calendarEventId?: string, attendees: string[] = []): void {
+  if (calendarEventId) recordedEventIds.add(calendarEventId);
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('recording:start', title, calendarEventId, attendees);
     return;
@@ -3179,6 +3183,7 @@ ipcMain.handle('welcomeBack:liveMeeting', () => {
     now: new Date(),
     isRecordingActive,
     overlayWindowOpen: !!(overlayWindow && !overlayWindow.isDestroyed()),
+    recordedEventIds,
   });
 });
 

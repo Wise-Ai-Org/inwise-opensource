@@ -233,6 +233,24 @@ function PrepBody({ p, refresh }: { p: PrepContent; refresh: () => void }) {
   const { busy, run } = useBusy();
   useEffect(() => setArmed(p.recordArmed), [p.recordArmed]);
 
+  // Once the meeting has started, the button reflects the recording itself:
+  // Recording while one runs, Record now if this meeting is still unrecorded.
+  const started = Date.now() >= p.startTime;
+  const [recordingNow, setRecordingNow] = useState(false);
+  const [canRecordNow, setCanRecordNow] = useState(false);
+  useEffect(() => {
+    if (!started) return;
+    const a = api();
+    const check = () => {
+      a.getRecordingState?.().then((r: any) => setRecordingNow(!!r?.active)).catch(() => {});
+      a.welcomeBackLiveMeeting?.().then((m: any) => setCanRecordNow(m?.id === p.eventId)).catch(() => {});
+    };
+    check();
+    const timer = window.setInterval(check, 15_000);
+    a.on?.('recording:status', check);
+    return () => { window.clearInterval(timer); a.off?.('recording:status', check); };
+  }, [started, p.eventId]);
+
   const openItem = (item: OwedItem) => {
     if (item.taskId) push({ kind: 'task', id: item.taskId });
     else if (item.meetingId) push({ kind: 'meeting', id: item.meetingId });
@@ -275,16 +293,29 @@ function PrepBody({ p, refresh }: { p: PrepContent; refresh: () => void }) {
         </Section>
       )}
       <div className="ol-footer">
-        <button
-          className={`ol-btn ${armed ? '' : 'ol-primary'}`}
-          disabled={busy.arm}
-          onClick={() => run('arm', async () => {
-            const res = await api().ollieSetRecordAtStart?.(p.eventId, !armed);
-            setArmed(!!res?.armed);
-          })}
-        >
-          {armed ? 'Recording at start ✓' : '● Record when it starts'}
-        </button>
+        {!started && (
+          <button
+            className={`ol-btn ${armed ? '' : 'ol-primary'}`}
+            disabled={busy.arm}
+            onClick={() => run('arm', async () => {
+              const res = await api().ollieSetRecordAtStart?.(p.eventId, !armed);
+              setArmed(!!res?.armed);
+            })}
+          >
+            {armed ? 'Recording at start ✓' : '● Record when it starts'}
+          </button>
+        )}
+        {started && recordingNow && <span className="ol-btn" aria-live="polite">● Recording</span>}
+        {started && !recordingNow && canRecordNow && (
+          <button
+            className="ol-btn ol-primary"
+            disabled={busy.rec}
+            onClick={() => run('rec', async () => {
+              await api().startRecording?.(p.title, p.eventId);
+              setRecordingNow(true);
+            })}
+          >● Record now</button>
+        )}
         {p.draftAgenda && p.draftAgenda.length > 0 && (
           <button className="ol-btn" onClick={async () => {
             try {
@@ -301,8 +332,9 @@ function PrepBody({ p, refresh }: { p: PrepContent; refresh: () => void }) {
 
 function prepHeader(p: PrepContent) {
   const when = p.minutesUntil > 0 ? `in ${p.minutesUntil} min` : 'starting now';
+  const inProgress = Date.now() >= p.startTime;
   return {
-    kicker: `Up next · ${hhmm(p.startTime)}, ${when}`,
+    kicker: inProgress ? `Now · ${hhmm(p.startTime)} to ${hhmm(p.endTime)}` : `Up next · ${hhmm(p.startTime)}, ${when}`,
     title: p.title,
     subtitle: p.lastMet ? `Last met ${shortDate(p.lastMet.date)} · ${p.lastMet.title}` : null,
   };

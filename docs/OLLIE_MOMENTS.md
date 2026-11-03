@@ -31,6 +31,7 @@ Dismissing (×) hides the card until the next moment begins. Dismissal is stored
 - **You owe <Name>**: open commitments/tasks owned by the user tied to those attendees, with Overdue chip.
 - **Waiting on your OK**: pending Jira approvals (`sor-pending-approvals`) whose source meeting included any of these attendees. Approve / Skip.
 - Buttons: **Record when it starts** (arms auto-start for that event), **Copy agenda**.
+- During the meeting the card stays, with kicker "Now · HH:MM to HH:MM". The record button becomes **Recording** while one runs, **Record now** if the meeting has not been recorded, and disappears once it has.
 - Notification: title "<Meeting> in N min", body leads with the most important owed item, then "N Jira update(s) need your OK". Actions: Open prep, Record at start. Replaces the old "Meeting starting soon — don't forget to record" notification.
 
 ### Processed (After a meeting)
@@ -113,7 +114,7 @@ Card actions that reuse existing calls:
 
 ### Events (`api.on(channel, cb)`)
 
-- `ollie:moment-changed` → `OllieMomentChanged { reason, meetingId? }`. Refetch `getOllieMoment()`. When `reason === 'processed'`, also refetch `getOllieProcessed(meetingId)` for that row. Reasons: `calendar`, `prep-start`, `prep-end`, `wrap`, `processed`, `dismissed`, `settings`, `action`, `day-change`.
+- `ollie:moment-changed` → `OllieMomentChanged { reason, meetingId? }`. Refetch `getOllieMoment()`. When `reason === 'processed'`, also refetch `getOllieProcessed(meetingId)` for that row. Reasons: `calendar`, `prep-start`, `meeting-start`, `meeting-end`, `wrap`, `processed`, `dismissed`, `settings`, `action`, `day-change`.
 - `ollie:focus-moment` → `OllieFocusMoment { kind: 'prep' | 'wrap' | 'morning' | 'processed', key, meetingId?, eventId? }`. Sent after a notification click; the popup is already shown. Switch to the Meetings tab and scroll to the card, or to the meeting row for `processed`.
 
 ### Payloads
@@ -197,7 +198,7 @@ type CatchUpNote = { personId: string; weeksSinceMet: number; waitingOn: string;
 ### Behaviour the UI can rely on
 
 - Sections with no data come back as empty arrays or `null`; omit them. Nothing is synthesized.
-- Selection: prep (from `start - leadMinutes` until start) > wrap-up (from the last meeting's end + 5 min; not while recording) > morning. Dismissal hides the card until the next moment begins and never promotes a lower moment.
+- Selection: prep (from `start - leadMinutes` until the meeting ends, so the tray keeps showing the meeting you are in; an upcoming meeting outranks one running over) > wrap-up (from the last meeting's end + 5 min; not while recording) > morning. Dismissal hides the card until the next moment begins and never promotes a lower moment.
 - Notifications are main-process only (prep, processed, wrap-up; morning has none). Moment notifications wait while a meeting or recording is active; prep is never held. Recording-problem notifications are unchanged.
 - `briefing:get` and the daily plan window are unchanged; the Ollie card can replace the dismissible "today's brief" card.
 

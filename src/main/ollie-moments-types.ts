@@ -200,7 +200,7 @@ export interface CatchUpNote {
 }
 
 export interface OllieMomentChanged {
-  reason: 'calendar' | 'prep-start' | 'prep-end' | 'wrap' | 'processed' | 'dismissed' | 'settings' | 'action' | 'day-change';
+  reason: 'calendar' | 'prep-start' | 'meeting-start' | 'meeting-end' | 'wrap' | 'processed' | 'dismissed' | 'settings' | 'action' | 'day-change';
   /** Set when reason === 'processed'. */
   meetingId?: string;
 }

@@ -166,6 +166,23 @@ function run(): void {
     assert.deepEqual(r!.attendees, []);
   }
 
+  // Already recorded this session → skipped; a different live meeting still shows.
+  {
+    const recorded = new Set(['evt-1']);
+    assert.equal(
+      findLiveMeetingForBanner({ events: [makeEvent()], now, isRecordingActive: false, overlayWindowOpen: false, recordedEventIds: recorded }),
+      null,
+    );
+    const r = findLiveMeetingForBanner({
+      events: [makeEvent(), makeEvent({ id: 'evt-2', title: 'Overlap' })],
+      now,
+      isRecordingActive: false,
+      overlayWindowOpen: false,
+      recordedEventIds: recorded,
+    });
+    assert.equal(r?.id, 'evt-2');
+  }
+
   console.log('live-meeting-banner: all tests passed');
 }
 

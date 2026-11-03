@@ -206,6 +206,8 @@ export default function MeetingsTab() {
   const selectedDayKey = useMemo(() => localDateKey(selectedDay), [selectedDay]);
   const [liveEvent, setLiveEvent] = useState<LiveEvent | null>(null);
   const [liveDismissed, setLiveDismissed] = useState(false);
+  // A dismissal applies to one meeting; the next live meeting can offer again.
+  useEffect(() => { setLiveDismissed(false); }, [liveEvent?.id]);
   const [recording, setRecording] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -291,9 +293,18 @@ export default function MeetingsTab() {
   useEffect(() => {
     reload();
     const a = api();
-    a.welcomeBackLiveMeeting?.().then((m: any) => { if (m) setLiveEvent({ id: m.id, title: m.title }); }).catch(() => {});
+    // Re-check on a timer and after recordings so the banner clears once the
+    // meeting ends or has been recorded, instead of sticking from first load.
+    const checkLive = () => {
+      a.welcomeBackLiveMeeting?.()
+        .then((m: any) => setLiveEvent(prev => (m ? (prev?.id === m.id ? prev : { id: m.id, title: m.title }) : null)))
+        .catch(() => {});
+    };
+    checkLive();
+    const liveTimer = window.setInterval(checkLive, 30_000);
 
     const onStatus = (p: any) => {
+      checkLive();
       if (p?.status === 'recording' || p?.status === 'processing') setRecording(p.status === 'recording');
       if (p?.status === 'done' || p?.status === 'error') {
         setRecording(false);
@@ -306,6 +317,7 @@ export default function MeetingsTab() {
     a.on?.('meeting:new', onNew);
     a.on?.('calendar:events', onNew);
     return () => {
+      window.clearInterval(liveTimer);
       a.off?.('recording:status', onStatus);
       a.off?.('meeting:new', onNew);
       a.off?.('calendar:events', onNew);
@@ -586,7 +598,7 @@ export default function MeetingsTab() {
       {liveEvent && !liveDismissed && !recording && (
         <div className="pp-banner">
           <span className="pp-recdot" />
-          <div className="pp-grow pp-banner-text">{liveEvent.title} looks live — start recording?</div>
+          <div className="pp-grow pp-banner-text">{liveEvent.title} looks live. Start recording?</div>
           <button className="pp-link" onClick={async () => {
             await api().startRecording?.(liveEvent.title, liveEvent.id);
             setLiveDismissed(true);

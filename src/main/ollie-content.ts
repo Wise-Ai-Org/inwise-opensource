@@ -296,7 +296,7 @@ export function buildMorning(ctx: ContentContext & {
 
   return {
     firstName: firstName(ctx.userName),
-    meetingCount: briefing.meetingCount,
+    meetingCount: countDayMeetings(ctx.meetings, ctx.todayEvents, now),
     priorityCount: topPriorities.length,
     overduePromiseCount,
     topPriorities,
@@ -594,6 +594,21 @@ export function buildTomorrow(ctx: ContentContext & {
   return { firstMeeting, overdueWithAttendees, crunch, cancelledToday };
 }
 
+/**
+ * One count of "meetings today" for every Ollie card: each calendar event once,
+ * plus recordings not tied to one. Re-recordings of the same event, calendar
+ * placeholders, Slack threads and voice memos never add to it.
+ */
+export function countDayMeetings(meetings: any[], events: CalendarEventLike[], now: Date): number {
+  const ids = new Set<string>();
+  for (const e of events) if (inDay(toMs(e.startTime), now)) ids.add(`event:${e.id}`);
+  for (const m of meetings) {
+    if (!inDay(toMs(m.date), now) || ['slack_thread', 'voice_memo'].includes(m.source) || m.status === 'calendar_sync') continue;
+    ids.add(m.calendarEventId ? `event:${m.calendarEventId}` : `meeting:${m._id}`);
+  }
+  return ids.size;
+}
+
 export function buildWrapUp(ctx: ContentContext & {
   events: CalendarEventLike[];
   agendaEventIds: Set<string>;
@@ -605,11 +620,6 @@ export function buildWrapUp(ctx: ContentContext & {
 }): WrapUpContent {
   const { now } = ctx;
   const todayMeetings = ctx.meetings.filter((m) => inDay(toMs(m.date), now));
-  const todayEventIds = new Set(ctx.events.filter((e) => inDay(toMs(e.startTime), now)).map((e) => e.id));
-  const unmatched = todayMeetings.filter((m) =>
-    !['slack_thread', 'voice_memo'].includes(m.source)
-    && m.status !== 'calendar_sync'
-    && !(m.calendarEventId && todayEventIds.has(m.calendarEventId)));
   const tasksFound = ctx.allTasks.filter((t) => !t.archivedAt && t.aiExtracted === true && inDay(toMs(t.createdAt), now)).length;
   const decisions = todayMeetings.reduce((sum, m) => sum + (m.insights?.decisions?.length || 0), 0);
 
@@ -647,7 +657,7 @@ export function buildWrapUp(ctx: ContentContext & {
 
   return {
     firstName: firstName(ctx.userName),
-    today: { meetingCount: todayEventIds.size + unmatched.length, tasksFound, decisions },
+    today: { meetingCount: countDayMeetings(ctx.meetings, ctx.events, now), tasksFound, decisions },
     tomorrow: buildTomorrow(ctx),
     goneQuiet: computeGoneQuiet(ctx),
     slackToday: Array.from(slack.values()),
