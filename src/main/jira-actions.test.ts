@@ -67,41 +67,53 @@ async function run(): Promise<void> {
     assert.equal((await executeJiraPush(linkId, { operation: 'link', args: { blockedKey: 'PILOT-33', blockerKey: 'OPS-12' } })).ok, true);
     assert.deepEqual(calls[calls.length - 1].body, { type: { name: 'Blocks' }, outwardIssue: { key: 'OPS-12' }, inwardIssue: { key: 'PILOT-33' } });
 
+    const prevRoute = route;
+    route = (url, m, b) => url.endsWith('/rest/api/3/field') ? { json: [{ id: 'customfield_10020', schema: { custom: 'com.pyxis.greenhopper.jira:gh-sprint' } }] } : prevRoute(url, m, b);
     const sprintId = await recordWrite({ targetSystem: 'jira', targetRecordId: 'PILOT-41', operation: 'sprint' });
     assert.equal((await executeJiraPush(sprintId, { operation: 'sprint', args: { issueKey: 'PILOT-41', sprintId: 14, sprintName: 'Sprint 14' } })).ok, true);
-    assert.deepEqual(calls[calls.length - 1], { url: 'https://api.atlassian.com/ex/jira/c1/rest/agile/1.0/sprint/14/issue', method: 'POST', body: { issues: ['PILOT-41'] } });
+    assert.deepEqual(calls[calls.length - 1], { url: 'https://api.atlassian.com/ex/jira/c1/rest/api/3/issue/PILOT-41', method: 'PUT', body: { fields: { customfield_10020: 14 } } });
+    assert.ok(!calls.some(c => c.url.includes('/rest/agile/')), 'no Jira Software API (no extra scopes)');
 
-    route = () => ({ status: 403, json: { errorMessages: ['no'] } });
+    route = (url) => url.endsWith('/rest/api/3/field')
+      ? { json: [{ id: 'customfield_10020', schema: { custom: 'com.pyxis.greenhopper.jira:gh-sprint' } }] }
+      : { status: 403, json: { errorMessages: ['no'] } };
     const denied = await recordWrite({ targetSystem: 'jira', targetRecordId: 'PILOT-41', operation: 'sprint' });
     const d = await executeJiraPush(denied, { operation: 'sprint', args: { issueKey: 'PILOT-41', sprintId: 14, sprintName: 'Sprint 14' } });
     assert.match(d.error!, /did not allow this change \(403\)\. Reconnect Jira/);
     assert.match((await getWriteEntry(denied))!.errorMessage!, /Reconnect Jira/, 'the reason is logged, not a silent failure');
   }
 
-  // ── jira-client: sprint lookup ────────────────────────────────────────
+  // ── jira-client: sprint lookup (issue search, no Jira Software API) ──
   {
-    const boards = (values: any[]) => (url: string) => url.includes('/rest/agile/1.0/board?') ? { json: { values } } : undefined;
-    route = (url, m, b) => boards([{ id: 7, type: 'scrum' }])(url) || (url.includes('/board/7/sprint') ? { json: { values: [
-      { id: 15, name: 'Sprint 15', state: 'future', startDate: '2026-11-16T00:00:00Z' },
-      { id: 14, name: 'Sprint 14', state: 'active' },
-      { id: 16, name: 'Sprint 16', state: 'future', startDate: '2026-11-30T00:00:00Z' },
-    ] } } : undefined);
+    const field = { id: 'customfield_10020', schema: { custom: 'com.pyxis.greenhopper.jira:gh-sprint' } };
+    const site = (open: any[], future: any[]) => (url: string, _m: string, b: any) => {
+      if (url.endsWith('/rest/api/3/field')) return { json: [field] };
+      if (url.endsWith('/rest/api/3/search/jql')) {
+        const list = /openSprints/.test(b?.jql) ? open : future;
+        return { json: { issues: list.map(sp => ({ fields: { customfield_10020: [sp] } })), isLast: true } };
+      }
+      return undefined;
+    };
+    route = site(
+      [{ id: 14, name: 'Sprint 14', state: 'active', boardId: 7 }, { id: 13, name: 'Sprint 13', state: 'closed', boardId: 7 }],
+      [{ id: 16, name: 'Sprint 16', state: 'future', boardId: 7, startDate: '2026-11-30T00:00:00Z' }, { id: 15, name: 'Sprint 15', state: 'future', boardId: 7, startDate: '2026-11-16T00:00:00Z' }],
+    );
     assert.deepEqual(await findSprintForIssue('PILOT-41'), { ok: true, sprintId: 14, sprintName: 'Sprint 14', state: 'active', boardId: 7 });
     const next = await findSprintForIssue('PILOT-41', 'next');
     assert.equal(next.ok && next.sprintName, 'Sprint 15');
+    assert.match(calls.filter(c => c.url.endsWith('/search/jql')).pop()!.body.jql, /^project = "PILOT" AND sprint in futureSprints\(\)$/);
 
-    route = boards([]);
+    route = site([], []);
     const none = await findSprintForIssue('PILOT-41');
-    assert.equal(none.ok, false);
-    assert.equal(!none.ok && none.reason, 'PILOT has no Jira board, so there is no sprint to add PILOT-41 to');
+    assert.equal(!none.ok && none.reason, 'PILOT has no active or upcoming sprint');
 
-    route = (url) => boards([{ id: 9, type: 'kanban' }])(url) || (url.includes('/board/9/sprint') ? { status: 400, json: {} } : undefined);
-    const kanban = await findSprintForIssue('PILOT-41');
-    assert.equal(!kanban.ok && kanban.reason, "PILOT's board has no active or upcoming sprint");
+    route = site([], [{ id: 15, name: 'Sprint 15', state: 'future', boardId: 7 }]);
+    const onlyFuture = await findSprintForIssue('PILOT-41');
+    assert.equal(onlyFuture.ok && onlyFuture.sprintName, 'Sprint 15');
 
-    route = () => ({ status: 403 });
-    const forbidden = await findSprintForIssue('PILOT-41');
-    assert.match(!forbidden.ok ? forbidden.reason : '', /not allowed to read sprints yet/);
+    route = (url) => url.endsWith('/rest/api/3/field') ? { json: [] } : undefined;
+    const noField = await findSprintForIssue('PILOT-41');
+    assert.match(!noField.ok ? noField.reason : '', /has no sprints/);
   }
 
   // ── jira-client: changelog paging jumps to the newest page ────────────

@@ -201,10 +201,9 @@ export async function connectJira(): Promise<{ ok: boolean; error?: string }> {
 
     server.listen(17291, () => {
       // read:jira-user: user search (attendee lookup, "Find in Jira").
-      // Board/sprint scopes: "Add PILOT-41 to Sprint 14?" (Jira Software Agile API).
+      // Sprints use the issue search and edit APIs, so no Jira Software scopes.
       const scopes = [
         'read:jira-work', 'write:jira-work', 'read:jira-user', 'offline_access',
-        'read:board-scope:jira-software', 'read:sprint:jira-software', 'write:sprint:jira-software',
         // Weekly personal data check-in (jira-personal-data.ts).
         'report:personal-data',
       ].join(' ');
@@ -521,34 +520,36 @@ export type SprintLookup =
   | { ok: false; reason: string };
 
 /**
- * The active (or next) sprint of the board that holds this issue's project.
- * Reasons read as plain sentences for the recap row.
+ * The active (or next) sprint of this issue's project. Uses an ordinary issue
+ * search (read:jira-work) instead of the Jira Software board API, so no extra
+ * permissions are needed: tickets in an open (or future) sprint carry that
+ * sprint on their Sprint field. A sprint nobody has put a ticket in yet is not
+ * found. Reasons read as plain sentences for the recap row.
  */
 export async function findSprintForIssue(issueKey: string, prefer: 'active' | 'next' = 'active'): Promise<SprintLookup> {
   const projectKey = issueKey.split('-')[0];
   try {
-    const boards = await jiraFetch(`/board?projectKeyOrId=${encodeURIComponent(projectKey)}&maxResults=50`, {}, 'agile');
-    const list: any[] = Array.isArray(boards?.values) ? boards.values : [];
-    const scrum = list.filter((b) => b?.type === 'scrum');
-    const candidates = scrum.length ? scrum : list;
-    if (candidates.length === 0) return { ok: false, reason: `${projectKey} has no Jira board, so there is no sprint to add ${issueKey} to` };
-    for (const board of candidates) {
-      const sprints = await jiraFetch(`/board/${board.id}/sprint?state=active,future&maxResults=50`, {}, 'agile').catch((e: any) => {
-        if (e instanceof JiraHttpError && e.status === 400) return { values: [] }; // kanban boards have no sprints
-        throw e;
-      });
-      const values: any[] = Array.isArray(sprints?.values) ? sprints.values : [];
-      const active = values.find((v) => v.state === 'active');
-      const future = values.filter((v) => v.state === 'future')
-        .sort((a, b) => (Date.parse(a.startDate || '') || Infinity) - (Date.parse(b.startDate || '') || Infinity) || a.id - b.id)[0];
-      const pick = prefer === 'next' ? (future || active) : (active || future);
-      if (pick) return { ok: true, sprintId: pick.id, sprintName: pick.name, state: pick.state, boardId: board.id };
-    }
-    return { ok: false, reason: `${projectKey}'s board has no active or upcoming sprint` };
+    const fieldId = await findSprintFieldId();
+    if (!fieldId) return { ok: false, reason: `This Jira site has no sprints, so there is no sprint to add ${issueKey} to` };
+    const collect = async (fn: 'openSprints' | 'futureSprints') => {
+      const res = await searchJiraIssuesPage(`project = "${projectKey}" AND sprint in ${fn}()`, [fieldId], null, 50);
+      const out = new Map<number, any>();
+      for (const issue of res.issues) {
+        const raw = issue?.fields?.[fieldId];
+        for (const sp of Array.isArray(raw) ? raw : raw ? [raw] : []) if (sp && typeof sp.id === 'number') out.set(sp.id, sp);
+      }
+      return [...out.values()];
+    };
+    const active = (await collect('openSprints')).find((v) => v.state === 'active');
+    const future = prefer === 'next' || !active
+      ? (await collect('futureSprints')).filter((v) => v.state === 'future')
+        .sort((a, b) => (Date.parse(a.startDate || '') || Infinity) - (Date.parse(b.startDate || '') || Infinity) || a.id - b.id)[0]
+      : undefined;
+    const pick = prefer === 'next' ? (future || active) : (active || future);
+    if (pick) return { ok: true, sprintId: pick.id, sprintName: pick.name, state: pick.state, boardId: pick.boardId ?? 0 };
+    return { ok: false, reason: `${projectKey} has no active or upcoming sprint` };
   } catch (e: any) {
-    if (e instanceof JiraHttpError && (e.status === 401 || e.status === 403)) {
-      return { ok: false, reason: 'Inwise is not allowed to read sprints yet. Reconnect Jira in Settings to allow it' };
-    }
+    if (e instanceof JiraHttpError && e.status === 400) return { ok: false, reason: `${projectKey} has no active or upcoming sprint` };
     return { ok: false, reason: `Could not read ${projectKey}'s sprints (${e?.message || 'Jira error'})` };
   }
 }
@@ -643,7 +644,14 @@ export async function executeJiraPush(
         await markCompleted(id, 'failed', msg);
         return { ok: false, error: msg };
       }
-      await jiraFetch(`/sprint/${p.args.sprintId}/issue`, { method: 'POST', body: JSON.stringify({ issues: [p.args.issueKey] }) }, 'agile');
+      // Ordinary issue edit (write:jira-work): set the Sprint field to the sprint id.
+      const sprintField = await findSprintFieldId();
+      if (!sprintField) {
+        const msg = 'This Jira site has no Sprint field';
+        await markCompleted(id, 'failed', msg);
+        return { ok: false, error: msg };
+      }
+      await jiraFetch(`/issue/${encodeURIComponent(p.args.issueKey)}`, { method: 'PUT', body: JSON.stringify({ fields: { [sprintField]: p.args.sprintId } }) });
       await markCompleted(id, 'success');
       log('info', 'jira:issue-sprint', `${p.args.issueKey} to ${p.args.sprintName || p.args.sprintId}`);
       return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };

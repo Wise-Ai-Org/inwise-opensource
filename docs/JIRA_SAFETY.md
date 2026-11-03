@@ -72,7 +72,7 @@ Ticket intents can also become:
 
 Rows that cannot go through yet carry `blockedReason` (and `needs: 'jira-user'` for an unresolved assignee). They are held under both settings, Approve is refused, and a click cannot push them either. Their confidence uses the same non-create formula, so a fully certain assignment with a spoken key lands at 0.88 and still waits under the auto setting.
 
-These need extra OAuth scopes (`read:jira-user`, `read:board-scope:jira-software`, `read:sprint:jira-software`, `write:sprint:jira-software`), which are now requested at connect time and must also be enabled on the Atlassian app. Existing connections must reconnect; until then the rows say "Reconnect Jira in Settings".
+Finding people needs one extra OAuth scope, `read:jira-user`; the weekly personal data check-in needs `report:personal-data`. Both are requested at connect time and enabled on the Atlassian app. Existing connections must reconnect; until then the rows say "Reconnect Jira in Settings". Sprints need no extra scope: Inwise finds a project's active or next sprint through a normal ticket search (tickets already in that sprint carry it), and adds a ticket by editing its Sprint field. A brand new sprint with no tickets in it yet is not found, so the row says the project has no active or upcoming sprint.
 
 ## People and Jira accounts
 
