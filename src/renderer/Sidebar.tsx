@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-// @ts-ignore — webpack asset/resource import
-import inwiseLogo from '../../assets/inwise_logo.png';
+import InwiseBrand from './components/InwiseBrand';
 
 type View = 'communications' | 'tasks' | 'people' | 'settings';
 
@@ -179,7 +178,7 @@ export default function Sidebar({ activeView, onNavigate }: Props) {
       )}
 
       <div className="sidebar-logo">
-        <img src={inwiseLogo} alt="Inwise" />
+        <InwiseBrand size={40} fontSize={24} />
       </div>
 
       <nav className="sidebar-nav">
