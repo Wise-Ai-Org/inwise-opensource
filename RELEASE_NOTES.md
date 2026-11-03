@@ -1,3 +1,18 @@
+# Inwise 1.7.8: Ollie gets ahead of your day, and Jira stays in step
+
+- Ollie shows up at four moments: when your day begins, before each meeting, after a meeting is processed, and at the end of the day. The "processed" notice waits until your meeting is over.
+- The live-meeting banner no longer comes back for a meeting you already recorded, and the morning and wrap-up cards count meetings the same way.
+- Jira changes from meetings wait for your OK by default. Settings has an option to let Inwise apply changes it is very sure about on its own.
+- Recaps suggest Jira updates from what was said: a new ticket, a comment, moving a ticket to In Progress or Done, assigning someone, marking a ticket as blocked by another, or adding it to the current sprint. Nothing is sent twice when a meeting is processed again.
+- Prep, morning and wrap-up cards show the Jira tickets that matter: the other person's, yours, and what moved today.
+- People who cannot be matched to Jira by email can be linked once with Find in Jira on the People tab.
+- Inwise checks Jira at launch and every 30 minutes, only for tickets around you and your default project.
+- After updating, reconnect Jira once in Settings. It lets Inwise find people in Jira and run the weekly personal data check-in Atlassian requires.
+
+Validation: all 56 regression test files; live run of a test meeting against a test Jira project (status change, assignment, blocking link, comment, no-sprint case, and a repeat of the same meeting). No real user data was used.
+
+Windows x64 installer. This build is unsigned. No new macOS installer is included.
+
 # Inwise 1.7.7 — Owl branding
 
 - Uses the approved owl artwork with lowercase `inwise` beside it in the desktop title bar, sidebar and onboarding.
