@@ -66,8 +66,9 @@ Ticket intents from the extraction (done, due moved, decision) target the key th
 ## More suggestion types
 
 Ticket intents can also become:
-- **Assign** ("Jordan will take PILOT-40" -> "Assign PILOT-40 to Jordan Lee?"). The person is resolved like the pull does (stored id, then email). If they cannot be resolved the row says so and offers **Find in Jira** instead of Approve; Inwise never guesses an account. Picking someone fills the row and stores the id on the person.
-- **Blocking link** ("PILOT-33 is blocked on the SSO work" -> "Mark PILOT-33 as blocked by OPS-12?"), link type "Blocks". Only when both tickets are identified: a spoken key, a Jira-linked task or ticket whose title matches at 0.85 or more, or an LLM match. Otherwise no row.
+- **Started** ("I've started PILOT-40, move it to In Progress" -> "Move PILOT-40 to In Progress?"). Skipped when the ticket is already in progress or done.
+- **Assign** ("Jordan will take PILOT-40" -> "Assign PILOT-40 to Jordan Lee?"). "Me", "myself" or your own Jira name means the connected account, with no lookup. Anyone else is resolved like the pull does (stored id, then email). If they cannot be resolved the row says so and offers **Find in Jira** instead of Approve; Inwise never guesses an account. Picking someone fills the row and stores the id on the person.
+- **Blocking link** ("PILOT-33 is blocked on the SSO work" -> "Mark PILOT-33 as blocked by OPS-12?"), link type "Blocks". Only when both tickets are identified: a spoken key, a Jira-linked task or ticket whose title matches at 0.85 or more, or an LLM match. Otherwise no row. No row either when Jira already has that link. The link is sent with the blocker as `inwardIssue` (Jira reads "<inward> blocks <outward>").
 - **Sprint** ("let's pull PILOT-41 into this sprint" -> "Add PILOT-41 to Sprint 14?") through the Agile API, using the active (or, for "next sprint", the next future) sprint of a board on the issue's project. With no board or open sprint the row stays with the reason ("OPS's board has no active or upcoming sprint") and only Skip.
 
 Rows that cannot go through yet carry `blockedReason` (and `needs: 'jira-user'` for an unresolved assignee). They are held under both settings, Approve is refused, and a click cannot push them either. Their confidence uses the same non-create formula, so a fully certain assignment with a spoken key lands at 0.88 and still waits under the auto setting.
@@ -116,3 +117,7 @@ Inwise keeps some Jira people data on your device for longer than a day: the cac
 - If Atlassian is busy or the check-in fails, Inwise does not count it and tries again the next day.
 
 Code: `src/main/jira-personal-data.ts`, `reportPersonalDataAccounts` in `jira-client.ts`.
+
+## Live run, 2026-11-03
+
+A test meeting naming three labelled tickets (I90-363 to I90-365, label `inwise-live-test`) on inwise-team-wpxl1dr2 went through the real upload path. Every suggestion waited for approval. After approval Jira showed I90-364 In Progress, I90-365 assigned to the connected user, I90-364 "is blocked by I90-365", and one comment on I90-363; the "no active or upcoming sprint" row could not be approved. The run found and fixed: no "in progress" intent, "assign to me" asking for Find in Jira, action items repeating an intent as a comment, the blocked-by link sent backwards, and the 201-with-empty-body link response read as an error. A third run of the same meeting suggested nothing already applied.

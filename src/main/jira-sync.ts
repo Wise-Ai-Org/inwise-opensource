@@ -48,6 +48,8 @@ const SKIP_SOURCES = new Set(['demo_seed', 'slack_thread', 'voice_memo']);
 export interface StoryLike {
   jiraKey: string; title: string; description: string; jiraUrl: string;
   statusCategory?: string | null; assigneeId?: string | null; sprintName?: string | null;
+  /** Open issues blocking this one, from the pull cache. */
+  blockedByKeys?: string[];
 }
 
 interface SyncDeps {
@@ -64,6 +66,8 @@ interface SyncDeps {
   lookupEmail: (email: string) => Promise<string | null>;
   saveLink: (personId: string, link: JiraLink) => Promise<void>;
   findSprint: (issueKey: string, prefer: 'active' | 'next') => Promise<SprintLookup>;
+  /** The connected Jira user, or null. */
+  self: () => { accountId: string; displayName: string } | null;
 }
 
 async function realLoadStories(projectKey: string | undefined): Promise<StoryLike[]> {
@@ -72,6 +76,7 @@ async function realLoadStories(projectKey: string | undefined): Promise<StoryLik
     byKey.set(s.key, {
       jiraKey: s.key, title: s.title, description: '', jiraUrl: s.url || '', statusCategory: s.statusCategory,
       assigneeId: s.assignee?.accountId || null, sprintName: s.sprint?.state === 'active' ? s.sprint.name : null,
+      blockedByKeys: (s.blockedBy || []).map((b) => b.key),
     });
   }
   try {
@@ -98,6 +103,10 @@ const realDeps: SyncDeps = {
   lookupEmail: findJiraAccountIdByEmail,
   saveLink: async (personId, link) => { await setPersonJiraLink(personId, link); },
   findSprint: findSprintForIssue,
+  self: () => {
+    const t: any = (getConfig() as any).jiraTokens;
+    return t?.accountId ? { accountId: t.accountId, displayName: t.displayName || '' } : null;
+  },
   settings: () => {
     const cfg: any = getConfig();
     return { autoPush: cfg.jiraAutoPush === true, connected: isJiraConnected(), projectKey: cfg.jiraDefaultProject || null };
@@ -200,8 +209,22 @@ async function syncMeetingOnce(meetingId: string, opts: { onlyTaskId?: string })
     });
   }
 
+  // An action item that only restates a ticket intent ("move I90-364 to In
+  // Progress", "pull I90-363 into this sprint") gets the intent's own row,
+  // not a second comment saying the same thing.
+  const intentEvidence = intents
+    .filter((t) => t && t.kind !== 'new' && t.kind !== 'decision')
+    .map((t) => ({ keys: new Set([t.issueKey, t.blockerKey, ...spokenIssueKeys(`${t.text || ''} ${t.evidence || ''}`)].filter(Boolean)), sentences: evidenceSentences(t.evidence || '') }))
+    .filter((t) => t.sentences.length > 0);
+  // Restates = shares a quoted sentence that names this ticket.
+  const restatesIntent = (key: string, item: any) => {
+    const mine = evidenceSentences(item.evidence || '').filter((x) => x.includes(key.toLowerCase().replace(/[^a-z0-9]+/g, ' ')));
+    return mine.length > 0 && intentEvidence.some((t) => t.keys.has(key) && t.sentences.some((x) => mine.includes(x)));
+  };
+
   for (const p of plans) {
     const item = p.item;
+    if (p.key && !opts.onlyTaskId && restatesIntent(p.key, item)) continue;
     const base = {
       initiator: 'system' as const,
       sourceMeetingId: meetingId,
@@ -277,8 +300,24 @@ async function identifyStrict(spokenKey: string | null, hint: string, stories: S
   return null;
 }
 
-/** Jira accountId for a spoken name: stored id, then email; never a guess. */
+const normEvidence = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+/** Quote split into normalized sentences of 3+ words. */
+const evidenceSentences = (v: string) => v.split(/(?<=[.!?])\s+/).map(normEvidence).filter((x) => x.split(' ').length >= 3);
+const normName = (v: string) => v.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+/** "me" / "myself" / the connected user's full Jira name. */
+export function isSelfName(name: string, selfDisplayName: string | null | undefined): boolean {
+  const n = normName(name || '');
+  if (!n) return false;
+  if (n === 'me' || n === 'myself' || n === 'i') return true;
+  return !!selfDisplayName && n === normName(selfDisplayName);
+}
+
+/** Jira accountId for a spoken name: the connected user, stored id, then email; never a guess. */
 async function accountForName(name: string): Promise<{ accountId: string | null; personId: string | null; displayName: string }> {
+  // The connected Jira user: "me", "myself", or their own Jira name.
+  const self = deps.self();
+  if (self && isSelfName(name, self.displayName)) return { accountId: self.accountId, personId: null, displayName: self.displayName || name };
   const person = await deps.findPerson(name).catch(() => null);
   if (!person) return { accountId: null, personId: null, displayName: name };
   const res = await resolvePersonAccountId(person, (email) => deps.lookupEmail(email));
@@ -306,6 +345,7 @@ async function proposeIntent(
     const blockerSpoken = intent.blockerKey || null;
     const blocker = await identifyStrict(blockerSpoken, intent.blockerHint || '', stories.filter((s) => s.jiraKey !== blocked.key), linked.filter((s) => s.jiraKey !== blocked.key));
     if (!blocker || blocker.key === blocked.key) return null;
+    if (storyByKey.get(blocked.key)?.blockedByKeys?.includes(blocker.key)) return null; // Jira already has this link
     const { confidence } = computeWriteConfidence({
       operation: 'link', extractionCertainty: intent.certainty,
       keySpoken: blocked.spoken && blocker.spoken, matchStrength: Math.min(blocked.strength, blocker.strength),
@@ -342,6 +382,11 @@ async function proposeIntent(
     if (story?.statusCategory === 'done') return null;
     const { confidence } = computeWriteConfidence({ operation: 'transition', ...signals });
     return deps.submit({ ...base, pushParams: { operation: 'transition', args: { issueKey: key, targetStatus: 'done' } }, confidence });
+  }
+  if (intent.kind === 'started') {
+    if (story?.statusCategory === 'indeterminate' || story?.statusCategory === 'done') return null;
+    const { confidence } = computeWriteConfidence({ operation: 'transition', ...signals });
+    return deps.submit({ ...base, pushParams: { operation: 'transition', args: { issueKey: key, targetStatus: 'in_progress' } }, confidence });
   }
   if (intent.kind === 'due_moved' && intent.dueDate) {
     const { confidence } = computeWriteConfidence({ operation: 'update', ...signals, dueDateExplicit: true });

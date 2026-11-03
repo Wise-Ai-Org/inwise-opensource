@@ -199,7 +199,7 @@ async function run(): Promise<void> {
     (globalThis as any).fetch = async (url: string, opts: any = {}) => {
       calls.push({ url, method: opts.method || 'GET', body: opts.body ? JSON.parse(opts.body) : undefined });
       const body = url.endsWith('/transitions') && (opts.method || 'GET') === 'GET' ? { transitions } : {};
-      return { ok: true, status: opts.method === 'POST' ? 204 : 200, json: async () => body, text: async () => '' } as any;
+      return { ok: true, status: opts.method === 'POST' ? 204 : 200, json: async () => body, text: async () => (opts.method === 'POST' ? '' : JSON.stringify(body)) } as any;
     };
     const id = await recordWrite({ targetSystem: 'jira', targetRecordId: 'PILOT-42', operation: 'transition' });
     const miss = await executeJiraPush(id, { operation: 'transition', args: { issueKey: 'PILOT-42', targetStatus: 'completed' } });

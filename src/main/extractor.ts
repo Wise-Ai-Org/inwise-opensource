@@ -18,7 +18,7 @@ export interface ExtractedActionItem {
   issueKey: string | null;
 }
 
-export type TicketIntentKind = 'done' | 'due_moved' | 'decision' | 'new' | 'reassign' | 'blocked_by' | 'sprint';
+export type TicketIntentKind = 'done' | 'started' | 'due_moved' | 'decision' | 'new' | 'reassign' | 'blocked_by' | 'sprint';
 
 /** A spoken change to a Jira ticket ("the survey is done", "slipped to Tuesday"). */
 export interface TicketIntent {
@@ -96,14 +96,14 @@ Return a JSON object with this exact shape:
   "meetingType": "customer|internal|sales|hiring|one_on_one|planning|support|project|general",
   "summary": "2-3 sentence summary of the meeting",
   "actionItems": [{ "text": "...", "owner": "name or null", "dueDate": "YYYY-MM-DD or null", "dueDateExplicit": false, "priority": "high|medium|low", "isCommitment": false, "certainty": 0.0, "evidence": "short exact quote or null", "issueKey": "PROJ-123 if a ticket key was said, else null" }],
-  "ticketIntents": [{ "kind": "done|due_moved|decision|new|reassign|blocked_by|sprint", "issueKey": "PROJ-123 or null", "ticketHint": "words naming the ticket", "text": "one plain sentence", "dueDate": "YYYY-MM-DD or null", "assigneeName": "person taking it, or null", "blockerKey": "PROJ-9 or null", "blockerHint": "words naming the blocking work, or null", "sprint": "active|next|null", "evidence": "short exact quote", "certainty": 0.0 }],
+  "ticketIntents": [{ "kind": "done|started|due_moved|decision|new|reassign|blocked_by|sprint", "issueKey": "PROJ-123 or null", "ticketHint": "words naming the ticket", "text": "one plain sentence", "dueDate": "YYYY-MM-DD or null", "assigneeName": "person taking it, or null", "blockerKey": "PROJ-9 or null", "blockerHint": "words naming the blocking work, or null", "sprint": "active|next|null", "evidence": "short exact quote", "certainty": 0.0 }],
   "decisions": [{ "text": "...", "rationale": "... or null", "confidence": 0.0 }],
   "blockers": [{ "text": "...", "severity": "high|medium|low", "confidence": 0.0 }],
   "signals": [{ "type": "pain|need|objection|opportunity|timeline|stakeholder|context|risk", "text": "...", "speaker": "name or null", "confidence": 0.0, "evidence": { "quote": "short exact quote or null", "timestamp": "timestamp or null" } }],
   "openQuestions": ["question that remains unresolved"],
   "coverage": { "score": 0.0, "missing": ["important area not supported by evidence"] }
 }
-Ticket intents: only when someone talks about an existing ticket or tracked piece of work. "done" = they said it is finished. "due_moved" = its date changed (give the new date). "decision" = a decision that belongs on that ticket. "new" = new work that clearly needs a ticket. "reassign" = someone else will now own it (give assigneeName exactly as said). "blocked_by" = it cannot move until other work is done (give blockerKey if said, else blockerHint). "sprint" = pull it into this sprint ("active") or the next one ("next"). Never invent a ticket key; use issueKey only when it was said. Leave the list empty when nothing applies.
+Ticket intents: only when someone talks about an existing ticket or tracked piece of work. "done" = they said it is finished. "started" = work on it has begun or it should move to in progress. "due_moved" = its date changed (give the new date). "decision" = a decision that belongs on that ticket. "new" = new work that clearly needs a ticket. "reassign" = someone else will now own it (give assigneeName exactly as said). "blocked_by" = it cannot move until other work is done (give blockerKey if said, else blockerHint). "sprint" = pull it into this sprint ("active") or the next one ("next"). Never invent a ticket key; use issueKey only when it was said. Leave the list empty when nothing applies.
 certainty is 0..1: how sure you are the item or intent was really agreed in this conversation (1 = explicit and confirmed, 0.5 = implied, below 0.3 = speculative). dueDateExplicit is true only when the date was actually said.
 Rules:
 - Use the meeting date supplied by the caller as the reference date. Never invent a past due date. If no date is stated, use null.
@@ -154,7 +154,7 @@ export function normalizeActionItems(raw: unknown, meetingDate?: string): Extrac
 
 export function normalizeTicketIntents(raw: unknown, meetingDate?: string): TicketIntent[] {
   if (!Array.isArray(raw)) return [];
-  const kinds: TicketIntentKind[] = ['done', 'due_moved', 'decision', 'new', 'reassign', 'blocked_by', 'sprint'];
+  const kinds: TicketIntentKind[] = ['done', 'started', 'due_moved', 'decision', 'new', 'reassign', 'blocked_by', 'sprint'];
   const out: TicketIntent[] = [];
   for (const it of raw as any[]) {
     if (!it || !kinds.includes(it.kind)) continue;

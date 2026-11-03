@@ -302,7 +302,8 @@ async function jiraFetch(path: string, options: RequestInit = {}, api: 'core' | 
       },
     });
     if (!retry.ok) throw new JiraHttpError(retry.status, `Jira API error: ${retry.status}`);
-    return retry.json();
+    const retryText = retry.status === 204 ? '' : await retry.text();
+    return retryText ? JSON.parse(retryText) : null;
   }
 
   if (!res.ok) {
@@ -310,9 +311,10 @@ async function jiraFetch(path: string, options: RequestInit = {}, api: 'core' | 
     throw new JiraHttpError(res.status, `Jira API error ${res.status}: ${body.slice(0, 300)}`);
   }
 
-  // Handle 204 No Content
+  // 204, or a 201 with an empty body (POST /issueLink): nothing to parse.
   if (res.status === 204) return null;
-  return res.json();
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
 
 // ── API methods ──────────────────────────────────────────────────────────────
@@ -629,10 +631,12 @@ export async function executeJiraPush(
       return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
     }
     if (p.operation === 'link') {
-      // "Blocks": the outward issue blocks the inward one (inward reads "is blocked by").
+      // POST /issueLink reads "<inwardIssue> <outward verb> <outwardIssue>", so
+      // for "Blocks" the blocker goes in inwardIssue: "OPS-12 blocks PILOT-33".
+      // (Verified live on 2026-11-03: the reverse put the link backwards.)
       await jiraFetch('/issueLink', {
         method: 'POST',
-        body: JSON.stringify({ type: { name: 'Blocks' }, outwardIssue: { key: p.args.blockerKey }, inwardIssue: { key: p.args.blockedKey } }),
+        body: JSON.stringify({ type: { name: 'Blocks' }, inwardIssue: { key: p.args.blockerKey }, outwardIssue: { key: p.args.blockedKey } }),
       });
       await markCompleted(id, 'success');
       log('info', 'jira:issue-linked', `${p.args.blockerKey} blocks ${p.args.blockedKey}`);

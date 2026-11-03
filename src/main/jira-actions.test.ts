@@ -11,7 +11,7 @@ import { __setJiraWriteDepsForTests, approveHeldWrite, resolveHeldAssignee, subm
 import { __setJiraSyncDepsForTests, afterInsightsSaved, waitForMeetingSync, type StoryLike } from './jira-sync';
 import type { PushParams } from './sor-write-log';
 
-type Route = (url: string, method: string, body: any) => { status?: number; json?: any } | undefined;
+type Route = (url: string, method: string, body: any) => { status?: number; json?: any; empty?: boolean } | undefined;
 let route: Route = () => undefined;
 const calls: { url: string; method: string; body: any }[] = [];
 (globalThis as any).fetch = async (url: string, opts: any = {}) => {
@@ -20,7 +20,7 @@ const calls: { url: string; method: string; body: any }[] = [];
   calls.push({ url, method, body });
   const r = route(url, method, body) || {};
   const status = r.status ?? 200;
-  return { ok: status < 400, status, json: async () => r.json ?? {}, text: async () => JSON.stringify(r.json ?? {}) } as any;
+  return { ok: status < 400, status, json: async () => { if (r.empty) throw new SyntaxError('Unexpected end of JSON input'); return r.json ?? {}; }, text: async () => (r.empty ? '' : JSON.stringify(r.json ?? {})) } as any;
 };
 
 async function freshDbs(): Promise<{ tasks: Datastore<any>; meetings: Datastore<any> }> {
@@ -63,9 +63,13 @@ async function run(): Promise<void> {
     assert.equal(u.ok, false);
     assert.equal(calls.length, before, 'never sends an assignment without an account');
 
+    // Jira answers POST /issueLink with 201 and an empty body.
+    const prevLinkRoute = route;
+    route = (url, m, b) => url.endsWith('/rest/api/3/issueLink') ? { status: 201, empty: true } : prevLinkRoute(url, m, b);
     const linkId = await recordWrite({ targetSystem: 'jira', targetRecordId: 'PILOT-33', operation: 'link' });
     assert.equal((await executeJiraPush(linkId, { operation: 'link', args: { blockedKey: 'PILOT-33', blockerKey: 'OPS-12' } })).ok, true);
-    assert.deepEqual(calls[calls.length - 1].body, { type: { name: 'Blocks' }, outwardIssue: { key: 'OPS-12' }, inwardIssue: { key: 'PILOT-33' } });
+    route = prevLinkRoute;
+    assert.deepEqual(calls[calls.length - 1].body, { type: { name: 'Blocks' }, inwardIssue: { key: 'OPS-12' }, outwardIssue: { key: 'PILOT-33' } }, 'reads "OPS-12 blocks PILOT-33"');
 
     const prevRoute = route;
     route = (url, m, b) => url.endsWith('/rest/api/3/field') ? { json: [{ id: 'customfield_10020', schema: { custom: 'com.pyxis.greenhopper.jira:gh-sprint' } }] } : prevRoute(url, m, b);
@@ -140,6 +144,7 @@ async function run(): Promise<void> {
       { jiraKey: 'PILOT-40', title: 'Pilot onboarding emails', description: '', jiraUrl: '' },
       { jiraKey: 'PILOT-41', title: 'Pilot pricing page', description: '', jiraUrl: '' },
       { jiraKey: 'PILOT-33', title: 'Pilot SSO setup', description: '', jiraUrl: '' },
+      { jiraKey: 'PILOT-50', title: 'Pilot audit log', description: '', jiraUrl: '', blockedByKeys: ['OPS-12'] },
       { jiraKey: 'OPS-12', title: 'SSO certificate rotation', description: '', jiraUrl: '' },
     ];
     const savedLinks: Record<string, any> = {};
@@ -156,6 +161,7 @@ async function run(): Promise<void> {
       findPerson: async (name) => (/jordan/i.test(name) ? people.jordan : /priya/i.test(name) ? people.priya : null),
       lookupEmail: async () => null,
       saveLink: async (id, link) => { savedLinks[id] = link; },
+      self: () => ({ accountId: 'acc-me', displayName: 'Shravani Vatti' }),
       findSprint: async (key, prefer) => (key === 'PILOT-41' ? { ok: true, sprintId: 14, sprintName: 'Sprint 14', state: 'active', boardId: 7 } : { ok: false, reason: `PILOT's board has no active or upcoming sprint` }),
     });
     onInsightsSaved((id, r) => { void afterInsightsSaved(id, r); });
@@ -164,6 +170,7 @@ async function run(): Promise<void> {
       { kind: 'reassign', issueKey: 'PILOT-40', ticketHint: '', text: 'Jordan will take PILOT-40', assigneeName: 'Jordan', evidence: 'Jordan will take PILOT-40', certainty: 0.95 },
       { kind: 'reassign', issueKey: 'PILOT-33', ticketHint: '', text: 'Priya takes PILOT-33', assigneeName: 'Priya', evidence: 'Priya takes PILOT-33', certainty: 0.95 },
       { kind: 'blocked_by', issueKey: 'PILOT-33', ticketHint: '', text: 'blocked on the SSO work', blockerKey: 'OPS-12', blockerHint: null, evidence: 'PILOT-33 is blocked on OPS-12', certainty: 0.9 },
+      { kind: 'blocked_by', issueKey: 'PILOT-50', ticketHint: '', text: 'audit log waits on certs', blockerKey: 'OPS-12', blockerHint: null, evidence: 'PILOT-50 is blocked by OPS-12', certainty: 0.9 },
       { kind: 'blocked_by', issueKey: 'PILOT-41', ticketHint: '', text: 'blocked on some legal thing', blockerKey: null, blockerHint: 'some legal thing', evidence: 'waiting on legal', certainty: 0.9 },
       { kind: 'sprint', issueKey: 'PILOT-41', ticketHint: '', text: 'pull it into this sprint', sprint: 'active', evidence: "let's pull PILOT-41 into this sprint", certainty: 0.9 },
       { kind: 'sprint', issueKey: 'PILOT-40', ticketHint: '', text: 'next sprint', sprint: 'next', evidence: 'PILOT-40 next sprint', certainty: 0.9 },
@@ -197,6 +204,7 @@ async function run(): Promise<void> {
     const link = byOp('link', 'PILOT-33');
     assert.deepEqual((link.pushParams as any).args, { blockedKey: 'PILOT-33', blockerKey: 'OPS-12' });
     assert.equal(rows.filter((r) => r.operation === 'link').length, 1, 'an unidentified blocker produces no suggestion');
+    assert.ok(!rows.some((r) => r.operation === 'link' && r.targetRecordId === 'PILOT-50'), 'a link Jira already has is not suggested again');
 
     // c. Sprint: found -> "Add PILOT-41 to Sprint 14?"; not found -> held with the reason, never silent.
     const sprint = byOp('sprint', 'PILOT-41');
@@ -221,6 +229,32 @@ async function run(): Promise<void> {
     await waitForMeetingSync('m2');
     assert.ok((await listRecent()).some((r) => r.operation === 'link' && r.targetRecordId === 'PILOT-41' && (r.pushParams as any).args.blockerKey === 'OPS-12'));
     assert.ok((await listPending()).length >= 1);
+
+    // Live-run fixes: "started" -> In Progress; "assign to me" -> the connected
+    // account; an action item that only restates an intent gets no extra comment.
+    await meetings.insertAsync({ _id: 'm3', title: 'Pilot sync 3', date: new Date().toISOString(), attendees: [], source: 'desktop_recording' });
+    await saveInsights('m3', { summary: '', decisions: [], blockers: [],
+      actionItems: [
+        { text: 'Move PILOT-40 to In Progress', owner: 'Shravani Vatti', issueKey: 'PILOT-40', evidence: 'I started PILOT-40, move PILOT-40 to In Progress', certainty: 0.9 },
+        { text: 'Pull PILOT-41 into this sprint', owner: 'Jordan', issueKey: 'PILOT-41', evidence: "Yes, let's pull PILOT-41 into this sprint. Also I started PILOT-40.", certainty: 0.9 },
+        { text: 'Write the SSO runbook for PILOT-33', owner: 'Priya', issueKey: 'PILOT-33', evidence: 'Priya will write the runbook for PILOT-33', certainty: 0.9 },
+      ],
+      ticketIntents: [
+        { kind: 'started', issueKey: 'PILOT-40', ticketHint: '', text: 'PILOT-40 is in progress', evidence: 'I started PILOT-40, move PILOT-40 to In Progress', certainty: 0.9 },
+        { kind: 'sprint', issueKey: 'PILOT-41', ticketHint: '', text: 'this sprint', sprint: 'active', evidence: "Can we pull PILOT-41 in? Yes, let's pull PILOT-41 into this sprint.", certainty: 0.9 },
+        { kind: 'reassign', issueKey: 'PILOT-41', ticketHint: '', text: 'Shravani takes PILOT-41', assigneeName: 'Shravani Vatti', evidence: 'assign PILOT-41 to Shravani Vatti', certainty: 0.9 },
+      ] } as any);
+    await new Promise((r) => setImmediate(r));
+    await waitForMeetingSync('m3');
+    const m3 = (await listRecent(200)).filter((r) => r.sourceMeetingId === 'm3');
+    const started = m3.find((r) => r.operation === 'transition' && r.targetRecordId === 'PILOT-40')!;
+    assert.equal((started.pushParams as any).args.targetStatus, 'in_progress');
+    const selfAssign = m3.find((r) => r.operation === 'assign' && r.targetRecordId === 'PILOT-41')!;
+    assert.equal((selfAssign.pushParams as any).args.accountId, 'acc-me');
+    assert.equal(selfAssign.needs ?? null, null, 'no Find in Jira for yourself');
+    assert.equal(m3.filter((r) => r.operation === 'comment' && r.targetRecordId === 'PILOT-40').length, 0, 'no comment restating the status change');
+    assert.equal(m3.filter((r) => r.operation === 'comment' && r.targetRecordId === 'PILOT-41').length, 0, 'partly overlapping quote still counts as a restatement');
+    assert.equal(m3.filter((r) => r.operation === 'comment' && r.targetRecordId === 'PILOT-33').length, 1, 'real action items still comment');
     onInsightsSaved(null);
   }
 

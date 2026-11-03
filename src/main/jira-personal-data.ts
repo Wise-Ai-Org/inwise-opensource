@@ -150,11 +150,11 @@ export async function runPersonalDataReport(deps: ReportDeps, now: Date = new Da
   } catch (e: any) {
     // Not marked as reported: the daily check tries again tomorrow.
     const msg = e?.status === 429 ? `rate limited${e.retryAfterSec ? `, retry after ${e.retryAfterSec}s` : ''}` : String(e?.message || e);
-    deps.log('warn', `jira:personal-data report failed: ${msg}`);
+    deps.log('warn', `report failed: ${msg}`);
     return { ran: true, reported: 0, closed: 0, updated: 0, error: msg };
   }
   const { closed, updated } = await applyVerdicts(verdicts, { selfAccountId, issues, people, writes }, deps);
   deps.setLastReportAt(now.toISOString());
-  deps.log('info', `jira:personal-data reported ${accounts.length} account(s); closed ${closed}, updated ${updated}`);
+  deps.log('info', `reported ${accounts.length} account(s); closed ${closed}, updated ${updated}`);
   return { ran: true, reported: accounts.length, closed, updated };
 }
