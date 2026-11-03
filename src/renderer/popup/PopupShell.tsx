@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { NavProvider, useNav, api, Page, POPUP_NAV_EVENT, LegacyView, requestRecordSheet, VOICE_CAPTURE_TRIGGER_EVENT } from './nav';
+import { NavProvider, useNav, api, Page, POPUP_NAV_EVENT, LegacyView, requestRecordSheet, VOICE_CAPTURE_TRIGGER_EVENT, requestOllieFocus, OLLIE_SLACK_SYNCED_EVENT } from './nav';
 import { ReviewItems, useReviewItems } from './useReviewItems';
 import MeetingsTab from './MeetingsTab';
 import TasksTab from './TasksTab';
@@ -187,6 +187,19 @@ function ShellInner() {
   const [pipelineError, setPipelineError] = useState<string | null>(null);
   const [recordingActive, setRecordingActive] = useState(false);
   const [recordingStopping, setRecordingStopping] = useState(false);
+  const [slackSyncedAt, setSlackSyncedAt] = useState<number | null>(null);
+  const [, setClock] = useState(0);
+
+  // Footer "Slack synced N min ago" comes from the wrap-up payload (null = hide).
+  useEffect(() => {
+    const onSynced = (e: Event) => {
+      const at = (e as CustomEvent).detail?.at;
+      setSlackSyncedAt(typeof at === 'number' ? at : null);
+    };
+    window.addEventListener(OLLIE_SLACK_SYNCED_EVENT, onSynced);
+    const tick = setInterval(() => setClock(c => c + 1), 60_000);
+    return () => { window.removeEventListener(OLLIE_SLACK_SYNCED_EVENT, onSynced); clearInterval(tick); };
+  }, []);
 
   useEffect(() => {
     const a = api();
@@ -268,9 +281,18 @@ function ShellInner() {
       }
     };
     a.on?.('meeting:open-details', onOpenDetails);
+    // Notification click on an Ollie moment: back to Meetings, then the tab
+    // scrolls to the card (or the processed meeting's row).
+    const onFocusMoment = (payload: any) => {
+      if (!payload?.kind) return;
+      setTab('meetings');
+      requestOllieFocus({ kind: payload.kind, key: payload.key, meetingId: payload.meetingId, eventId: payload.eventId });
+    };
+    a.on?.('ollie:focus-moment', onFocusMoment);
     return () => {
       window.removeEventListener(POPUP_NAV_EVENT, onNavEvent);
       a.off?.('meeting:open-details', onOpenDetails);
+      a.off?.('ollie:focus-moment', onFocusMoment);
     };
   }, [setTab, openPage]);
 
@@ -278,6 +300,11 @@ function ShellInner() {
   const dateLabel = today.toLocaleDateString([], { month: 'long', day: 'numeric' });
   const topPage = stack.length > 0 ? stack[stack.length - 1] : null;
   const onReviewPage = topPage?.kind === 'review';
+  const slackMinutes = slackSyncedAt ? Math.max(0, Math.floor((Date.now() - slackSyncedAt) / 60_000)) : null;
+  const slackSyncedLabel = slackMinutes === null ? null
+    : slackMinutes < 1 ? 'Slack synced just now'
+    : slackMinutes < 60 ? `Slack synced ${slackMinutes} min ago`
+    : `Slack synced ${Math.floor(slackMinutes / 60)} h ago`;
 
   return (
     <ReviewContext.Provider value={review}>
@@ -342,7 +369,7 @@ function ShellInner() {
             {tab === 'meetings' && <MeetingsTab />}
             {tab === 'tasks' && <TasksTab />}
             {tab === 'people' && <PeopleTab />}
-            <footer className="pp-statusbar"><span>{tab === 'meetings' ? 'Your meeting memory' : tab === 'tasks' ? 'Your commitments' : 'Your collaborators'}</span><button className="pp-link" onClick={() => openPage({ kind: 'settings-root' })}>Controls</button></footer>
+            <footer className="pp-statusbar"><span>{slackSyncedLabel || (tab === 'meetings' ? 'Your meeting memory' : tab === 'tasks' ? 'Your commitments' : 'Your collaborators')}</span><button className="pp-link" onClick={() => openPage({ kind: 'settings-root' })}>Controls</button></footer>
           </>
         )}
       </div>

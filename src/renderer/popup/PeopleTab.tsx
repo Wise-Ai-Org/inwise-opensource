@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api, initials, useNav } from './nav';
 import { useReview } from './PopupShell';
+import type { CatchUpNote } from '../api';
+import './ollie.css';
 
 interface PersonRow {
   _id: string;
@@ -23,6 +25,16 @@ export default function PeopleTab() {
   const [addName, setAddName] = useState('');
   const [adding, setAdding] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [catchUp, setCatchUp] = useState<Record<string, CatchUpNote>>({});
+
+  // Same set as the morning card's Catch up (max 2); text is ready to render.
+  useEffect(() => {
+    api().getOllieCatchUpNotes?.().then((notes: CatchUpNote[]) => {
+      const byId: Record<string, CatchUpNote> = {};
+      for (const n of Array.isArray(notes) ? notes : []) if (n?.personId && n.text) byId[n.personId] = n;
+      setCatchUp(byId);
+    }).catch(() => {});
+  }, []);
 
   const reload = useCallback((search?: string) => {
     const a = api();
@@ -121,6 +133,7 @@ export default function PeopleTab() {
               <div className="pp-grow">
                 <div className="pp-rowlabel">{p.name || 'Unnamed'}</div>
                 <div className="pp-rowsub">{subtitle(p)}</div>
+                {catchUp[p._id] && <div className="ol-person-note">{catchUp[p._id].text}</div>}
               </div>
               <span className="pp-chevron">›</span>
             </button>

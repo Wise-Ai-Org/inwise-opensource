@@ -1,9 +1,9 @@
-import { decodeVoiceRecording } from '../voice-audio';
 import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
 import JiraMappingModal from '../views/communications/JiraMappingModal';
 import UploadTranscriptSheet from './UploadTranscriptSheet';
 import { buildMeetingSlackRecap } from './slack-recap';
+import { retrySavedRecording } from './recording-recovery';
 
 interface Insights {
   summary?: string;
@@ -64,17 +64,7 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
     setRetrying(true);
     setRetryError('');
     try {
-      if (!meeting?.transcript && meeting?.recordingRecovery?.format) {
-        const saved = await api().getRecordingAudio(meetingId);
-        const bytes = new Uint8Array(saved.bytes);
-        let wav: Uint8Array;
-        try { wav = await decodeVoiceRecording(bytes.buffer, saved.stereo); }
-        catch { await api().reportRecordingFailure(meetingId, 'decode'); throw new Error('The saved audio could not be read. Export it for recovery; you do not need to delete it.'); }
-        const transcribed = await api().transcribeVoiceMemo(wav, saved.durationSec, meetingId);
-        if (!transcribed?.ok) throw new Error(transcribed?.error || 'Transcription failed; audio is saved.');
-      }
-      const result = await api().retryRecording(meetingId);
-      if (!result?.ok) setRetryError(result?.error || 'Could not process this recording.');
+      await retrySavedRecording(meetingId, meeting);
     } catch (error: any) {
       setRetryError(error.message);
     } finally { setRetrying(false); }

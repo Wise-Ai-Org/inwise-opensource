@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, fmtTime, sameDay, useNav, OPEN_RECORD_SHEET_EVENT, recordSheetRequest } from './nav';
+import { api, fmtTime, sameDay, useNav, OPEN_RECORD_SHEET_EVENT, recordSheetRequest, OLLIE_FOCUS_EVENT, ollieFocusRequest, OllieFocusRequest } from './nav';
+import { OllieMomentCard, ProcessedRecap, OLLIE_CARD_ID } from './OllieCard';
 import { useReview } from './PopupShell';
 import UploadTranscriptSheet from './UploadTranscriptSheet';
 import { MicGlyph } from './VoiceMemo';
@@ -205,6 +206,8 @@ export default function MeetingsTab() {
   const selectedDayKey = useMemo(() => localDateKey(selectedDay), [selectedDay]);
   const [liveEvent, setLiveEvent] = useState<LiveEvent | null>(null);
   const [liveDismissed, setLiveDismissed] = useState(false);
+  // A dismissal applies to one meeting; the next live meeting can offer again.
+  useEffect(() => { setLiveDismissed(false); }, [liveEvent?.id]);
   const [recording, setRecording] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -212,6 +215,10 @@ export default function MeetingsTab() {
   const [weekOffset, setWeekOffset] = useState(0);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
   const [agendas, setAgendas] = useState<Record<string, string[] | 'loading' | 'failed'>>({});
+  // Ollie moments: card revision, per-meeting recap revisions, focus target.
+  const [momentRevision, setMomentRevision] = useState(0);
+  const [processedRevision, setProcessedRevision] = useState<Record<string, number>>({});
+  const [focus, setFocus] = useState<OllieFocusRequest | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -286,9 +293,18 @@ export default function MeetingsTab() {
   useEffect(() => {
     reload();
     const a = api();
-    a.welcomeBackLiveMeeting?.().then((m: any) => { if (m) setLiveEvent({ id: m.id, title: m.title }); }).catch(() => {});
+    // Re-check on a timer and after recordings so the banner clears once the
+    // meeting ends or has been recorded, instead of sticking from first load.
+    const checkLive = () => {
+      a.welcomeBackLiveMeeting?.()
+        .then((m: any) => setLiveEvent(prev => (m ? (prev?.id === m.id ? prev : { id: m.id, title: m.title }) : null)))
+        .catch(() => {});
+    };
+    checkLive();
+    const liveTimer = window.setInterval(checkLive, 30_000);
 
     const onStatus = (p: any) => {
+      checkLive();
       if (p?.status === 'recording' || p?.status === 'processing') setRecording(p.status === 'recording');
       if (p?.status === 'done' || p?.status === 'error') {
         setRecording(false);
@@ -301,6 +317,7 @@ export default function MeetingsTab() {
     a.on?.('meeting:new', onNew);
     a.on?.('calendar:events', onNew);
     return () => {
+      window.clearInterval(liveTimer);
       a.off?.('recording:status', onStatus);
       a.off?.('meeting:new', onNew);
       a.off?.('calendar:events', onNew);
@@ -308,11 +325,66 @@ export default function MeetingsTab() {
   }, [reload]);
 
   useEffect(() => {
+    const a = api();
+    const onChanged = (p: { reason?: string; meetingId?: string } | null) => {
+      setMomentRevision(r => r + 1);
+      if (p?.meetingId) {
+        const id = p.meetingId;
+        setProcessedRevision(m => ({ ...m, [id]: (m[id] || 0) + 1 }));
+        if (p.reason === 'processed') reload();
+      }
+    };
+    const takeFocus = () => {
+      const next = ollieFocusRequest.pending;
+      ollieFocusRequest.pending = null;
+      if (!next) return;
+      setWeekOffset(0);
+      setSelectedDay(new Date());
+      setMomentRevision(r => r + 1);
+      if (next.meetingId) {
+        const id = next.meetingId;
+        setProcessedRevision(m => ({ ...m, [id]: (m[id] || 0) + 1 }));
+      }
+      setFocus(next);
+    };
+    takeFocus();
+    a.on?.('ollie:moment-changed', onChanged);
+    window.addEventListener(OLLIE_FOCUS_EVENT, takeFocus);
+    return () => {
+      a.off?.('ollie:moment-changed', onChanged);
+      window.removeEventListener(OLLIE_FOCUS_EVENT, takeFocus);
+    };
+  }, [reload]);
+
+  // Scroll to the focused card or meeting row once it has rendered, then let
+  // the highlight fade.
+  useEffect(() => {
+    if (!focus) return;
+    const targetId = focus.kind === 'processed' && focus.meetingId ? focus.meetingId : null;
+    let tries = 0;
+    const timer = setInterval(() => {
+      const el = targetId
+        ? document.querySelector(`[data-meeting-id="${CSS.escape(targetId)}"]`)
+        : document.getElementById(OLLIE_CARD_ID);
+      if (el || ++tries > 20) {
+        clearInterval(timer);
+        el?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
+    }, 100);
+    const clear = setTimeout(() => setFocus(null), 2400);
+    return () => { clearInterval(timer); clearTimeout(clear); };
+  }, [focus]);
+
+  useEffect(() => {
     let cancelled = false;
     setBriefing(null);
     setBriefingError(false);
     setBriefingLoading(true);
     setBriefingDismissed(false);
+    if (selectedDayKey === localDateKey(new Date())) {
+      setBriefingLoading(false);
+      return () => { cancelled = true; };
+    }
     api().getBriefing?.(selectedDayKey).then((next: Briefing) => {
       if (!cancelled) setBriefing(next || null);
     }).catch(() => {
@@ -393,6 +465,11 @@ export default function MeetingsTab() {
   );
 
   const isToday = sameDay(selectedDay, new Date());
+  // The latest processed meeting today always shows its recap; older rows show
+  // one only when something needs the user (pending tasks, Jira OKs, failures).
+  const latestProcessedId = isToday
+    ? [...dayMeetings].reverse().find(m => m.source === 'db' && m.hasInsights && !m.voiceMemo)?._id ?? null
+    : null;
   const pendingByMeetingTitle = useMemo(() => {
     const map = new Map<string, number>();
     for (const row of review.approvals) {
@@ -469,7 +546,9 @@ export default function MeetingsTab() {
         })}
       </div>
 
-      {!briefingDismissed && (
+      {isToday && <OllieMomentCard revision={momentRevision} focused={!!focus && focus.kind !== 'processed'} />}
+
+      {!isToday && !briefingDismissed && (
         <div className="pp-card" style={{ background: 'var(--pp-teal-tint)', borderColor: 'var(--pp-teal-line)' }}>
           <div className="pp-row">
             <div className="pp-grow">
@@ -519,7 +598,7 @@ export default function MeetingsTab() {
       {liveEvent && !liveDismissed && !recording && (
         <div className="pp-banner">
           <span className="pp-recdot" />
-          <div className="pp-grow pp-banner-text">{liveEvent.title} looks live — start recording?</div>
+          <div className="pp-grow pp-banner-text">{liveEvent.title} looks live. Start recording?</div>
           <button className="pp-link" onClick={async () => {
             await api().startRecording?.(liveEvent.title, liveEvent.id);
             setLiveDismissed(true);
@@ -580,7 +659,8 @@ export default function MeetingsTab() {
         return (
           <div
             key={m._id}
-            className="pp-card meeting-card pp-clickable"
+            data-meeting-id={m._id}
+            className={`pp-card meeting-card pp-clickable ${focus?.kind === 'processed' && focus.meetingId === m._id ? 'ol-focus' : ''}`}
             onClick={onCardClick}
             role="button"
           >
@@ -631,6 +711,9 @@ export default function MeetingsTab() {
                   </div>
                 ))}
               </div>
+            )}
+            {isDb && (
+              <ProcessedRecap meetingId={m._id} revision={processedRevision[m._id] || 0} always={m._id === latestProcessedId} />
             )}
             {!isDb && isExpanded && (
               <div style={{ marginTop: 10, borderTop: '1px solid var(--slate-100)', paddingTop: 10 }} onClick={e => e.stopPropagation()}>

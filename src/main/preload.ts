@@ -179,6 +179,16 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   welcomeBackCompute: () => ipcRenderer.invoke('welcomeBack:compute'),
   welcomeBackDismiss: () => ipcRenderer.invoke('welcomeBack:dismiss'),
   welcomeBackLiveMeeting: () => ipcRenderer.invoke('welcomeBack:liveMeeting'),
+
+  // Ollie moments (docs/OLLIE_MOMENTS.md, "IPC contract")
+  getOllieMoment: () => ipcRenderer.invoke('ollie:getMoment'),
+  dismissOllieMoment: (key: string) => ipcRenderer.invoke('ollie:dismiss', key),
+  getOllieProcessed: (meetingId: string) => ipcRenderer.invoke('ollie:getProcessed', meetingId),
+  getOllieCatchUpNotes: () => ipcRenderer.invoke('ollie:catchUpNotes'),
+  ollieSetRecordAtStart: (eventId: string, armed: boolean) => ipcRenderer.invoke('ollie:setRecordAtStart', eventId, armed),
+  ollieAddToTomorrow: (taskId: string) => ipcRenderer.invoke('ollie:addToTomorrow', taskId),
+  getNotificationSettings: () => ipcRenderer.invoke('notifications:get'),
+  setNotificationSettings: (patch: Record<string, any>) => ipcRenderer.invoke('notifications:set', patch),
   setLoginItemOpenAtLogin: (enabled: boolean) =>
     ipcRenderer.invoke('app:setLoginItemOpenAtLogin', enabled),
   getLoginItemSettings: () => ipcRenderer.invoke('app:getLoginItemSettings'),
@@ -231,7 +241,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
 
   // Events from main → renderer
   on: (channel: string, cb: (...args: any[]) => void) => {
-    const allowed = ['recording:status', 'meeting:new', 'meeting:open-details', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'tasks:likely-done-updated', 'tasks:mentions-updated', 'jira:auto-synced', 'sor:write-completed', 'pipeline:error', 'audio:health', 'app:navigate'];
+    const allowed = ['recording:status', 'meeting:new', 'meeting:open-details', 'badge:show', 'badge:hide', 'calendar:events', 'meeting:reminder', 'meeting:conflict', 'meeting:conflict:resolved', 'whisper:progress', 'tasks:reprioritized', 'tasks:likely-done-updated', 'tasks:mentions-updated', 'jira:auto-synced', 'sor:write-completed', 'pipeline:error', 'audio:health', 'app:navigate', 'ollie:moment-changed', 'ollie:focus-moment'];
     if (allowed.includes(channel)) {
       ipcRenderer.on(channel, (_event, ...args) => cb(...args));
     }

@@ -9,6 +9,7 @@
  *   - startTime <= now <= (endTime || startTime + 90min)
  *   - !isRecordingActive (the user isn't already recording)
  *   - !overlayWindowOpen  (no active recording overlay from a prior run)
+ *   - the event was not already recorded this session (recordedEventIds)
  */
 
 export interface LiveMeetingCandidateEvent {
@@ -24,6 +25,8 @@ export interface LiveMeetingInput {
   now: Date;
   isRecordingActive: boolean;
   overlayWindowOpen: boolean;
+  /** Calendar event ids that already have a recording; never offered again. */
+  recordedEventIds?: ReadonlySet<string>;
 }
 
 export interface LiveMeetingResult {
@@ -44,6 +47,7 @@ export function findLiveMeetingForBanner(input: LiveMeetingInput): LiveMeetingRe
   const nowMs = input.now.getTime();
 
   for (const ev of input.events) {
+    if (input.recordedEventIds?.has(ev.id)) continue;
     const start = ev.startTime.getTime();
     const rawEnd = ev.endTime?.getTime();
     const end = rawEnd && rawEnd > start ? rawEnd : start + LIVE_MEETING_FALLBACK_DURATION_MS;

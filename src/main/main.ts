@@ -7,7 +7,7 @@ import { session } from 'electron';
 import { installDisplayMediaHandler, installSessionPermissionHandlers } from './session-permissions';
 import { buildRecordingSilencePrompt, RECORDING_SILENCE_RESPONSE_MS } from './recording-silence-policy';
 
-import { getConfig, setConfig, getSorJiraPrefs, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, getDailyPlanPrefs, markDailyPlanShown, wasAutostartConfigured, markAutostartConfigured, CalendarSubscription } from './config';
+import { getConfig, setConfig, getNotificationSettings, setNotificationSettings, getSorJiraPrefs, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, getDailyPlanPrefs, markDailyPlanShown, wasAutostartConfigured, markAutostartConfigured, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
 import { fuzzyNameScore, SAME_PERSON_THRESHOLD } from './fuzzy-name';
 import { log } from './logger';
@@ -117,6 +117,21 @@ import { installApplicationMenu } from './application-menu';
 import { getMediaPermissions, openMediaSettings, requestMicrophonePermission } from './media-permissions';
 import { createLoginItemRegistration, shouldStartHidden } from './login-item';
 import { startZoomPoller, stopZoomPoller, runZoomPollNow, onZoomTranscriptImported } from './zoom-poller';
+import {
+  initOllieMoments,
+  onCalendarEventsUpdated,
+  announceProcessed,
+  getOllieMoment,
+  getProcessedSummary,
+  getCatchUpNotes,
+  dismissOllieMoment,
+  setRecordAtStart,
+  addTaskToTomorrow,
+  rememberDraftAgenda,
+  notifySettingsChanged,
+  stopOllieMoments,
+} from './ollie-moments-service';
+import { mergeNotificationSettings } from './ollie-moments';
 
 let mainWindow: BrowserWindow | null = null;
 let overlayWindow: BrowserWindow | null = null;
@@ -403,7 +418,11 @@ function createPillWindow(): BrowserWindow {
   return win;
 }
 
+/** Calendar events recorded this session, so the tray never offers to record them again. */
+const recordedEventIds = new Set<string>();
+
 function createOverlayWindow(title: string, calendarEventId?: string, attendees: string[] = []): void {
+  if (calendarEventId) recordedEventIds.add(calendarEventId);
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('recording:start', title, calendarEventId, attendees);
     return;
@@ -487,7 +506,13 @@ function dailyPlanBusyNow(): boolean {
   }) !== null;
 }
 
+/** Notifications > Morning plan: only 'window' opens the daily plan window. */
+function dailyPlanWindowAllowed(): boolean {
+  return getNotificationSettings().morning === 'window';
+}
+
 function scheduleDailyPlan(delayMs: number): void {
+  if (!dailyPlanWindowAllowed()) return;
   const prefs = getDailyPlanPrefs();
   const gate = computeDailyPlanGate({
     now: new Date(),
@@ -504,6 +529,7 @@ function scheduleDailyPlan(delayMs: number): void {
 function tryShowDailyPlan(force = false): void {
   dailyPlanTimer = null;
   if (!force) {
+    if (!dailyPlanWindowAllowed()) return;
     const prefs = getDailyPlanPrefs();
     const gate = computeDailyPlanGate({
       now: new Date(),
@@ -852,6 +878,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       mainWindow?.webContents.send('recording:status', { status: 'done' });
       showMeetingOverview(meetingId);
       log('warn', 'pipeline:needs-review', `meeting=${meetingId} reasons=${transcriptQuality.reasons.join('; ')}`);
+      void announceProcessed(meetingId);
       return true;
     }
 
@@ -1050,38 +1077,8 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
           );
           mainWindow?.webContents.send('jira:auto-synced', { created, linked, gated, total });
 
-          // Per-meeting SoR trace notification. Reads the audit log (not the
-          // loop counters) so failure counts reflect the truth on disk.
-          try {
-            const writes = await sorListByMeeting(meetingId);
-            const successCount = writes.filter(w => w.result === 'success').length;
-            const failedCount = writes.filter(w => w.result === 'failed').length;
-            if ((successCount + failedCount) > 0 && Notification.isSupported()) {
-              const body = failedCount > 0
-                ? `${successCount} pushed, ${failedCount} failed`
-                : `${successCount} update${successCount === 1 ? '' : 's'} pushed to Jira.`;
-              const n = new Notification({
-                title: `Meeting ${meetingTitle}`,
-                body,
-                actions: [{ type: 'button', text: 'See details' }],
-              });
-              const openDetails = () => {
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                  mainWindow.show();
-                  mainWindow.focus();
-                  mainWindow.webContents.send('meeting:open-details', {
-                    meetingId,
-                    focusTab: 'sorWrites',
-                  });
-                }
-              };
-              n.on('action', openDetails);
-              n.on('click', openDetails);
-              n.show();
-            }
-          } catch (notifyErr: any) {
-            log('error', 'pipeline:sor-notification-failed', notifyErr.message);
-          }
+          // The per-meeting Jira receipt is part of the single "Inwise processed"
+          // notification (ollie-moments-service announceProcessed), read from the audit log.
         } catch (jiraErr: any) {
           log('error', 'pipeline:jira-auto-push-failed', jiraErr.message);
         }
@@ -1103,6 +1100,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       emitSecondary({ jobId: job, title: meetingTitle, state: 'error', meetingId, message: 'Insights failed. Your transcript is saved; retry in Inwise.' });
       mainWindow?.webContents.send('recording:status', { status: 'error', message: 'Insights failed. Your transcript is saved.' });
       showMeetingOverview(meetingId);
+      void announceProcessed(meetingId);
       return false;
     }
 
@@ -1151,6 +1149,7 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
     mainWindow?.webContents.send('recording:status', { status: 'done' });
     showMeetingOverview(meetingId);
     log('info', 'pipeline:done', meetingId);
+    void announceProcessed(meetingId);
   } catch (err: any) {
     await setRecordingFailure(meetingId, recordingFailure('transcribing', true));
     log('error', 'pipeline:failed', `meetingId=${meetingId} code=${err.code || err.name || 'Error'}`);
@@ -1163,10 +1162,9 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
     emitSecondary({ jobId: job, title: meetingTitle, state: 'error', message: err.message });
     mainWindow?.webContents.send('recording:status', { status: 'error', message: err.message });
     // The pill may already be recording the next meeting, so a failed background
-    // transcription also gets a notification the user can't miss.
-    if (Notification.isSupported()) {
-      new Notification({ title: 'Transcription failed', body: `${meetingTitle}: ${err.message}` }).show();
-    }
+    // transcription also gets a notification ("Couldn't process ... The audio is
+    // saved."), held until the current recording ends.
+    void announceProcessed(meetingId);
     // Keep audio file on failure so user can retry — delete only on success
     return false;
   }
@@ -2614,6 +2612,7 @@ ipcMain.handle('zoom:fetchTranscript', async (_e, recording: { meetingId: string
       zoomUuid: recording.uuid,
     };
     const meetingId = await ingestNormalizedTranscript(nt);
+    void announceProcessed(meetingId);
     return { ok: true, meetingId };
   } catch (e: any) { return { ok: false, error: e.message }; }
 });
@@ -2656,6 +2655,7 @@ ipcMain.handle('teams:fetchTranscript', async (_e, meeting) => {
       return { ok: false, error: 'Microsoft returned an empty or unsupported Teams transcript.' };
     }
     const meetingId = await ingestNormalizedTranscript(normalized, { source: 'teams_transcript' });
+    void announceProcessed(meetingId);
     return { ok: true, meetingId, speakerAttributed: artifact.speakerAttributed };
   } catch (e: any) { return { ok: false, error: e.message }; }
 });
@@ -2694,6 +2694,7 @@ ipcMain.handle('meet:fetchTranscript', async (_e, conference) => {
   try {
     const normalized = await fetchMeetTranscript(conference);
     const meetingId = await ingestNormalizedTranscript(normalized, { source: 'meet_transcript' });
+    void announceProcessed(meetingId);
     return { ok: true, meetingId };
   } catch (e: any) { return { ok: false, error: e.message }; }
 });
@@ -3147,7 +3148,9 @@ ipcMain.on('recording:silence-response', (event, response: 'keep' | 'sound' | 's
 
 ipcMain.handle('audio:health:get', () => latestAudioHealth);
 
-ipcMain.handle('welcomeBack:compute', async () => {
+ipcMain.handle('welcomeBack:compute', () => computeWelcomeBackNow());
+
+async function computeWelcomeBackNow() {
   let openAtLogin = false;
   try {
     openAtLogin = app.getLoginItemSettings().openAtLogin;
@@ -3167,7 +3170,7 @@ ipcMain.handle('welcomeBack:compute', async () => {
     meetings,
     upcomingEvents: calendarWatcher.getUpcomingEvents(),
   });
-});
+}
 
 ipcMain.handle('welcomeBack:dismiss', () => {
   markWelcomeBackSeen();
@@ -3180,6 +3183,7 @@ ipcMain.handle('welcomeBack:liveMeeting', () => {
     now: new Date(),
     isRecordingActive,
     overlayWindowOpen: !!(overlayWindow && !overlayWindow.isDestroyed()),
+    recordedEventIds,
   });
 });
 
@@ -3203,6 +3207,55 @@ ipcMain.handle('app:getLoginItemSettings', () => {
   }
 });
 
+// ── Ollie moments IPC (docs/OLLIE_MOMENTS.md, "IPC contract") ────────────────
+
+ipcMain.handle('ollie:getMoment', async () => {
+  try {
+    return await getOllieMoment();
+  } catch (e: any) {
+    log('error', 'ollie:getMoment', e.message);
+    return null;
+  }
+});
+ipcMain.handle('ollie:dismiss', (_e, key: string) => {
+  dismissOllieMoment(key);
+  return true;
+});
+ipcMain.handle('ollie:getProcessed', async (_e, meetingId: string) => {
+  try {
+    return await getProcessedSummary(meetingId);
+  } catch (e: any) {
+    log('error', 'ollie:getProcessed', e.message);
+    return null;
+  }
+});
+ipcMain.handle('ollie:catchUpNotes', async () => {
+  try {
+    return await getCatchUpNotes();
+  } catch (e: any) {
+    log('error', 'ollie:catchUpNotes', e.message);
+    return [];
+  }
+});
+ipcMain.handle('ollie:setRecordAtStart', (_e, eventId: string, armed?: boolean) => {
+  return { armed: setRecordAtStart(String(eventId), armed !== false) };
+});
+ipcMain.handle('ollie:addToTomorrow', async (_e, taskId: string) => {
+  return addTaskToTomorrow(String(taskId));
+});
+ipcMain.handle('notifications:get', () => getNotificationSettings());
+ipcMain.handle('notifications:set', (_e, patch: unknown) => {
+  const next = setNotificationSettings(mergeNotificationSettings(getNotificationSettings(), patch));
+  notifySettingsChanged();
+  if (next.morning === 'window') {
+    scheduleDailyPlan(DAILY_PLAN_DELAY_MS);
+  } else if (dailyPlanTimer) {
+    clearTimeout(dailyPlanTimer);
+    dailyPlanTimer = null;
+  }
+  return next;
+});
+
 // ── Daily plan IPC ───────────────────────────────────────────────────────────
 
 ipcMain.handle('dailyPlan:get', async () => {
@@ -3222,7 +3275,9 @@ ipcMain.handle('dailyPlan:get', async () => {
       try {
         const agendaEvent = { ...ev, attendees: ev.attendees.filter(attendee => !isSelf(attendee)) };
         const { context, basis } = await getRecurringMeetingAgendaContext(agendaEvent);
-        agendaById.set(ev.id, { items: await generateAgenda(context), basis });
+        const items = await generateAgenda(context);
+        agendaById.set(ev.id, { items, basis });
+        rememberDraftAgenda(ev.id, items);
       } catch {
         agendaById.set(ev.id, { items: [], basis: null });
       }
@@ -3381,6 +3436,7 @@ async function flushPendingAudio(key: string, destination?: string): Promise<voi
 // â”€â”€ Calendar watcher â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 calendarWatcher.on('events-updated', async (events: any[]) => {
+  onCalendarEventsUpdated(events, calendarWatcher.getHealth().status === 'ok');
   mainWindow?.webContents.send('calendar:events', events.map(e => ({
     ...e,
     startTime: e.startTime instanceof Date ? e.startTime.getTime() : e.startTime,
@@ -3536,13 +3592,8 @@ function resolveMeetingConflict(winner: MeetingEvent, reason: 'auto-selected' | 
 }
 
 calendarWatcher.on('meeting-reminder', (event: any) => {
-  // System notification
-  if (Notification.isSupported()) {
-    new Notification({
-      title: 'Meeting starting soon',
-      body: `${event.title} â€” don't forget to record`,
-    }).show();
-  }
+  // The OS notification is the Ollie prep notification now (exact timer at
+  // start - leadMinutes in ollie-moments-service); "Record at start" arms it.
   // Badge overlay with reminder mode (no auto-record)
   createReminderBadge(event.title);
   // Also notify the main window for a toast
@@ -3707,6 +3758,22 @@ app.whenReady().then(() => {
   createMainWindow();
   createTray(mainWindow!, togglePopupWindow, () => tryShowDailyPlan(true));
   calendarWatcher.start();
+  initOllieMoments({
+    getMainWindow: () => mainWindow,
+    getEvents: () => calendarWatcher.getUpcomingEvents(),
+    isRecordingActive: () => isRecordingActive,
+    isBusy: () => dailyPlanBusyNow(),
+    openPopup: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      positionPopupWindow(mainWindow);
+      mainWindow.show();
+      mainWindow.focus();
+    },
+    startRecordingForEvent: (event) => {
+      calendarWatcher.emit('meeting-starting', event);
+    },
+    getWelcomeBack: () => computeWelcomeBackNow(),
+  });
 
   // Autostart (first run defaults to on) + once-a-day plan ~10 min after the
   // machine opens. 'unlock-screen'/'resume' re-arm the timer; the gate keeps
@@ -3742,6 +3809,7 @@ app.whenReady().then(() => {
       date: normalized.date,
       attendees: normalized.attendees,
       source: 'slack_thread',
+      slackChannelId: channelId,
     });
     await updateMeetingTranscript(meetingId, normalized.transcript, 0);
     await saveInsights(meetingId, insights);
@@ -3769,12 +3837,8 @@ app.whenReady().then(() => {
   onZoomTranscriptImported(async (recording, meetingId) => {
     const meeting = await getMeeting(meetingId);
     mainWindow?.webContents.send('meeting:new', meeting);
-    if (Notification.isSupported()) {
-      new Notification({
-        title: 'Zoom transcript imported',
-        body: `“${recording.title}” is ready in Inwise.`,
-      }).show();
-    }
+    log('info', 'zoom:imported', `"${recording.title}" -> ${meetingId}`);
+    void announceProcessed(meetingId);
   });
   setTimeout(() => startZoomPoller(), 15_000);
 
@@ -3918,6 +3982,7 @@ ipcMain.handle('mcp:setWritebackEnabled', (_e, enabled: boolean) => {
 });
 
 app.on('before-quit', () => {
+  stopOllieMoments();
   calendarWatcher.stop();
   stopSlackPoller();
   void stopMcpServer();

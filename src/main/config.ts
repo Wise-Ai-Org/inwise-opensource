@@ -1,6 +1,8 @@
 ﻿import Store from 'electron-store';
 import { randomUUID } from 'crypto';
 import { storeLocationOptions } from './store-location';
+import { normalizeNotificationSettings } from './ollie-moments';
+import type { NotificationSettings } from './ollie-moments-types';
 
 export type CalendarProvider = 'google' | 'outlook' | 'ics';
 
@@ -71,6 +73,16 @@ interface Config {
   dailyPlanLastShownAt: string | null;
   /** True once autostart has been set — either the first-run default or an explicit user toggle. */
   autostartConfigured: boolean;
+  /** Ollie moments notification preferences (docs/OLLIE_MOMENTS.md). Read via getNotificationSettings(). */
+  notifications?: NotificationSettings;
+  /** Ollie moment bookkeeping: dismissed card keys, already-notified keys, events cancelled today. */
+  ollieMomentState: OllieMomentState;
+}
+
+export interface OllieMomentState {
+  dismissedKeys: string[];
+  notifiedKeys: string[];
+  cancelledEvents: { id: string; title: string; startTime: number; seriesUid: string | null; detectedAt: string }[];
 }
 
 // Node-run unit tests import database.ts without an Electron app context. Give
@@ -114,6 +126,9 @@ const store = new Store<Config>({
     dailyPlanEnabled: true,
     dailyPlanLastShownAt: null,
     autostartConfigured: false,
+    // `notifications` deliberately has no default: an absent block lets
+    // getNotificationSettings() carry over a legacy dailyPlanEnabled=false.
+    ollieMomentState: { dismissedKeys: [], notifiedKeys: [], cancelledEvents: [] },
     sor: {
       dismissedReceiptIds: [],
       jira: { approvalGateEnabled: false, approvalThreshold: 0.6 },
@@ -254,6 +269,35 @@ export function getDailyPlanPrefs(): { enabled: boolean; lastShownAt: string | n
 
 export function markDailyPlanShown(): void {
   store.set('dailyPlanLastShownAt', new Date().toISOString());
+}
+
+/**
+ * Safe accessor for notification settings. Existing installs have no
+ * `notifications` block until the first save, and a user who had switched the
+ * daily-plan window off keeps it off (morning = 'tray').
+ */
+export function getNotificationSettings(): NotificationSettings {
+  const stored = store.has('notifications') ? store.get('notifications') : undefined;
+  return normalizeNotificationSettings(stored, store.get('dailyPlanEnabled') as boolean | undefined);
+}
+
+export function setNotificationSettings(settings: NotificationSettings): NotificationSettings {
+  const next = normalizeNotificationSettings(settings);
+  store.set('notifications', next);
+  return next;
+}
+
+export function getOllieMomentState(): OllieMomentState {
+  const raw: any = store.get('ollieMomentState') || {};
+  return {
+    dismissedKeys: Array.isArray(raw.dismissedKeys) ? raw.dismissedKeys.filter((k: unknown) => typeof k === 'string') : [],
+    notifiedKeys: Array.isArray(raw.notifiedKeys) ? raw.notifiedKeys.filter((k: unknown) => typeof k === 'string') : [],
+    cancelledEvents: Array.isArray(raw.cancelledEvents) ? raw.cancelledEvents.filter((e: any) => e && typeof e.id === 'string') : [],
+  };
+}
+
+export function setOllieMomentState(state: OllieMomentState): void {
+  store.set('ollieMomentState', state);
 }
 
 export function wasAutostartConfigured(): boolean {
