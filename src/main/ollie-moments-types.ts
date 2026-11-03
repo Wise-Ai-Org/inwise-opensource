@@ -95,7 +95,7 @@ export interface AttendeeOwes {
 export interface PendingJiraApproval {
   /** sor-writes / sor-pending-approvals id. Approve = sorApprove(id); Skip = sorReject(id). */
   id: string;
-  operation: 'create' | 'update' | 'transition' | 'comment';
+  operation: 'create' | 'update' | 'transition' | 'comment' | 'assign' | 'link' | 'sprint';
   summary: string;
   issueKey: string | null;
   meetingId: string | null;
@@ -113,6 +113,12 @@ export interface PendingJiraApproval {
   confidence: number | null;
   /** Link to the target ticket, when there is one. */
   url: string | null;
+  /** Why it cannot be approved yet (unresolved assignee, no sprint found), or null. */
+  blockedReason: string | null;
+  /** 'jira-user': show "Find in Jira" instead of Approve. */
+  needs: 'jira-user' | null;
+  /** For assign rows: the person to search for. */
+  assigneeName: string | null;
 }
 
 /** One Jira ticket row in an Ollie card. Tap opens `url`. */

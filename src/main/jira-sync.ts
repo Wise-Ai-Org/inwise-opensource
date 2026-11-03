@@ -17,13 +17,14 @@
 import { log } from './logger';
 import { getConfig, setConfig } from './config';
 import {
-  getMeeting, getTaskById, getPeople, upsertPulledJiraTask, hasTaskLinkedToJiraKey,
+  getMeeting, getTaskById, getPeople, getTasks, upsertPulledJiraTask, hasTaskLinkedToJiraKey, setPersonJiraLink,
   type SaveInsightsResult,
 } from './database';
 import {
   getJiraStories, searchJiraIssuesPage, findJiraAccountIdByEmail, findSprintFieldId,
-  getJiraAccountId, isJiraConnected, type JiraStory,
+  getJiraAccountId, isJiraConnected, findSprintForIssue, type JiraStory, type SprintLookup,
 } from './jira-client';
+import { resolvePerson } from './ollie-content';
 import { matchItemToStories, semanticMatch } from './jira-matcher';
 import { computeWriteConfidence, spokenIssueKeys } from './jira-confidence';
 import {
@@ -36,6 +37,7 @@ import {
   PULL_MAX_ATTENDEES, type JiraIssueSnapshot,
 } from './jira-pull';
 import type { PushParams } from './sor-write-log';
+import { resolvePersonAccountId, type JiraLink } from './jira-people';
 
 export const STRONG_MATCH = 0.85;
 export const MIDDLE_BAND_LOW = 0.3;
@@ -43,7 +45,10 @@ export const MIDDLE_BAND_LOW = 0.3;
 const INTENT_MATCH_MIN = 0.3;
 const SKIP_SOURCES = new Set(['demo_seed', 'slack_thread', 'voice_memo']);
 
-export interface StoryLike { jiraKey: string; title: string; description: string; jiraUrl: string; statusCategory?: string | null }
+export interface StoryLike {
+  jiraKey: string; title: string; description: string; jiraUrl: string;
+  statusCategory?: string | null; assigneeId?: string | null; sprintName?: string | null;
+}
 
 interface SyncDeps {
   getMeeting: (id: string) => Promise<any>;
@@ -52,12 +57,22 @@ interface SyncDeps {
   semantic: (items: { text: string }[], stories: { jiraKey: string; title: string }[]) => Promise<Record<string, string | null>>;
   submit: (req: JiraWriteRequest) => Promise<JiraWriteOutcome>;
   settings: () => { autoPush: boolean; connected: boolean; projectKey: string | null };
+  /** Local tasks linked to Jira, as match candidates for "a linked task". */
+  linkedTasks: () => Promise<StoryLike[]>;
+  /** Person record for a spoken name, or null. */
+  findPerson: (name: string) => Promise<any | null>;
+  lookupEmail: (email: string) => Promise<string | null>;
+  saveLink: (personId: string, link: JiraLink) => Promise<void>;
+  findSprint: (issueKey: string, prefer: 'active' | 'next') => Promise<SprintLookup>;
 }
 
 async function realLoadStories(projectKey: string | undefined): Promise<StoryLike[]> {
   const byKey = new Map<string, StoryLike>();
   for (const s of await listCachedIssues().catch(() => [] as JiraIssueSnapshot[])) {
-    byKey.set(s.key, { jiraKey: s.key, title: s.title, description: '', jiraUrl: s.url || '', statusCategory: s.statusCategory });
+    byKey.set(s.key, {
+      jiraKey: s.key, title: s.title, description: '', jiraUrl: s.url || '', statusCategory: s.statusCategory,
+      assigneeId: s.assignee?.accountId || null, sprintName: s.sprint?.state === 'active' ? s.sprint.name : null,
+    });
   }
   try {
     for (const s of await getJiraStories(projectKey) as JiraStory[]) {
@@ -75,6 +90,14 @@ const realDeps: SyncDeps = {
   loadStories: realLoadStories,
   semantic: semanticMatch,
   submit: submitJiraWrite,
+  linkedTasks: async () => (await getTasks().catch(() => [] as any[]))
+    .map((t: any) => ({ t, key: linkedIssueKey(t) }))
+    .filter((x: any) => !!x.key)
+    .map(({ t, key }: any) => ({ jiraKey: key, title: t.title || '', description: '', jiraUrl: t.source?.url || '' })),
+  findPerson: async (name: string) => resolvePerson(name, await getPeople().catch(() => [] as any[])),
+  lookupEmail: findJiraAccountIdByEmail,
+  saveLink: async (personId, link) => { await setPersonJiraLink(personId, link); },
+  findSprint: findSprintForIssue,
   settings: () => {
     const cfg: any = getConfig();
     return { autoPush: cfg.jiraAutoPush === true, connected: isJiraConnected(), projectKey: cfg.jiraDefaultProject || null };
@@ -234,6 +257,35 @@ async function syncMeetingOnce(meetingId: string, opts: { onlyTaskId?: string })
   return summary;
 }
 
+/**
+ * Strict identification for link suggestions: a spoken key, a Jira-linked
+ * local task or ticket whose title matches at the strong band, or an LLM
+ * match. Anything weaker returns null and the suggestion is skipped.
+ */
+async function identifyStrict(spokenKey: string | null, hint: string, stories: StoryLike[], linked: StoryLike[]): Promise<{ key: string; strength: number; spoken: boolean } | null> {
+  if (spokenKey) return { key: spokenKey, strength: 1, spoken: true };
+  const text = (hint || '').trim();
+  if (!text) return null;
+  const pool = [...linked, ...stories.filter((s) => !linked.some((l) => l.jiraKey === s.jiraKey))];
+  const best = matchItemToStories(text, pool)[0];
+  if (best && best.matchFactors.title >= STRONG_MATCH) return { key: best.jiraKey, strength: best.matchFactors.title, spoken: false };
+  try {
+    const llm = await deps.semantic([{ text }], pool.map((s) => ({ jiraKey: s.jiraKey, title: s.title })));
+    const key = llm['1'];
+    if (key && pool.some((s) => s.jiraKey === key)) return { key, strength: STRONG_MATCH, spoken: false };
+  } catch { /* no LLM: not identified */ }
+  return null;
+}
+
+/** Jira accountId for a spoken name: stored id, then email; never a guess. */
+async function accountForName(name: string): Promise<{ accountId: string | null; personId: string | null; displayName: string }> {
+  const person = await deps.findPerson(name).catch(() => null);
+  if (!person) return { accountId: null, personId: null, displayName: name };
+  const res = await resolvePersonAccountId(person, (email) => deps.lookupEmail(email));
+  if (res.update) await deps.saveLink(person._id, res.update).catch(() => undefined);
+  return { accountId: res.accountId, personId: person._id, displayName: person.name || name };
+}
+
 async function proposeIntent(
   meetingId: string,
   meetingTitle: string,
@@ -242,14 +294,37 @@ async function proposeIntent(
   storyByKey: Map<string, StoryLike>,
 ): Promise<JiraWriteOutcome | null> {
   if (!intent || intent.kind === 'new') return null; // new work is proposed from the action items
-  let key: string | null = intent.issueKey || spokenIssueKeys(`${intent.text || ''} ${intent.evidence || ''}`)[0] || null;
+  const spokenKey: string | null = intent.issueKey || spokenIssueKeys(`${intent.text || ''} ${intent.evidence || ''}`)[0] || null;
+  let key: string | null = spokenKey;
   let match = key ? 1 : 0;
-  const keySpoken = !!key;
+  let keySpoken = !!key;
+  if (intent.kind === 'blocked_by') {
+    // Both ends must be identified strictly; otherwise no suggestion at all.
+    const linked = await deps.linkedTasks().catch(() => [] as StoryLike[]);
+    const blocked = await identifyStrict(spokenKey, intent.ticketHint || '', stories, linked);
+    if (!blocked) return null;
+    const blockerSpoken = intent.blockerKey || null;
+    const blocker = await identifyStrict(blockerSpoken, intent.blockerHint || '', stories.filter((s) => s.jiraKey !== blocked.key), linked.filter((s) => s.jiraKey !== blocked.key));
+    if (!blocker || blocker.key === blocked.key) return null;
+    const { confidence } = computeWriteConfidence({
+      operation: 'link', extractionCertainty: intent.certainty,
+      keySpoken: blocked.spoken && blocker.spoken, matchStrength: Math.min(blocked.strength, blocker.strength),
+    });
+    return deps.submit({
+      initiator: 'system', sourceMeetingId: meetingId, meetingTitle,
+      idempotencyKey: `meeting:${meetingId}:intent:blocked_by:${blocked.key}:${blocker.key}`,
+      transcriptSpan: intent.evidence ? { start: 0, end: intent.evidence.length, snippet: intent.evidence } : undefined,
+      evidence: intent.evidence || null, issueTitle: storyByKey.get(blocked.key)?.title || null, intent: intent.kind,
+      pushParams: { operation: 'link', args: { blockedKey: blocked.key, blockerKey: blocker.key } },
+      confidence,
+    });
+  }
   if (!key) {
     const best = matchItemToStories((intent.ticketHint || intent.text || '').trim(), stories)[0];
     if (!best || best.similarity < INTENT_MATCH_MIN) return null; // no ticket we can name with confidence: no row
     key = best.jiraKey;
     match = best.similarity;
+    keySpoken = false;
   }
   const story = storyByKey.get(key) || null;
   const base = {
@@ -275,6 +350,29 @@ async function proposeIntent(
   if (intent.kind === 'decision' && intent.text) {
     const { confidence } = computeWriteConfidence({ operation: 'comment', ...signals });
     return deps.submit({ ...base, pushParams: { operation: 'comment', args: { issueKey: key, comment: `Decision: ${intent.text}`, meetingTitle } }, confidence });
+  }
+  if (intent.kind === 'reassign' && intent.assigneeName) {
+    const who = await accountForName(intent.assigneeName);
+    if (who.accountId && story?.assigneeId === who.accountId) return null; // already theirs
+    const { confidence } = computeWriteConfidence({ operation: 'assign', ...signals, ownerIdentified: !!who.accountId });
+    return deps.submit({
+      ...base,
+      pushParams: { operation: 'assign', args: { issueKey: key, accountId: who.accountId, assigneeName: who.displayName, personId: who.personId } },
+      confidence,
+    });
+  }
+  if (intent.kind === 'sprint') {
+    const prefer = intent.sprint === 'next' ? 'next' : 'active';
+    const found = await deps.findSprint(key, prefer).catch((e: any) => ({ ok: false as const, reason: `Could not read sprints (${e?.message || 'Jira error'})` }));
+    if (found.ok && story?.sprintName && story.sprintName === found.sprintName) return null; // already in it
+    const { confidence } = computeWriteConfidence({ operation: 'sprint', ...signals });
+    return deps.submit({
+      ...base,
+      pushParams: found.ok
+        ? { operation: 'sprint', args: { issueKey: key, sprintId: found.sprintId, sprintName: found.sprintName } }
+        : { operation: 'sprint', args: { issueKey: key, sprintId: null, sprintName: null, reason: found.reason } },
+      confidence,
+    });
   }
   return null;
 }
@@ -311,8 +409,10 @@ interface PullDeps {
   defaultProject: () => string | null;
   cloudUrl: () => string | null;
   myAccountId: () => string | null;
-  attendeeEmails: () => Promise<string[]>;
-  accountIdFor: (email: string) => Promise<string | null>;
+  /** People met in the last 30 days (bounded), not including you. */
+  recentPeople: () => Promise<any[]>;
+  lookupEmail: (email: string) => Promise<string | null>;
+  saveLink: (personId: string, link: JiraLink) => Promise<void>;
   sprintFieldId: () => Promise<string | null>;
   fetchPage: (jql: string, fields: string[], token: string | null) => Promise<{ issues: any[]; nextPageToken: string | null }>;
   saveSnapshots: (s: JiraIssueSnapshot[]) => Promise<void>;
@@ -320,16 +420,27 @@ interface PullDeps {
   hasLinkedTask: (key: string) => Promise<boolean>;
 }
 
-const accountIdCache = new Map<string, string | null>();
-
-async function recentAttendeeEmails(): Promise<string[]> {
+async function recentPeople(): Promise<any[]> {
   const people = await getPeople().catch(() => [] as any[]);
   const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
   return people
-    .filter((p: any) => p?.email && p.lastMeeting && Date.parse(p.lastMeeting) >= cutoff && !p.isSelf)
+    .filter((p: any) => p?._id && p.lastMeeting && Date.parse(p.lastMeeting) >= cutoff && !p.isSelf)
     .sort((a: any, b: any) => Date.parse(b.lastMeeting) - Date.parse(a.lastMeeting))
-    .slice(0, PULL_MAX_ATTENDEES)
-    .map((p: any) => String(p.email).toLowerCase());
+    .slice(0, PULL_MAX_ATTENDEES);
+}
+
+/**
+ * Jira accountIds for the people you meet: stored id, then email lookup, then
+ * unresolved (recorded so the People tab can offer "Find in Jira").
+ */
+export async function resolveRecentPeopleAccountIds(now: Date = new Date()): Promise<string[]> {
+  const ids: string[] = [];
+  for (const person of await pullDeps.recentPeople().catch(() => [] as any[])) {
+    const res = await resolvePersonAccountId(person, (email) => pullDeps.lookupEmail(email), now);
+    if (res.update) await pullDeps.saveLink(person._id, res.update).catch(() => undefined);
+    if (res.accountId) ids.push(res.accountId);
+  }
+  return ids;
 }
 
 let sprintFieldCache: string | null | undefined;
@@ -344,13 +455,9 @@ const realPullDeps: PullDeps = {
   defaultProject: () => (getConfig() as any).jiraDefaultProject || null,
   cloudUrl: () => (getConfig() as any).jiraTokens?.cloudUrl || null,
   myAccountId: getJiraAccountId,
-  attendeeEmails: recentAttendeeEmails,
-  accountIdFor: async (email) => {
-    if (accountIdCache.has(email)) return accountIdCache.get(email) ?? null;
-    const id = await findJiraAccountIdByEmail(email);
-    accountIdCache.set(email, id);
-    return id;
-  },
+  recentPeople,
+  lookupEmail: findJiraAccountIdByEmail,
+  saveLink: async (personId, link) => { await setPersonJiraLink(personId, link); },
   sprintFieldId: async () => {
     if (sprintFieldCache === undefined) sprintFieldCache = await findSprintFieldId();
     return sprintFieldCache;
@@ -383,12 +490,7 @@ export async function runJiraPull(now: Date = new Date()): Promise<PullSummary> 
   pullRunning = true;
   try {
     const windowDays = computePullWindowDays(pullDeps.lastSuccessMs(), now.getTime());
-    const emails = await pullDeps.attendeeEmails().catch(() => [] as string[]);
-    const ids: string[] = [];
-    for (const email of emails) {
-      const id = await pullDeps.accountIdFor(email).catch(() => null);
-      if (id) ids.push(id);
-    }
+    const ids = await resolveRecentPeopleAccountIds(now);
     const me = pullDeps.myAccountId();
     const jql = buildPullJql({ windowDays, attendeeAccountIds: ids.filter((id) => id !== me), defaultProject: pullDeps.defaultProject() });
     const sprintFieldId = await pullDeps.sprintFieldId().catch(() => null);

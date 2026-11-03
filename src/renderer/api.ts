@@ -106,6 +106,12 @@ export const api = {
   jiraSetWriteMode: (mode: 'ask' | 'auto'): Promise<{ mode: 'ask' | 'auto'; threshold: number }> => inwiseAPI.jiraSetWriteMode(mode),
   jiraCreateInstead: (pendingId: string): Promise<{ ok: boolean; error?: string; key?: string }> => inwiseAPI.jiraCreateInstead(pendingId),
   jiraPullNow: () => inwiseAPI.jiraPullNow(),
+  jiraSearchUsers: (query: string): Promise<{ ok: boolean; error?: string; users?: { accountId: string; displayName: string; email: string | null }[] }> =>
+    inwiseAPI.jiraSearchUsers(query),
+  jiraResolveAssignee: (pendingId: string, user: { accountId: string; displayName?: string }): Promise<{ ok: boolean; error?: string }> =>
+    inwiseAPI.jiraResolveAssignee(pendingId, user),
+  peopleSetJiraAccount: (personId: string, user: { accountId: string; displayName?: string }) => inwiseAPI.peopleSetJiraAccount(personId, user),
+  peopleUnlinkJira: (personId: string) => inwiseAPI.peopleUnlinkJira(personId),
   jiraLinkTask: (taskId: string, jiraKey: string, jiraUrl: string) =>
     inwiseAPI.jiraLinkTask(taskId, jiraKey, jiraUrl),
   jiraMatchTasks: (items: any[], projectKey?: string) => inwiseAPI.jiraMatchTasks(items, projectKey),

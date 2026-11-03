@@ -152,6 +152,10 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   jiraSetWriteMode: (mode: 'ask' | 'auto') => ipcRenderer.invoke('jira:setWriteMode', mode),
   jiraCreateInstead: (pendingId: string) => ipcRenderer.invoke('jira:createInstead', pendingId),
   jiraPullNow: () => ipcRenderer.invoke('jira:pullNow'),
+  jiraSearchUsers: (query: string) => ipcRenderer.invoke('jira:searchUsers', query),
+  jiraResolveAssignee: (pendingId: string, user: { accountId: string; displayName?: string }) => ipcRenderer.invoke('jira:resolveAssignee', pendingId, user),
+  peopleSetJiraAccount: (personId: string, user: { accountId: string; displayName?: string }) => ipcRenderer.invoke('people:setJiraAccount', personId, user),
+  peopleUnlinkJira: (personId: string) => ipcRenderer.invoke('people:unlinkJira', personId),
   jiraLinkTask: (taskId: string, jiraKey: string, jiraUrl: string) => ipcRenderer.invoke('jira:linkTask', taskId, jiraKey, jiraUrl),
   jiraMatchTasks: (items: any[], projectKey?: string) => ipcRenderer.invoke('jira:matchTasks', items, projectKey),
 

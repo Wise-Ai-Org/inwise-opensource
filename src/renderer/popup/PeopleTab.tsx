@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { api, initials, useNav } from './nav';
 import { useReview } from './PopupShell';
 import type { CatchUpNote } from '../api';
+import { JiraLinkNote } from './JiraUserPicker';
 import './ollie.css';
 
 interface PersonRow {
@@ -13,6 +14,7 @@ interface PersonRow {
   actionItemCount: number;
   daysSinceLastContact: number | null;
   isSelf?: boolean;
+  jiraLink?: { status: string; displayName?: string | null } | null;
 }
 
 export default function PeopleTab() {
@@ -128,7 +130,8 @@ export default function PeopleTab() {
         <div className="pp-seclabel" style={{ padding: '4px 2px 0' }}>Your collaborators · {others.length}</div>
         <div className="pp-listcard">
           {others.map(p => (
-            <button key={p._id} className="pp-setrow" onClick={() => push({ kind: 'person', id: p._id, name: p.name })}>
+            <React.Fragment key={p._id}>
+            <button className="pp-setrow" onClick={() => push({ kind: 'person', id: p._id, name: p.name })}>
               <span className="pp-avatar">{initials(p.name)}</span>
               <div className="pp-grow">
                 <div className="pp-rowlabel">{p.name || 'Unnamed'}</div>
@@ -137,6 +140,8 @@ export default function PeopleTab() {
               </div>
               <span className="pp-chevron">›</span>
             </button>
+            <JiraLinkNote person={p} onChanged={() => reload(query.trim() || undefined)} />
+            </React.Fragment>
           ))}
         </div>
         </>

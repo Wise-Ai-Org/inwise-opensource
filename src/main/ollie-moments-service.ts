@@ -18,6 +18,8 @@ import { listPending } from './sor-pending-approvals';
 import { getWriteEntry, listByMeeting as sorListByMeeting, listRecent as sorListRecent } from './sor-write-log';
 import { isJiraConnected } from './jira-client';
 import { listCachedIssues, type JiraIssueSnapshot } from './jira-pull';
+import { changelogCandidates } from './ollie-jira';
+import { statusChangesForIssues } from './jira-changelog';
 import { listActionExecutionsUpdatedSince } from './action-execution-log';
 import { getLastSlackPollAt } from './slack-poller';
 import { getSlackConnectionInfo } from './slack-client';
@@ -29,6 +31,9 @@ import {
   buildProcessed,
   buildWrapUp,
   computeCatchUp,
+  findLastMet,
+  identitiesMatch,
+  jiraAccountIdResolver,
   summarizePendingApproval,
   type CalendarEventLike,
   type ContentContext,
@@ -195,6 +200,22 @@ export async function loadPendingApprovals(): Promise<PendingJiraApproval[]> {
   return out;
 }
 
+/** Changelog for the few issues "Their Jira" could show as moved; cached per issue + updated time. */
+async function loadPrepStatusChanges(ctx: ContentContext, event: CalendarEventLike): Promise<Map<string, any[] | null> | undefined> {
+  if (!ctx.jiraIssues || ctx.jiraIssues.length === 0) return undefined;
+  const others = (event.attendees || []).filter((a) => a && !ctx.isSelf(a));
+  const lastMet = findLastMet(ctx, event, others);
+  const candidates = changelogCandidates({
+    issues: ctx.jiraIssues,
+    attendees: others,
+    lastMetMs: lastMet ? toMs(lastMet.date) : null,
+    identitiesMatch,
+    accountIdFor: jiraAccountIdResolver(ctx.people),
+  });
+  if (candidates.length === 0) return undefined;
+  try { return await statusChangesForIssues(candidates); } catch { return undefined; }
+}
+
 async function loadJiraToday(now: Date, meetings: any[], allTasks: any[]): Promise<{ writesToday: any[]; pendingCount: number; linkedKeysToday: string[] } | null> {
   if (!isJiraConnected()) return null;
   const dayStart = startOfLocalDay(now).getTime();
@@ -243,6 +264,7 @@ export async function getOllieMoment(now: Date = new Date()): Promise<OllieMomen
       draftAgenda: draftAgendas.get(event.id) || null,
       pendingApprovals: await loadPendingApprovals(),
       recordArmed: armedEvents.has(event.id),
+      jiraStatusChanges: await loadPrepStatusChanges(ctx, event),
     });
     return { kind: 'prep', key: selected.key, generatedAt, prep };
   }
@@ -349,6 +371,7 @@ async function firePrep(event: CalendarEventLike): Promise<void> {
       draftAgenda: draftAgendas.get(event.id) || null,
       pendingApprovals: await loadPendingApprovals(),
       recordArmed: armedEvents.has(event.id),
+      jiraStatusChanges: await loadPrepStatusChanges(ctx, event),
     });
     // Prep is by definition before the meeting, so it is never queued.
     showNotification(prepNotificationCopy(prep), { kind: 'prep', key, eventId: event.id }, ['Open prep', 'Record at start'], (index) => {

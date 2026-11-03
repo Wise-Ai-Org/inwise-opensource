@@ -15,7 +15,7 @@ import { randomUUID as uuidv4 } from 'crypto';
 import Datastore from '@seald-io/nedb';
 
 export type TargetSystem = 'jira'; // future: 'salesforce' | 'hubspot' | 'linear'
-export type SorOperation = 'create' | 'update' | 'transition' | 'comment';
+export type SorOperation = 'create' | 'update' | 'transition' | 'comment' | 'assign' | 'link' | 'sprint';
 export type ApprovalPath = 'auto' | 'user' | 'opt-in-gated';
 /** Error message stamped on an entry the user skipped/rejected. */
 export const USER_REJECTED = 'User rejected';
@@ -53,6 +53,10 @@ export interface WriteProvenance {
   evidence?: string | null;
   /** Ticket intent kind from the meeting (done, due_moved, decision, new). */
   intent?: string | null;
+  /** Why this held write cannot be approved yet ("Pick Jordan Lee in Jira first"), or null. */
+  blockedReason?: string | null;
+  /** What the user must do first: find a Jira user. */
+  needs?: 'jira-user' | null;
 }
 
 /**
@@ -63,7 +67,13 @@ export type PushParams =
   | { operation: 'create'; args: { title: string; description?: string; priority?: string; dueDate?: string; projectKey: string } }
   | { operation: 'update'; args: { issueKey: string; updates: { title?: string; description?: string; priority?: string; dueDate?: string } } }
   | { operation: 'transition'; args: { issueKey: string; targetStatus: string } }
-  | { operation: 'comment'; args: { issueKey: string; comment: string; meetingTitle?: string } };
+  | { operation: 'comment'; args: { issueKey: string; comment: string; meetingTitle?: string } }
+  /** accountId null = the person is not resolved to Jira yet; the write cannot be approved until it is. */
+  | { operation: 'assign'; args: { issueKey: string; accountId: string | null; assigneeName: string; personId?: string | null } }
+  /** blockedKey "is blocked by" blockerKey (issue link type "Blocks"). */
+  | { operation: 'link'; args: { blockedKey: string; blockerKey: string } }
+  /** sprintId null = no board or open sprint was found; `reason` says why. */
+  | { operation: 'sprint'; args: { issueKey: string; sprintId: number | null; sprintName: string | null; reason?: string | null } };
 
 export interface SorWriteEntry {
   _id: string;
@@ -88,6 +98,8 @@ export interface SorWriteEntry {
   issueTitle?: string | null;
   evidence?: string | null;
   intent?: string | null;
+  blockedReason?: string | null;
+  needs?: 'jira-user' | null;
   createdAt: string;             // ISO
   completedAt: string | null;    // ISO, set when result transitions to success|failed
   retryCount: number;
@@ -168,6 +180,8 @@ export async function recordWrite(input: RecordWriteInput): Promise<string> {
     issueTitle: input.provenance?.issueTitle ?? null,
     evidence: input.provenance?.evidence ?? null,
     intent: input.provenance?.intent ?? null,
+    blockedReason: input.provenance?.blockedReason ?? null,
+    needs: input.provenance?.needs ?? null,
     createdAt: new Date().toISOString(),
     completedAt: null,
     retryCount: 0,
@@ -228,6 +242,9 @@ export async function applyApprovalEdit(
     pushParams?: PushParams;
     approvalPath?: ApprovalPath;
     result?: SorWriteResult;
+    blockedReason?: string | null;
+    needs?: 'jira-user' | null;
+    issueTitle?: string | null;
   },
 ): Promise<void> {
   const db = getDb();
@@ -237,6 +254,9 @@ export async function applyApprovalEdit(
   if (updates.pushParams !== undefined) set.pushParams = updates.pushParams;
   if (updates.approvalPath !== undefined) set.approvalPath = updates.approvalPath;
   if (updates.result !== undefined) set.result = updates.result;
+  if (updates.blockedReason !== undefined) set.blockedReason = updates.blockedReason;
+  if (updates.needs !== undefined) set.needs = updates.needs;
+  if (updates.issueTitle !== undefined) set.issueTitle = updates.issueTitle;
   if (Object.keys(set).length === 0) return;
   await db.updateAsync({ _id: id }, { $set: set }, {});
 }

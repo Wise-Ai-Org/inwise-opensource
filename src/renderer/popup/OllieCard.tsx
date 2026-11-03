@@ -6,6 +6,7 @@ import { api, fmtDueDate, fmtTime, useNav, OLLIE_SLACK_SYNCED_EVENT } from './na
 import { useReview } from './PopupShell';
 import { buildMeetingSlackRecap } from './slack-recap';
 import { retrySavedRecording } from './recording-recovery';
+import { JiraUserPicker } from './JiraUserPicker';
 import './ollie.css';
 
 // Ollie moments (docs/OLLIE_MOMENTS.md): one proactive card under the date
@@ -115,6 +116,7 @@ function ApprovalRows({ rows, onDone }: { rows: PendingJiraApproval[]; onDone: (
   const { busy, run } = useBusy();
   const [gone, setGone] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [picking, setPicking] = useState<string | null>(null);
   return (
     <>
       {rows.map(a => {
@@ -131,17 +133,33 @@ function ApprovalRows({ rows, onDone }: { rows: PendingJiraApproval[]; onDone: (
                 {a.meetingTitle && !a.evidence ? ` · from ${a.meetingTitle}` : ''}
               </div>
               {a.evidence && <div className="ol-quote">“{a.evidence}”</div>}
+              {a.blockedReason && !settled && <div className="ol-row-sub ol-warn-text">{a.blockedReason}.</div>}
               {errors[a.id] && <div className="ol-row-sub ol-warn-text">{errors[a.id]}</div>}
+              {picking === a.id && (
+                <JiraUserPicker
+                  initialQuery={a.assigneeName || ''}
+                  onCancel={() => setPicking(null)}
+                  onPick={async u => {
+                    const res = await api().jiraResolveAssignee?.(a.id, { accountId: u.accountId, displayName: u.displayName });
+                    if (res && res.ok === false) { setErrors(e => ({ ...e, [a.id]: res.error || 'Could not use that person.' })); return; }
+                    setPicking(null);
+                    onDone();
+                  }}
+                />
+              )}
             </div>
             <div className="ol-actions" onClick={e => e.stopPropagation()}>
               {settled ? <span className="ol-chip">{settled}</span> : (
                 <>
-                  <button className="ol-btn ol-primary" disabled={busy[a.id]} onClick={() => run(a.id, async () => {
+                  {a.needs === 'jira-user' && picking !== a.id && (
+                    <button className="ol-btn ol-primary" onClick={() => setPicking(a.id)}>Find in Jira</button>
+                  )}
+                  {!a.blockedReason && <button className="ol-btn ol-primary" disabled={busy[a.id]} onClick={() => run(a.id, async () => {
                     const res = await api().sorApprove?.(a.id);
                     if (res && res.ok === false) setErrors(e => ({ ...e, [a.id]: res.error || 'Jira did not accept the change.' }));
                     else setGone(g => ({ ...g, [a.id]: 'Approved' }));
                     onDone();
-                  })}>Approve</button>
+                  })}>Approve</button>}
                   {a.suggestion && (
                     <button className="ol-btn" disabled={busy[a.id]} onClick={() => run(a.id, async () => {
                       const res = await api().jiraCreateInstead?.(a.id);

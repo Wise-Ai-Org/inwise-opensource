@@ -1153,7 +1153,7 @@ function ApprovalGateSettings() {
 
 // ── Integrations status block (US-003) ──────────────────────────────────────
 
-type SorOp = 'create' | 'update' | 'transition' | 'comment';
+type SorOp = 'create' | 'update' | 'transition' | 'comment' | 'assign' | 'link' | 'sprint';
 type SorResult = 'pending' | 'success' | 'failed' | 'pending-approval' | 'retrying';
 type SorSystem = 'jira';
 
@@ -1193,6 +1193,9 @@ const SOR_OP_LABEL: Record<SorOp, string> = {
   update: 'Updated',
   transition: 'Transitioned',
   comment: 'Commented',
+  assign: 'Assigned',
+  link: 'Linked',
+  sprint: 'Added to sprint',
 };
 
 const SOR_OP_COLOR: Record<SorOp, string> = {
@@ -1200,6 +1203,9 @@ const SOR_OP_COLOR: Record<SorOp, string> = {
   update: '#1D4ED8',
   transition: '#7C3AED',
   comment: 'var(--owl-deep-teal)',
+  assign: '#1D4ED8',
+  link: '#7C3AED',
+  sprint: 'var(--owl-teal)',
 };
 
 function sorOneLineSummary(entry: SorWriteEntry): string {

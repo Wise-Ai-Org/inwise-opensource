@@ -7,6 +7,7 @@ import type { JiraIssueSnapshot } from './jira-pull';
 import type { JiraTicketRow, MorningJira, PrepJira, WrapJira } from './ollie-moments-types';
 import { startOfLocalDay, toMs } from './ollie-moments';
 import { spokenIssueKeys } from './jira-confidence';
+import { formatJiraDate } from './jira-format';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const JIRA_STALE_DAYS = 7;
@@ -43,16 +44,72 @@ function personMatches(p: { name: string; email: string | null } | null, attende
 
 // ── Before a meeting ──────────────────────────────────────────────────────
 
+export interface StatusChangeLike { at: string; from: string | null; to: string | null }
+
+/** Newest status change after `sinceMs`, or null. */
+export function lastStatusMoveSince(changes: StatusChangeLike[], sinceMs: number, nowMs = Date.now()): StatusChangeLike | null {
+  let best: StatusChangeLike | null = null;
+  for (const c of changes) {
+    const at = toMs(c.at);
+    if (at === null || at <= sinceMs || at > nowMs) continue;
+    if (!best || at > (toMs(best.at) ?? 0)) best = c;
+  }
+  return best;
+}
+
+/** Attendee who owns the issue: a stored Jira accountId first, then name/email. */
+export function issueOwnerAttendee(
+  i: JiraIssueSnapshot,
+  attendees: string[],
+  match: IdentityMatch,
+  accountIdFor?: (attendee: string) => string | null,
+): string | null {
+  if (i.assignee?.accountId && accountIdFor) {
+    const byId = attendees.find((a) => accountIdFor(a) === i.assignee!.accountId);
+    if (byId) return byId;
+  }
+  return attendees.find((a) => {
+    if (accountIdFor && accountIdFor(a)) return false; // linked people match by id only
+    return personMatches(i.assignee, a, match);
+  }) || null;
+}
+
+/**
+ * The few issues the prep card could show as "moved": attendees' open,
+ * unblocked issues updated since you last met, newest first. Only these get a
+ * changelog fetch.
+ */
+export function changelogCandidates(input: {
+  issues: JiraIssueSnapshot[] | null;
+  attendees: string[];
+  lastMetMs: number | null;
+  identitiesMatch: IdentityMatch;
+  accountIdFor?: (attendee: string) => string | null;
+  max?: number;
+}): JiraIssueSnapshot[] {
+  if (!input.issues || input.lastMetMs === null) return [];
+  return input.issues
+    .filter((i) => !i.assignedToMe && isOpen(i) && !/block/i.test(i.status || '') && i.blockedBy.length === 0)
+    .filter((i) => (toMs(i.updatedAt) ?? 0) > input.lastMetMs!)
+    .filter((i) => issueOwnerAttendee(i, input.attendees, input.identitiesMatch, input.accountIdFor) !== null)
+    .sort((a, b) => (toMs(b.updatedAt) ?? 0) - (toMs(a.updatedAt) ?? 0))
+    .slice(0, input.max ?? PREP_JIRA_MAX);
+}
+
 export function buildPrepJira(input: {
   issues: JiraIssueSnapshot[] | null;
   attendees: string[];
   lastMetMs: number | null;
   now: Date;
   identitiesMatch: IdentityMatch;
+  /** Stored Jira accountId per attendee (People > Find in Jira, or an email match). */
+  accountIdFor?: (attendee: string) => string | null;
+  /** Changelog status changes per key; null = the fetch failed (use the category heuristic). */
+  statusChanges?: Map<string, StatusChangeLike[] | null>;
 }): PrepJira | null {
   if (!input.issues || input.issues.length === 0 || input.attendees.length === 0) return null;
   const now = input.now.getTime();
-  const owned = (i: JiraIssueSnapshot) => input.attendees.find((a) => personMatches(i.assignee, a, input.identitiesMatch)) || null;
+  const owned = (i: JiraIssueSnapshot) => issueOwnerAttendee(i, input.attendees, input.identitiesMatch, input.accountIdFor);
   const blocked: JiraTicketRow[] = [];
   const yours: JiraTicketRow[] = [];
   const moved: JiraTicketRow[] = [];
@@ -70,10 +127,21 @@ export function buildPrepJira(input: {
         blocked.push(row(i, 'blocked', detail, owner));
         continue;
       }
-      const changed = toMs(i.statusCategoryChangedAt);
-      if (input.lastMetMs !== null && changed !== null && changed > input.lastMetMs && changed <= now) {
-        moved.push(row(i, 'moved', `Moved to ${i.status} since you last met`, owner));
-        continue;
+      const changes = input.statusChanges?.get(i.key);
+      if (input.lastMetMs !== null && Array.isArray(changes)) {
+        // Changelog: any status change, including within a category (In Review to QA).
+        const move = lastStatusMoveSince(changes, input.lastMetMs, now);
+        if (move) {
+          moved.push(row(i, 'moved', move.from ? `Moved from ${move.from} to ${move.to || i.status} since you last met` : `Moved to ${move.to || i.status} since you last met`, owner));
+          continue;
+        }
+      } else {
+        // No changelog (not fetched or the call failed): status category change time.
+        const changed = toMs(i.statusCategoryChangedAt);
+        if (input.lastMetMs !== null && changed !== null && changed > input.lastMetMs && changed <= now) {
+          moved.push(row(i, 'moved', `Moved to ${i.status} since you last met`, owner));
+          continue;
+        }
       }
       const updated = toMs(i.updatedAt);
       if (isOpen(i) && updated !== null && now - updated >= JIRA_STALE_DAYS * DAY_MS) {
@@ -84,7 +152,8 @@ export function buildPrepJira(input: {
     // Your open tickets that involve them: they reported it or commented on it.
     if (i.assignedToMe && isOpen(i)) {
       const who = input.attendees.find((a) =>
-        personMatches(i.reporter, a, input.identitiesMatch)
+        (!!input.accountIdFor && !!i.reporter && input.accountIdFor(a) === i.reporter.accountId)
+        || personMatches(i.reporter, a, input.identitiesMatch)
         || i.comments.some((c) => c.authorName && input.identitiesMatch(c.authorName, a)));
       if (who) yours.push(row(i, 'yours', `Yours · ${i.status}`, null));
     }
@@ -189,9 +258,12 @@ export function describeWrite(w: WriteLike): string {
   }
   if (w.operation === 'update') {
     const fields = Object.keys(p.updates || {});
-    if (fields.length === 1 && fields[0] === 'dueDate') return `Moved the due date on ${key} to ${p.updates.dueDate}`;
+    if (fields.length === 1 && fields[0] === 'dueDate') return `Moved the due date on ${key} to ${formatJiraDate(p.updates.dueDate)}`;
     return `Updated ${key}`;
   }
+  if (w.operation === 'assign') return `Assigned ${key}${p.assigneeName ? ` to ${p.assigneeName}` : ''}`;
+  if (w.operation === 'link') return `Marked ${p.blockedKey || key} as blocked by ${p.blockerKey || 'another ticket'}`;
+  if (w.operation === 'sprint') return `Added ${key}${p.sprintName ? ` to ${p.sprintName}` : ' to a sprint'}`;
   return `Commented on ${key}`;
 }
 

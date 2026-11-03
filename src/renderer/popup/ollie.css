@@ -146,3 +146,21 @@ button.ol-row:hover, .ol-row.ol-clickable:hover { border-color: var(--owl-mint);
 .ol-quote { margin-top: 3px; color: var(--text-muted); font-style: italic; overflow-wrap: anywhere; }
 .ol-row .pp-link.ol-inline-link { padding: 0; margin: 0; font: inherit; text-align: left; }
 .ol-warn-text { color: #b4570b; }
+
+/* Find in Jira (People row, person page, recap and Review rows) */
+.ol-jira-note { padding: 4px 12px 8px 50px; font-size: var(--type-meta); color: var(--text-muted); }
+.ol-jira-note.ol-jira-note-inline { padding: 10px 0 0; }
+.ol-jira-note-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ol-picker { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.ol-picker-input {
+  min-height: 28px; padding: 3px 8px;
+  border: 1px solid var(--ol-row-line, #d3e6df); border-radius: var(--radius-control);
+  font: 500 var(--type-meta) var(--font-ui); color: var(--owl-deep-teal); background: var(--surface-status, #e9f2ee);
+}
+.ol-picker-option {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 6px 8px; text-align: left; cursor: pointer;
+  border: 1px solid var(--ol-row-line, #d3e6df); border-radius: var(--radius-control); background: #fff;
+  font: inherit;
+}
+.ol-picker-option:hover:not(:disabled) { border-color: var(--owl-mint); }

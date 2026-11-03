@@ -39,7 +39,7 @@ import {
   getAllTasksForDedup, getMeetingsById, appendTaskMention,
   mergeTasksManual, undoSplitMention, resolvePendingDedup, resolveTaskCreationDedup,
   bumpTaskPriority, dismissTaskNudge,
-  getTaskById, onInsightsSaved, remapMeetingItemTask,
+  getTaskById, onInsightsSaved, remapMeetingItemTask, setPersonJiraLink,
 } from './database';
 import { decideMention, retrieveCandidates, classifyCandidates, buildMentionThread, providerModelLabel } from './task-dedup';
 import { ASK_THRESHOLD, AUTO_MERGE_THRESHOLD } from './dedup-constants';
@@ -48,11 +48,11 @@ import { randomUUID } from 'crypto';
 import { extractChannel, trimWav, wavBufferToSamples, stitchWavBuffers } from '@inwise/desktop-shared';
 import {
   connectJira, disconnectJira, isJiraConnected, getJiraInfo,
-  getJiraProjects, getJiraStories,
+  getJiraProjects, getJiraStories, searchJiraUsers, JiraHttpError,
 } from './jira-client';
 import {
   submitJiraWrite, approveHeldWrite, rejectHeldWrite, retryJiraWrite, onTaskReviewed,
-  linkedIssueKey, linkTaskToIssue,
+  linkedIssueKey, linkTaskToIssue, resolveHeldAssignee,
 } from './jira-writes';
 import { afterInsightsSaved, replanTaskAfterDedup, runJiraPull, taskEditKey } from './jira-sync';
 import { initJiraCache, PULL_INTERVAL_MS } from './jira-pull';
@@ -2414,6 +2414,36 @@ ipcMain.handle('jira:linkTask', async (_e, taskId: string, jiraKey: string, jira
   } catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('jira:getWriteMode', () => getJiraWritePrefs());
+// "Find in Jira": people search by name (needs the read:jira-user scope).
+ipcMain.handle('jira:searchUsers', async (_e, query: string) => {
+  try { return { ok: true, users: await searchJiraUsers(query) }; }
+  catch (e: any) {
+    const denied = e instanceof JiraHttpError && (e.status === 401 || e.status === 403);
+    return { ok: false, error: denied ? 'Inwise is not allowed to search Jira people yet. Reconnect Jira in Settings.' : e.message };
+  }
+});
+// Link a person to a Jira account (picked by the user), or unlink.
+ipcMain.handle('people:setJiraAccount', async (_e, personId: string, user: { accountId: string; displayName?: string }) => {
+  if (!personId || !user?.accountId) return { ok: false, error: 'Pick a Jira user' };
+  const person = await setPersonJiraLink(personId, { status: 'linked', accountId: user.accountId, displayName: user.displayName || null, checkedAt: new Date().toISOString() });
+  return { ok: !!person, person };
+});
+ipcMain.handle('people:unlinkJira', async (_e, personId: string) => {
+  const person = await setPersonJiraLink(personId, { status: 'unlinked', accountId: null, displayName: null, checkedAt: new Date().toISOString() });
+  return { ok: !!person, person };
+});
+// "Find in Jira" on an "Assign PILOT-40 to Jordan Lee?" row: fill in the account
+// and remember it on the person. The row still waits for Approve.
+ipcMain.handle('jira:resolveAssignee', async (_e, pendingId: string, user: { accountId: string; displayName?: string }) => {
+  const entry = await sorGetWriteEntry(pendingId);
+  const args: any = entry?.pushParams?.operation === 'assign' ? entry.pushParams.args : null;
+  if (!args) return { ok: false, error: 'That row is no longer waiting' };
+  const res = await resolveHeldAssignee(pendingId, user.accountId, user.displayName || args.assigneeName);
+  if (res.ok && args.personId) {
+    await setPersonJiraLink(args.personId, { status: 'linked', accountId: user.accountId, displayName: user.displayName || null, checkedAt: new Date().toISOString() });
+  }
+  return res;
+});
 ipcMain.handle('jira:setWriteMode', (_e, mode: 'ask' | 'auto') => setJiraWriteMode(mode === 'auto' ? 'auto' : 'ask'));
 ipcMain.handle('jira:pullNow', async () => runJiraPull());
 // "Update PILOT-42 instead?" -> the user wants a new ticket after all (a click).

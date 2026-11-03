@@ -7,8 +7,10 @@
 import { buildDailyBriefing } from './daily-briefing';
 import { fuzzyNameScore } from './fuzzy-name';
 import { localDayKey, startOfLocalDay, toMs } from './ollie-moments';
-import { buildMorningJira, buildPrepJira, buildWrapJira, type WriteLike } from './ollie-jira';
+import { buildMorningJira, buildPrepJira, buildWrapJira, type StatusChangeLike, type WriteLike } from './ollie-jira';
+import { storedAccountId } from './jira-people';
 import type { JiraIssueSnapshot } from './jira-pull';
+import { describeJiraChange } from './jira-format';
 import type {
   AttendeeOwes,
   CatchUpNote,
@@ -329,11 +331,22 @@ export function findLastMet(ctx: ContentContext, event: CalendarEventLike, other
   return best ? { meetingId: best._id, title: best.title || '', date: best.date } : null;
 }
 
+/** Attendee -> stored Jira accountId of the matching person (no network). */
+export function jiraAccountIdResolver(people: any[]): (attendee: string) => string | null {
+  const memo = new Map<string, string | null>();
+  return (attendee: string) => {
+    if (!memo.has(attendee)) memo.set(attendee, storedAccountId(resolvePerson(attendee, people)));
+    return memo.get(attendee) ?? null;
+  };
+}
+
 export function buildPrep(ctx: ContentContext & {
   event: CalendarEventLike;
   draftAgenda: string[] | null;
   pendingApprovals: PendingJiraApproval[];
   recordArmed: boolean;
+  /** Changelog status changes for the candidate issues (see jira-changelog.ts). */
+  jiraStatusChanges?: Map<string, StatusChangeLike[] | null>;
 }): PrepContent {
   const { event, now } = ctx;
   const start = toMs(event.startTime) ?? now.getTime();
@@ -375,38 +388,30 @@ export function buildPrep(ctx: ContentContext & {
       lastMetMs: lastMet ? toMs(lastMet.date) : null,
       now,
       identitiesMatch,
+      accountIdFor: jiraAccountIdResolver(ctx.people),
+      statusChanges: ctx.jiraStatusChanges,
     }),
   };
 }
 
 // ── Processed ──────────────────────────────────────────────────────────────
 
-const STATUS_WORDS: Record<string, string> = { completed: 'Done', done: 'Done', inprogress: 'In Progress', todo: 'To Do' };
-const statusWord = (s: string) => STATUS_WORDS[String(s || '').toLowerCase().replace(/[\s_-]+/g, '')] || s;
-
 export function summarizePendingApproval(
   p: { _id: string; pushParams: any; meetingTitle?: string | null; createdAt: string },
   meetingId: string | null,
-  entry?: { issueTitle?: string | null; evidence?: string | null; suggestion?: string | null; intent?: string | null; confidence?: number | null; targetRecordUrl?: string | null } | null,
+  entry?: {
+    issueTitle?: string | null; evidence?: string | null; suggestion?: string | null; intent?: string | null;
+    confidence?: number | null; targetRecordUrl?: string | null; blockedReason?: string | null; needs?: 'jira-user' | null;
+  } | null,
 ): PendingJiraApproval {
   const params = p.pushParams || {};
   const args = params.args || {};
   const op = params.operation || 'create';
-  const summary =
-    entry?.suggestion ? entry.suggestion
-      : op === 'create' ? `Create ticket “${args.title || 'issue'}”?`
-        : op === 'update'
-          ? (args.updates?.dueDate && Object.keys(args.updates).length === 1
-            ? `Move the due date on ${args.issueKey || 'issue'} to ${args.updates.dueDate}?`
-            : `Update ${args.issueKey || 'issue'}${args.updates?.title ? `: ${args.updates.title}` : ''}?`)
-          : op === 'transition' ? `Move ${args.issueKey || 'issue'} to ${statusWord(args.targetStatus) || 'a new status'}?`
-            : entry?.intent === 'decision' ? `Add the decision to ${args.issueKey || 'issue'} as a comment?`
-              : `Add a comment on ${args.issueKey || 'issue'}?`;
   return {
     id: p._id,
     operation: op,
-    summary,
-    issueKey: args.issueKey || null,
+    summary: describeJiraChange(params, { intent: entry?.intent, suggestion: entry?.suggestion }),
+    issueKey: args.issueKey || args.blockedKey || null,
     meetingId,
     meetingTitle: p.meetingTitle || null,
     createdAt: p.createdAt,
@@ -416,6 +421,9 @@ export function summarizePendingApproval(
     intent: entry?.intent ?? null,
     confidence: typeof entry?.confidence === 'number' ? entry.confidence : null,
     url: entry?.targetRecordUrl ?? null,
+    blockedReason: entry?.blockedReason ?? null,
+    needs: entry?.needs ?? null,
+    assigneeName: op === 'assign' ? args.assigneeName || null : null,
   };
 }
 

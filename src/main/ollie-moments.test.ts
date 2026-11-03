@@ -84,7 +84,7 @@ const prep: PrepContent = {
     owesYou: [{ kind: 'task', taskId: 't1', meetingId: null, text: 'Send pricing deck', dueDate: '2026-10-30', daysLate: 3 }],
     youOwe: [{ kind: 'task', taskId: 't2', meetingId: null, text: 'Review contract', dueDate: null, daysLate: null }],
   }],
-  pendingApprovals: [{ id: 's1', operation: 'create', summary: 'Create', issueKey: null, meetingId: 'm', meetingTitle: null, createdAt: '', issueTitle: null, evidence: null, suggestion: null, intent: null, confidence: null, url: null }],
+  pendingApprovals: [{ id: 's1', operation: 'create', summary: 'Create', issueKey: null, meetingId: 'm', meetingTitle: null, createdAt: '', issueTitle: null, evidence: null, suggestion: null, intent: null, confidence: null, url: null, blockedReason: null, needs: null, assigneeName: null }],
   jira: null,
 };
 assert.deepEqual(prepNotificationCopy(prep), {

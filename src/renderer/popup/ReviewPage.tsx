@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { describeJiraChange, friendlyDatesIn } from '../../main/jira-format';
+import { JiraUserPicker } from './JiraUserPicker';
 import { api, useNav } from './nav';
 import { useReview } from './PopupShell';
 import type { ApprovalItem, UnknownVoiceItem, MergeCandidateItem, PendingTaskItem } from './useReviewItems';
@@ -34,28 +36,15 @@ function saveDismissed(s: Set<string>) {
 
 // ── Approval card ────────────────────────────────────────────────────────────
 
-const statusWord = (s: string) => {
-  const k = String(s || '').toLowerCase().replace(/[\s_-]+/g, '');
-  if (['done', 'completed', 'complete', 'closed', 'resolved'].includes(k)) return 'Done';
-  if (['inprogress', 'doing', 'started'].includes(k)) return 'In Progress';
-  if (['todo', 'open', 'backlog'].includes(k)) return 'To Do';
-  return s;
-};
-
 function describeApproval(row: ApprovalItem): { chip: string; title: string; detail: string } {
   const pp = row.pending.pushParams;
-  switch (pp.operation) {
-    case 'create':
-      return { chip: 'Jira · new task', title: `Create: "${pp.args.title}"`, detail: pp.args.description || '' };
-    case 'update':
-      return { chip: `Jira · update ${pp.args.issueKey}`, title: pp.args.updates.title || `Update ${pp.args.issueKey}`, detail: pp.args.updates.description || '' };
-    case 'transition':
-      return { chip: `Jira · ${pp.args.issueKey}`, title: `Move ${pp.args.issueKey} to ${statusWord(pp.args.targetStatus)}`, detail: row.writeEntry?.issueTitle || '' };
-    case 'comment':
-      return { chip: `Jira · comment on ${pp.args.issueKey}`, title: 'Add comment', detail: pp.args.comment };
-    default:
-      return { chip: 'Jira', title: 'Pending write', detail: '' };
-  }
+  const key = pp.args?.issueKey || pp.args?.blockedKey;
+  const title = describeJiraChange(pp, { intent: row.writeEntry?.intent });
+  const detail = pp.operation === 'create' ? pp.args.description || ''
+    : pp.operation === 'comment' ? pp.args.comment
+      : pp.operation === 'update' && pp.args.updates?.description ? pp.args.updates.description
+        : row.writeEntry?.issueTitle || '';
+  return { chip: key ? `Jira · ${key}` : 'Jira · new ticket', title, detail: friendlyDatesIn(detail) };
 }
 
 function ApprovalCard({ row, onDone }: { row: ApprovalItem; onDone: () => void }) {
@@ -89,6 +78,9 @@ function ApprovalCard({ row, onDone }: { row: ApprovalItem; onDone: () => void }
     if (res && res.ok === false && res.error) setError(res.error);
   });
   const createInstead = () => act(() => api().jiraCreateInstead?.(row.pending._id));
+  const [picking, setPicking] = useState(false);
+  const blockedReason: string | null = row.writeEntry?.blockedReason || null;
+  const needsUser = row.writeEntry?.needs === 'jira-user';
   const suggestion: string | null = row.writeEntry?.suggestion || null;
 
   return (
@@ -114,7 +106,20 @@ function ApprovalCard({ row, onDone }: { row: ApprovalItem; onDone: () => void }
       )}
       {suggestion && <div className="pp-meta" style={{ marginTop: 6, color: 'var(--owl-teal, #0f7894)' }}>{suggestion} It looks like the same work.</div>}
       {row.writeEntry?.evidence && <div className="pp-meta" style={{ marginTop: 4, fontStyle: 'italic' }}>“{row.writeEntry.evidence}”</div>}
+      {blockedReason && <div className="pp-meta" style={{ marginTop: 6, color: '#b4570b' }}>{blockedReason}.</div>}
       {error && <div className="pp-meta" style={{ marginTop: 6, color: '#b4570b' }}>{error}</div>}
+      {picking && (
+        <JiraUserPicker
+          initialQuery={pp.args?.assigneeName || ''}
+          onCancel={() => setPicking(false)}
+          onPick={async u => {
+            const res = await api().jiraResolveAssignee?.(row.pending._id, { accountId: u.accountId, displayName: u.displayName });
+            if (res && res.ok === false) { setError(res.error || 'Could not use that person.'); return; }
+            setPicking(false);
+            onDone();
+          }}
+        />
+      )}
       <div className="pp-row" style={{ marginTop: 9, gap: 8 }}>
         {editing ? (
           <>
@@ -125,7 +130,8 @@ function ApprovalCard({ row, onDone }: { row: ApprovalItem; onDone: () => void }
           </>
         ) : (
           <>
-            <button className="pp-btn pp-solid" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={approveChecked}>Approve</button>
+            {needsUser && !picking && <button className="pp-btn pp-solid" style={{ flex: 1, padding: '6px 0' }} onClick={() => setPicking(true)}>Find in Jira</button>}
+            {!blockedReason && <button className="pp-btn pp-solid" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={approveChecked}>Approve</button>}
             {suggestion && <button className="pp-btn pp-ghost" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={createInstead}>Create new</button>}
             {editable && <button className="pp-btn pp-ghost" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={startEdit}>Edit</button>}
             <button className="pp-btn pp-ghost pp-danger" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={reject}>Reject</button>

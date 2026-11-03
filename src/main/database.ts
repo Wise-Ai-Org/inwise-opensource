@@ -2176,6 +2176,14 @@ export async function updatePersonProfile(id: string, updates: { bio?: string; r
   await peopleDb.updateAsync({ _id: id }, { $set: updates }, {});
 }
 
+/** Store (or clear with null) the person's Jira account link (jira-people.ts). */
+export async function setPersonJiraLink(id: string, link: Record<string, any> | null): Promise<any> {
+  if (!id) return null;
+  if (link) await peopleDb.updateAsync({ _id: id }, { $set: { jiraLink: link } }, {});
+  else await peopleDb.updateAsync({ _id: id }, { $unset: { jiraLink: true } }, {});
+  return peopleDb.findOneAsync({ _id: id });
+}
+
 export async function renamePerson(id: string, name: string): Promise<any> {
   const person: any = await peopleDb.findOneAsync({ _id: id });
   const nextName = String(name || '').trim();

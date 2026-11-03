@@ -200,7 +200,12 @@ export async function connectJira(): Promise<{ ok: boolean; error?: string }> {
     });
 
     server.listen(17291, () => {
-      const scopes = 'read:jira-work write:jira-work offline_access';
+      // read:jira-user: user search (attendee lookup, "Find in Jira").
+      // Board/sprint scopes: "Add PILOT-41 to Sprint 14?" (Jira Software Agile API).
+      const scopes = [
+        'read:jira-work', 'write:jira-work', 'read:jira-user', 'offline_access',
+        'read:board-scope:jira-software', 'read:sprint:jira-software', 'write:sprint:jira-software',
+      ].join(' ');
       const authUrl = `https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent('http://localhost:17291/callback')}&state=${state}&response_type=code&prompt=consent&code_challenge=${codeChallenge}&code_challenge_method=S256`;
       shell.openExternal(authUrl);
       log('info', 'jira:oauth-started', 'opened browser for authorization');
@@ -261,13 +266,19 @@ async function getValidToken(): Promise<string> {
   return updated.accessToken;
 }
 
-async function jiraFetch(path: string, options: RequestInit = {}): Promise<any> {
+/** Thrown for Jira HTTP errors so callers can tell "not allowed" from "not found". */
+export class JiraHttpError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+async function jiraFetch(path: string, options: RequestInit = {}, api: 'core' | 'agile' = 'core'): Promise<any> {
   const config = getConfig();
   const tokens = (config as any).jiraTokens as JiraTokens;
   if (!tokens) throw new Error('Jira not connected');
 
   const token = await getValidToken();
-  const url = `https://api.atlassian.com/ex/jira/${tokens.cloudId}/rest/api/3${path}`;
+  const base = api === 'agile' ? 'rest/agile/1.0' : 'rest/api/3';
+  const url = `https://api.atlassian.com/ex/jira/${tokens.cloudId}/${base}${path}`;
 
   const res = await fetch(url, {
     ...options,
@@ -289,13 +300,13 @@ async function jiraFetch(path: string, options: RequestInit = {}): Promise<any> 
         ...(options.headers || {}),
       },
     });
-    if (!retry.ok) throw new Error(`Jira API error: ${retry.status}`);
+    if (!retry.ok) throw new JiraHttpError(retry.status, `Jira API error: ${retry.status}`);
     return retry.json();
   }
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Jira API error ${res.status}: ${body.slice(0, 300)}`);
+    throw new JiraHttpError(res.status, `Jira API error ${res.status}: ${body.slice(0, 300)}`);
   }
 
   // Handle 204 No Content
@@ -431,6 +442,90 @@ export function commentPrefix(meetingTitle?: string | null): string {
   return meetingTitle ? `[Inwise] From "${meetingTitle}":\n\n` : '[Inwise]\n\n';
 }
 
+export interface JiraUser { accountId: string; displayName: string; email: string | null; avatarUrl: string | null }
+
+/** Jira users matching a name (or email). Only real people (accountType atlassian). */
+export async function searchJiraUsers(query: string, max = 8): Promise<JiraUser[]> {
+  const q = String(query || '').trim();
+  if (q.length < 2) return [];
+  const rows = await jiraFetch(`/user/search?query=${encodeURIComponent(q)}&maxResults=${Math.min(20, max)}`);
+  return (Array.isArray(rows) ? rows : [])
+    .filter((u: any) => u?.accountId && (u.accountType === undefined || u.accountType === 'atlassian') && u.active !== false)
+    .map((u: any) => ({
+      accountId: u.accountId,
+      displayName: u.displayName || '',
+      email: u.emailAddress || null,
+      avatarUrl: u.avatarUrls?.['24x24'] || null,
+    }));
+}
+
+export interface StatusChange { at: string; from: string | null; to: string | null }
+
+/** Status changes from a changelog payload (GET /issue/{key}/changelog or expand=changelog), oldest first. */
+export function parseStatusChanges(payload: any): StatusChange[] {
+  const histories = Array.isArray(payload?.values) ? payload.values
+    : Array.isArray(payload?.histories) ? payload.histories
+      : Array.isArray(payload?.changelog?.histories) ? payload.changelog.histories : [];
+  const out: StatusChange[] = [];
+  for (const h of histories) {
+    for (const item of Array.isArray(h?.items) ? h.items : []) {
+      if (item?.field === 'status' || item?.fieldId === 'status') {
+        out.push({ at: h.created, from: item.fromString ?? null, to: item.toString ?? null });
+      }
+    }
+  }
+  return out.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
+/** Status changes for one issue (newest 100 changelog entries). */
+export async function fetchIssueStatusChanges(issueKey: string): Promise<StatusChange[]> {
+  const data = await jiraFetch(`/issue/${encodeURIComponent(issueKey)}/changelog?maxResults=100`);
+  // The endpoint pages oldest-first; on long histories jump to the last page.
+  if (data && typeof data.total === 'number' && data.total > (data.values?.length || 0) && !data.isLast) {
+    const startAt = Math.max(0, data.total - 100);
+    const last = await jiraFetch(`/issue/${encodeURIComponent(issueKey)}/changelog?startAt=${startAt}&maxResults=100`);
+    return parseStatusChanges(last);
+  }
+  return parseStatusChanges(data);
+}
+
+export type SprintLookup =
+  | { ok: true; sprintId: number; sprintName: string; state: string; boardId: number }
+  | { ok: false; reason: string };
+
+/**
+ * The active (or next) sprint of the board that holds this issue's project.
+ * Reasons read as plain sentences for the recap row.
+ */
+export async function findSprintForIssue(issueKey: string, prefer: 'active' | 'next' = 'active'): Promise<SprintLookup> {
+  const projectKey = issueKey.split('-')[0];
+  try {
+    const boards = await jiraFetch(`/board?projectKeyOrId=${encodeURIComponent(projectKey)}&maxResults=50`, {}, 'agile');
+    const list: any[] = Array.isArray(boards?.values) ? boards.values : [];
+    const scrum = list.filter((b) => b?.type === 'scrum');
+    const candidates = scrum.length ? scrum : list;
+    if (candidates.length === 0) return { ok: false, reason: `${projectKey} has no Jira board, so there is no sprint to add ${issueKey} to` };
+    for (const board of candidates) {
+      const sprints = await jiraFetch(`/board/${board.id}/sprint?state=active,future&maxResults=50`, {}, 'agile').catch((e: any) => {
+        if (e instanceof JiraHttpError && e.status === 400) return { values: [] }; // kanban boards have no sprints
+        throw e;
+      });
+      const values: any[] = Array.isArray(sprints?.values) ? sprints.values : [];
+      const active = values.find((v) => v.state === 'active');
+      const future = values.filter((v) => v.state === 'future')
+        .sort((a, b) => (Date.parse(a.startDate || '') || Infinity) - (Date.parse(b.startDate || '') || Infinity) || a.id - b.id)[0];
+      const pick = prefer === 'next' ? (future || active) : (active || future);
+      if (pick) return { ok: true, sprintId: pick.id, sprintName: pick.name, state: pick.state, boardId: board.id };
+    }
+    return { ok: false, reason: `${projectKey}'s board has no active or upcoming sprint` };
+  } catch (e: any) {
+    if (e instanceof JiraHttpError && (e.status === 401 || e.status === 403)) {
+      return { ok: false, reason: 'Inwise is not allowed to read sprints yet. Reconnect Jira in Settings to allow it' };
+    }
+    return { ok: false, reason: `Could not read ${projectKey}'s sprints (${e?.message || 'Jira error'})` };
+  }
+}
+
 /**
  * Perform the raw Jira call for an already-logged write and stamp the result
  * on its sor-writes entry. Only jira-writes.ts calls this, after the gate.
@@ -494,11 +589,46 @@ export async function executeJiraPush(
       log('info', 'jira:comment-added', p.args.issueKey);
       return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
     }
+    if (p.operation === 'assign') {
+      if (!p.args.accountId) {
+        const msg = `Find ${p.args.assigneeName} in Jira before assigning ${p.args.issueKey}`;
+        await markCompleted(id, 'failed', msg);
+        return { ok: false, error: msg };
+      }
+      await jiraFetch(`/issue/${p.args.issueKey}/assignee`, { method: 'PUT', body: JSON.stringify({ accountId: p.args.accountId }) });
+      await markCompleted(id, 'success');
+      log('info', 'jira:issue-assigned', p.args.issueKey);
+      return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
+    }
+    if (p.operation === 'link') {
+      // "Blocks": the outward issue blocks the inward one (inward reads "is blocked by").
+      await jiraFetch('/issueLink', {
+        method: 'POST',
+        body: JSON.stringify({ type: { name: 'Blocks' }, outwardIssue: { key: p.args.blockerKey }, inwardIssue: { key: p.args.blockedKey } }),
+      });
+      await markCompleted(id, 'success');
+      log('info', 'jira:issue-linked', `${p.args.blockerKey} blocks ${p.args.blockedKey}`);
+      return { ok: true, key: p.args.blockedKey, url: buildJiraIssueUrl(p.args.blockedKey) };
+    }
+    if (p.operation === 'sprint') {
+      if (!p.args.sprintId) {
+        const msg = p.args.reason || `No sprint found for ${p.args.issueKey}`;
+        await markCompleted(id, 'failed', msg);
+        return { ok: false, error: msg };
+      }
+      await jiraFetch(`/sprint/${p.args.sprintId}/issue`, { method: 'POST', body: JSON.stringify({ issues: [p.args.issueKey] }) }, 'agile');
+      await markCompleted(id, 'success');
+      log('info', 'jira:issue-sprint', `${p.args.issueKey} to ${p.args.sprintName || p.args.sprintId}`);
+      return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
+    }
     await markCompleted(id, 'failed', 'Unknown operation');
     return { ok: false, error: 'Unknown operation' };
   } catch (err: any) {
-    await markCompleted(id, 'failed', err.message);
-    return { ok: false, error: err.message };
+    const msg = err instanceof JiraHttpError && (err.status === 401 || err.status === 403)
+      ? `Jira did not allow this change (${err.status}). Reconnect Jira in Settings, or check your permissions on ${'args' in p ? (p.args as any).issueKey || (p.args as any).blockedKey || 'the issue' : 'the issue'}`
+      : err.message;
+    await markCompleted(id, 'failed', msg);
+    return { ok: false, error: msg };
   }
 }
 

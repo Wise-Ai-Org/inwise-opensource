@@ -20,7 +20,7 @@ import {
   USER_REJECTED,
   type FieldDiff, type PushParams, type SorWriteEntry, type TranscriptSpan,
 } from './sor-write-log';
-import { stashPending, getPending, removePending, listPending } from './sor-pending-approvals';
+import { stashPending, getPending, removePending, listPending, updatePendingParams } from './sor-pending-approvals';
 import { decideJiraWrite, taskReviewOf, type JiraInitiator, type JiraWriteMode } from './jira-gate';
 import { statusLabel } from './jira-transitions';
 
@@ -40,6 +40,20 @@ export interface JiraWriteRequest {
   issueTitle?: string | null;
   evidence?: string | null;
   intent?: string | null;
+  /** Shown on the row; the write waits (any mode) and Approve is refused until it is cleared. */
+  blockedReason?: string | null;
+  needs?: 'jira-user' | null;
+}
+
+/** Why a write cannot go to Jira yet, or null. */
+export function writeBlocker(p: PushParams): { reason: string; needs: 'jira-user' | null } | null {
+  if (p.operation === 'assign' && !p.args.accountId) {
+    return { reason: `${p.args.assigneeName} is not linked to Jira yet. Find them in Jira first`, needs: 'jira-user' };
+  }
+  if (p.operation === 'sprint' && !p.args.sprintId) {
+    return { reason: p.args.reason || `No sprint found for ${p.args.issueKey}`, needs: null };
+  }
+  return null;
 }
 
 export type JiraWriteOutcome =
@@ -129,6 +143,15 @@ async function diffsFor(p: PushParams): Promise<{ fieldDiffs: FieldDiff[]; comme
   if (p.operation === 'comment') {
     return { fieldDiffs: [], commentBody: commentPrefix(p.args.meetingTitle) + p.args.comment, targetRecordId: p.args.issueKey, issueTitle: null };
   }
+  if (p.operation === 'link') {
+    return { fieldDiffs: [{ field: 'is blocked by', before: null, after: p.args.blockerKey }], commentBody: null, targetRecordId: p.args.blockedKey, issueTitle: null };
+  }
+  if (p.operation === 'sprint') {
+    return { fieldDiffs: [{ field: 'sprint', before: null, after: p.args.sprintName }], commentBody: null, targetRecordId: p.args.issueKey, issueTitle: null };
+  }
+  if (p.operation === 'assign') {
+    return { fieldDiffs: [{ field: 'assignee', before: null, after: p.args.assigneeName }], commentBody: null, targetRecordId: p.args.issueKey, issueTitle: null };
+  }
   const brief = await deps.fetchBrief(p.args.issueKey).catch(() => null);
   if (p.operation === 'transition') {
     return {
@@ -199,6 +222,8 @@ async function submitOnce(req: JiraWriteRequest): Promise<JiraWriteOutcome> {
   if (dup) return dup;
 
   const prefs = deps.prefs();
+  const blocker = writeBlocker(req.pushParams);
+  if (blocker && req.initiator === 'user') return { status: 'failed', id: '', error: blocker.reason };
   const confidence = req.initiator === 'user' ? 1 : clamp01(req.confidence);
   const decision = decideJiraWrite({
     mode: prefs.mode,
@@ -207,7 +232,7 @@ async function submitOnce(req: JiraWriteRequest): Promise<JiraWriteOutcome> {
     initiator: req.initiator,
     taskReview: req.linkedTaskId ? taskReviewOf(task) : 'none',
     dedupPending: !!task?.dedupSuggestion,
-    forceReview: req.forceReview,
+    forceReview: req.forceReview || !!blocker,
   });
   if (decision.action === 'wait') return { status: 'waiting', reason: decision.reason };
   if (decision.action === 'drop') return { status: 'dropped', reason: decision.reason };
@@ -236,6 +261,8 @@ async function submitOnce(req: JiraWriteRequest): Promise<JiraWriteOutcome> {
       issueTitle: req.issueTitle ?? issueTitle,
       evidence: req.evidence ?? null,
       intent: req.intent ?? null,
+      blockedReason: req.blockedReason ?? blocker?.reason ?? null,
+      needs: req.needs ?? blocker?.needs ?? null,
     },
   });
 
@@ -304,6 +331,8 @@ async function approveOnce(id: string, overrides?: ApprovalOverrides): Promise<{
     }
   }
 
+  const blocked = writeBlocker(pushParams);
+  if (blocked) return { ok: false, error: blocked.reason };
   const task = pending.linkedTaskId ? await deps.getTask(pending.linkedTaskId) : null;
   if (pushParams.operation === 'create') {
     const key = linkedIssueKey(task);
@@ -323,6 +352,26 @@ async function approveOnce(id: string, overrides?: ApprovalOverrides): Promise<{
   const out = await push(id, pushParams, pending.linkedTaskId);
   if (out.status === 'pushed') return { ok: true, key: out.key };
   return { ok: false, error: out.status === 'failed' ? out.error : 'Jira write failed' };
+}
+
+/**
+ * "Find in Jira" on an assign row: the user picked the Jira account. The held
+ * write keeps waiting for Approve (it is not pushed here).
+ */
+export async function resolveHeldAssignee(id: string, accountId: string, displayName: string): Promise<{ ok: boolean; error?: string }> {
+  const pending = await getPending(id);
+  if (!pending) return { ok: false, error: 'No pending approval for that id' };
+  if (pending.pushParams.operation !== 'assign') return { ok: false, error: 'Not an assignment' };
+  if (!accountId) return { ok: false, error: 'Pick a Jira user' };
+  const pushParams: PushParams = { operation: 'assign', args: { ...pending.pushParams.args, accountId, assigneeName: displayName || pending.pushParams.args.assigneeName } };
+  await updatePendingParams(id, pushParams);
+  await applyApprovalEdit(id, {
+    pushParams,
+    fieldDiffs: [{ field: 'assignee', before: null, after: pushParams.args.assigneeName }],
+    blockedReason: null,
+    needs: null,
+  });
+  return { ok: true };
 }
 
 export async function rejectHeldWrite(id: string): Promise<{ ok: boolean; error?: string }> {

@@ -10,7 +10,7 @@
  * There is no "undefined means ungated" path: every write gets a number.
  */
 
-export type ConfidenceOperation = 'create' | 'update' | 'transition' | 'comment';
+export type ConfidenceOperation = 'create' | 'update' | 'transition' | 'comment' | 'assign' | 'link' | 'sprint';
 
 export interface ConfidenceSignals {
   operation: ConfidenceOperation;

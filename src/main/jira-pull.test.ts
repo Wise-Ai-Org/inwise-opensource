@@ -133,6 +133,7 @@ async function run(): Promise<void> {
       p2: { issues: [rawIssue('PILOT-3', { assignee: { accountId: 'sam', displayName: 'Sam Lee' } })], nextPageToken: null },
     };
     const seenJql: string[] = [];
+    const savedLinks: Record<string, any> = {};
     __setJiraPullDepsForTests({
       connected: () => true,
       lastSuccessMs: () => lastSuccess,
@@ -140,8 +141,9 @@ async function run(): Promise<void> {
       defaultProject: () => 'PILOT',
       cloudUrl: () => 'https://x.atlassian.net',
       myAccountId: () => 'me',
-      attendeeEmails: async () => ['sam@x.com', 'nobody@x.com'],
-      accountIdFor: async (email) => (email === 'sam@x.com' ? 'sam' : null),
+      recentPeople: async () => [{ _id: 'p-sam', name: 'Sam Lee', email: 'sam@x.com' }, { _id: 'p-nobody', name: 'Nobody', email: 'nobody@x.com' }],
+      lookupEmail: async (email) => (email === 'sam@x.com' ? 'sam' : null),
+      saveLink: async (id, link) => { savedLinks[id] = link; },
       sprintFieldId: async () => null,
       fetchPage: async (jql, _f, token) => { seenJql.push(jql); return pages[token || 'first']; },
     });
@@ -151,6 +153,8 @@ async function run(): Promise<void> {
     assert.equal(res.pages, 'complete');
     assert.match(seenJql[0], /assignee in \("sam"\)/);
     assert.match(seenJql[0], /updated >= -21d/);
+    assert.equal(savedLinks['p-sam'].status, 'email', 'email match is cached on the person');
+    assert.equal(savedLinks['p-nobody'].status, 'unresolved', 'unresolved people are recorded for "Find in Jira"');
     assert.equal(lastSuccess, NOW.getTime(), 'success is recorded');
     const cached = await listCachedIssues();
     assert.equal(cached.length, 3, 'every issue lands in the cache for the moments');

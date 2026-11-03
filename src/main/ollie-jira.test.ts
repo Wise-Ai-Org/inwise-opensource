@@ -103,7 +103,7 @@ function run(): void {
       issue('PILOT-32', { updatedAt: iso(now.getTime() - 20 * DAY) }),
     ];
     const w = buildWrapJira({ connected: true, writesToday: writes, pendingCount: 2, issues, meetingsToday, linkedKeysToday: ['PILOT-32'], now })!;
-    assert.deepEqual(w.changedToday.map((c) => c.summary), ['Moved PILOT-42 to Done', 'Created PILOT-50: Draft copy', 'Moved the due date on PILOT-7 to 2026-11-04'], 'only meeting writes that landed');
+    assert.deepEqual(w.changedToday.map((c) => c.summary), ['Moved PILOT-42 to Done', 'Created PILOT-50: Draft copy', 'Moved the due date on PILOT-7 to Wed, Nov 4'], 'only meeting writes that landed');
     assert.equal(w.waitingCount, 2);
     assert.deepEqual(w.staleDiscussed.map((r) => r.key).sort(), ['PILOT-30', 'PILOT-32']);
     assert.match(w.staleDiscussed.find((r) => r.key === 'PILOT-30')!.detail, /no Jira update for 12 days/);
@@ -125,7 +125,7 @@ function run(): void {
     assert.equal(pending.evidence, 'the survey is done');
     assert.equal(pending.url, 'u');
     const due = summarizePendingApproval({ _id: 'p2', pushParams: { operation: 'update', args: { issueKey: 'PILOT-7', updates: { dueDate: '2026-11-04' } } }, createdAt: '' }, null);
-    assert.equal(due.summary, 'Move the due date on PILOT-7 to 2026-11-04?');
+    assert.equal(due.summary, 'Move the due date on PILOT-7 to Wed, Nov 4?');
     const sug = summarizePendingApproval({ _id: 'p3', pushParams: { operation: 'comment', args: { issueKey: 'PILOT-42', comment: 'x' } }, createdAt: '' }, null, { suggestion: 'Update PILOT-42 instead?' });
     assert.equal(sug.summary, 'Update PILOT-42 instead?');
     const decision = summarizePendingApproval({ _id: 'p4', pushParams: { operation: 'comment', args: { issueKey: 'PILOT-42', comment: 'Decision: x' } }, createdAt: '' }, null, { intent: 'decision' });
