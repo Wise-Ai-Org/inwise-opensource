@@ -28,3 +28,5 @@ Real-account approval, provider sign-in configuration and a live desktop-to-dev 
 A local development installer is built for human inspection. It is the same Inwise app and is not marked as the latest public release. No existing installation or real account is automatically connected.
 
 Dev and production pairing, session, contribution and project-context approvals are isolated by the backend app identity. Context approvals do not modify existing project visibility. Changing project privacy invalidates a previous context approval.
+
+For the optional cross-repository integration check, place an appwise-functions checkout alongside this repository or set INWISE_WORK_BRAIN_SERVICE_SOURCE to its shared/work-brain module. The integration test still uses a synthetic in-memory database and stubbed network calls.

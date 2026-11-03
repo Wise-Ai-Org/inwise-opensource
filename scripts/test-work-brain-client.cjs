@@ -4,7 +4,7 @@ const { app, BrowserWindow, ipcMain, shell, safeStorage, protocol }=require('ele
 const fs=require('fs'),os=require('os'),path=require('path'),assert=require('assert/strict');
 protocol.registerSchemesAsPrivileged([{scheme:'app',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 app.disableHardwareAcceleration();const profile=fs.mkdtempSync(path.join(os.tmpdir(),'inwise-brain-client-'));app.setPath('userData',profile);
-const { createWorkBrainService }=require(process.env.INWISE_WORK_BRAIN_SERVICE_SOURCE || path.resolve(__dirname,'../../appwise-org-brain/shared/work-brain'));
+const { createWorkBrainService }=require(process.env.INWISE_WORK_BRAIN_SERVICE_SOURCE || path.resolve(__dirname,'../../appwise-functions/shared/work-brain'));
 const tables=new Map();const db={collection(n){if(!tables.has(n))tables.set(n,[]);const rows=tables.get(n),match=(r,q)=>Object.entries(q).every(([k,v])=>r[k]===v);return{async findOne(q){return structuredClone(rows.find(r=>match(r,q))||null)},find(q){return{async toArray(){return structuredClone(rows.filter(r=>match(r,q)))}}},async insertOne(r){if(rows.some(x=>x._id===r._id))throw Object.assign(Error('duplicate'),{code:11000});rows.push(structuredClone(r))},async updateOne(q,u){const r=rows.find(r=>match(r,q));if(!r)return{modifiedCount:0};Object.assign(r,structuredClone(u.$set));return{modifiedCount:1}}}}};
 const user={_id:'synthetic-owner',wiseCompanyId:'synthetic-org'};tables.set('WiseUser',[user]);tables.set('usercreatedprojects',[{_id:'synthetic-project',wiseCompanyId:'synthetic-org',visibility:'org',title:'Platform'}]);
 tables.set('OrgWorkBrainProjectApproval',[{_id:'synthetic-approval',projectId:'synthetic-project',wiseCompanyId:'synthetic-org',enabled:true,projectPrivacyAtApproval:'org'}]);
