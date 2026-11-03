@@ -26,3 +26,5 @@ Backend tests cover forbidden fields, review, pairing expiration/one-time consum
 Real-account approval, provider sign-in configuration and a live desktop-to-dev account session require a human sign-in/approval check. Passing synthetic tests does not certify those steps. Existing cloud meeting/transcript permissions are not changed by this new connection, which stores no raw transcripts in the cloud.
 
 A local development installer is built for human inspection. It is the same Inwise app and is not marked as the latest public release. No existing installation or real account is automatically connected.
+
+Dev and production pairing, session, contribution and project-context approvals are isolated by the backend app identity. Context approvals do not modify existing project visibility. Changing project privacy invalidates a previous context approval.

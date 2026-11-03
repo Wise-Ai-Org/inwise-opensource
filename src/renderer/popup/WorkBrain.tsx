@@ -62,7 +62,7 @@ export default function WorkBrain({ onClose }: { onClose: () => void }) {
   });
   return <div className="wb-backdrop"><div className="wb-panel" role="dialog" aria-modal="true" aria-labelledby="wb-title" tabIndex={-1} ref={dialog} onKeyDown={e=>{
     if(e.key==='Escape'&&!busy){e.stopPropagation();onClose();}
-    if(e.key==='Tab'){const nodes=Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input, select, textarea, a[href]')||[]);const first=nodes[0],last=nodes[nodes.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&(document.activeElement===last||document.activeElement===dialog.current)){e.preventDefault();first?.focus();}}
+    if(e.key==='Tab'){const nodes=Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input, select, textarea, a[href]')||[]).filter(node=>!node.matches(':disabled'));const first=nodes[0],last=nodes[nodes.length-1];if(e.shiftKey&&(document.activeElement===first||document.activeElement===dialog.current)){e.preventDefault();last?.focus();}else if(!e.shiftKey&&(document.activeElement===last||document.activeElement===dialog.current)){e.preventDefault();first?.focus();}}
   }}>
     <header><h2 id="wb-title">Org’s work brain</h2><button className="pp-quiet-action" aria-label="Close org connection" disabled={busy} onClick={onClose}>✕</button></header>
     <p>Contribute useful work context. Audio, transcripts and private meeting details stay on this device.</p>
