@@ -1,4 +1,4 @@
-import { app, ipcMain, safeStorage, shell } from 'electron';
+import { app, ipcMain, safeStorage, shell, IpcMainInvokeEvent } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getMeeting } from './database';
@@ -34,8 +34,14 @@ async function connected(action: string, data: Record<string, unknown> = {}) {
   return request(action, { ...data, connectionToken: binding.token });
 }
 export function registerWorkBrainHandlers() {
-  ipcMain.handle('work-brain:status', async () => readBinding() ? connected('status') : { connected: false });
-  ipcMain.handle('work-brain:connect', async () => {
+  const handle = (channel: string, handler: (event: IpcMainInvokeEvent, ...args: any[]) => any) => ipcMain.handle(channel, (event, ...args) => {
+    let trusted = false;
+    try { const url = new URL(event.senderFrame?.url || ''); trusted = url.protocol === 'app:' && url.hostname === 'bundle' && url.pathname === '/index.html'; } catch { /* Reject unknown senders. */ }
+    if (!trusted) throw new Error('This page is not allowed to use the org connection.');
+    return handler(event, ...args);
+  });
+  handle('work-brain:status', async () => readBinding() ? connected('status') : { connected: false });
+  handle('work-brain:connect', async () => {
     if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure credential storage is required to connect this device.');
     const result = await request('start');
     if (!/^[a-f0-9]{64}$/.test(result.pairId) || !/^[a-f0-9]{64}$/.test(result.pollSecret)) throw new Error('The service returned an invalid connection request.');
@@ -46,7 +52,7 @@ export function registerWorkBrainHandlers() {
     await shell.openExternal(url.href);
     return { verificationCode: result.verificationCode, expiresAt: result.expiresAt };
   });
-  ipcMain.handle('work-brain:poll', async () => {
+  handle('work-brain:poll', async () => {
     if (!pending || pending.expiresAt < Date.now()) { pending = null; throw new Error('Connection request expired. Start again.'); }
     const result = await request('poll', { pairId: pending.pairId, pollSecret: pending.pollSecret });
     if (result.state === 'connected') {
@@ -56,15 +62,15 @@ export function registerWorkBrainHandlers() {
     }
     return { state: 'pending' };
   });
-  ipcMain.handle('work-brain:catalogue', () => connected('catalogue'));
-  ipcMain.handle('work-brain:draft', async (_event, meetingId: string) => {
+  handle('work-brain:catalogue', () => connected('catalogue'));
+  handle('work-brain:draft', async (_event, meetingId: string) => {
     if (typeof meetingId !== 'string') throw new Error('Choose a source meeting.');
     const meeting = await getMeeting(meetingId);
     if (!meeting) throw new Error('The private source meeting is no longer available.');
     const catalogue = await connected('catalogue');
     return { drafts: await draftOrgContext(meeting, catalogue.projects || []) };
   });
-  ipcMain.handle('work-brain:share', async (_event, contribution: any, sourceMeetingId?: string) => {
+  handle('work-brain:share', async (_event, contribution: any, sourceMeetingId?: string) => {
     if (sourceMeetingId && (typeof sourceMeetingId !== 'string' || !(await getMeeting(sourceMeetingId)))) throw new Error('The private source meeting is no longer available. Choose it again.');
     const result = await connected('share', { contribution });
     if (sourceMeetingId) {
@@ -78,11 +84,11 @@ export function registerWorkBrainHandlers() {
     }
     return result;
   });
-  ipcMain.handle('work-brain:disconnect', async () => {
+  handle('work-brain:disconnect', async () => {
     await connected('disconnect');
     if (fs.existsSync(bindingPath())) fs.unlinkSync(bindingPath());
     pending = null;
     return { disconnected: true };
   });
-  ipcMain.handle('work-brain:open', () => shell.openExternal(new URL('/org-work-brain', webBase()).href));
+  handle('work-brain:open', () => shell.openExternal(new URL('/org-work-brain', webBase()).href));
 }

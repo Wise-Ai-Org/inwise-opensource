@@ -1,6 +1,7 @@
 // Cross-repository synthetic integration check. No real network or user storage.
-const { app, BrowserWindow, ipcMain, shell, safeStorage }=require('electron');
+const { app, BrowserWindow, ipcMain, shell, safeStorage, protocol }=require('electron');
 const fs=require('fs'),os=require('os'),path=require('path'),assert=require('assert/strict');
+protocol.registerSchemesAsPrivileged([{scheme:'app',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 app.disableHardwareAcceleration();const profile=fs.mkdtempSync(path.join(os.tmpdir(),'inwise-brain-client-'));app.setPath('userData',profile);
 const { createWorkBrainService }=require(process.env.INWISE_WORK_BRAIN_SERVICE_SOURCE || path.resolve(__dirname,'../../appwise-org-brain/shared/work-brain'));
 const tables=new Map();const db={collection(n){if(!tables.has(n))tables.set(n,[]);const rows=tables.get(n),match=(r,q)=>Object.entries(q).every(([k,v])=>r[k]===v);return{async findOne(q){return structuredClone(rows.find(r=>match(r,q))||null)},find(q){return{async toArray(){return structuredClone(rows.filter(r=>match(r,q)))}}},async insertOne(r){if(rows.some(x=>x._id===r._id))throw Object.assign(Error('duplicate'),{code:11000});rows.push(structuredClone(r))},async updateOne(q,u){const r=rows.find(r=>match(r,q));if(!r)return{modifiedCount:0};Object.assign(r,structuredClone(u.$set));return{modifiedCount:1}}}}};
@@ -14,6 +15,7 @@ app.whenReady().then(async()=>{
  require('../dist/main/work-brain').registerWorkBrainHandlers();
  const win=new BrowserWindow({show:false,webPreferences:{preload:path.resolve(__dirname,'../dist/main/preload.js'),contextIsolation:true}});await win.loadURL('data:text/html,<title>Synthetic client test</title>');
  const call=(method,...args)=>win.webContents.executeJavaScript('window.inwiseAPI['+JSON.stringify(method)+'](...'+JSON.stringify(args)+')');
+ await assert.rejects(call('workBrainStatus'),/not allowed/);protocol.handle('app',()=>new Response('<title>Synthetic trusted client test</title>',{headers:{'Content-Type':'text/html'}}));await win.loadURL('app://bundle/index.html');
  assert.equal((await call('workBrainStatus')).connected,false);const start=await call('workBrainConnect');assert.equal(Object.keys(start).sort().join(','),'expiresAt,verificationCode');const pairId=new URL(browserUrl).searchParams.get('pair');await service.approve(pairId,user);
  const poll=await call('workBrainPoll');assert.equal(poll.state,'connected');assert.ok(!JSON.stringify(poll).includes(issuedToken));assert.equal((await call('workBrainStatus')).connected,true);
  const encrypted=fs.readFileSync(path.join(profile,'org-work-brain.enc'));assert.ok(!encrypted.includes(Buffer.from(issuedToken)),'credential is encrypted at rest');
