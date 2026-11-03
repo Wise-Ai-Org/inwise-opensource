@@ -34,6 +34,14 @@ function saveDismissed(s: Set<string>) {
 
 // ── Approval card ────────────────────────────────────────────────────────────
 
+const statusWord = (s: string) => {
+  const k = String(s || '').toLowerCase().replace(/[\s_-]+/g, '');
+  if (['done', 'completed', 'complete', 'closed', 'resolved'].includes(k)) return 'Done';
+  if (['inprogress', 'doing', 'started'].includes(k)) return 'In Progress';
+  if (['todo', 'open', 'backlog'].includes(k)) return 'To Do';
+  return s;
+};
+
 function describeApproval(row: ApprovalItem): { chip: string; title: string; detail: string } {
   const pp = row.pending.pushParams;
   switch (pp.operation) {
@@ -42,7 +50,7 @@ function describeApproval(row: ApprovalItem): { chip: string; title: string; det
     case 'update':
       return { chip: `Jira · update ${pp.args.issueKey}`, title: pp.args.updates.title || `Update ${pp.args.issueKey}`, detail: pp.args.updates.description || '' };
     case 'transition':
-      return { chip: `Jira · ${pp.args.issueKey}`, title: `Move to ${pp.args.targetStatus}`, detail: '' };
+      return { chip: `Jira · ${pp.args.issueKey}`, title: `Move ${pp.args.issueKey} to ${statusWord(pp.args.targetStatus)}`, detail: row.writeEntry?.issueTitle || '' };
     case 'comment':
       return { chip: `Jira · comment on ${pp.args.issueKey}`, title: 'Add comment', detail: pp.args.comment };
     default:
@@ -68,7 +76,6 @@ function ApprovalCard({ row, onDone }: { row: ApprovalItem; onDone: () => void }
     try { await fn(); onDone(); } finally { setBusy(false); }
   };
 
-  const approve = () => act(() => api().sorApprove?.(row.pending._id));
   const approveEdited = () => act(() => {
     const overrides =
       pp.operation === 'create' ? { title: editText } :
@@ -76,6 +83,13 @@ function ApprovalCard({ row, onDone }: { row: ApprovalItem; onDone: () => void }
     return api().sorApprove?.(row.pending._id, overrides);
   });
   const reject = () => act(() => api().sorReject?.(row.pending._id));
+  const [error, setError] = useState<string | null>(null);
+  const approveChecked = () => act(async () => {
+    const res = await api().sorApprove?.(row.pending._id);
+    if (res && res.ok === false && res.error) setError(res.error);
+  });
+  const createInstead = () => act(() => api().jiraCreateInstead?.(row.pending._id));
+  const suggestion: string | null = row.writeEntry?.suggestion || null;
 
   return (
     <div className="pp-card">
@@ -98,6 +112,9 @@ function ApprovalCard({ row, onDone }: { row: ApprovalItem; onDone: () => void }
           )}
         </>
       )}
+      {suggestion && <div className="pp-meta" style={{ marginTop: 6, color: 'var(--owl-teal, #0f7894)' }}>{suggestion} It looks like the same work.</div>}
+      {row.writeEntry?.evidence && <div className="pp-meta" style={{ marginTop: 4, fontStyle: 'italic' }}>“{row.writeEntry.evidence}”</div>}
+      {error && <div className="pp-meta" style={{ marginTop: 6, color: '#b4570b' }}>{error}</div>}
       <div className="pp-row" style={{ marginTop: 9, gap: 8 }}>
         {editing ? (
           <>
@@ -108,7 +125,8 @@ function ApprovalCard({ row, onDone }: { row: ApprovalItem; onDone: () => void }
           </>
         ) : (
           <>
-            <button className="pp-btn pp-solid" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={approve}>Approve</button>
+            <button className="pp-btn pp-solid" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={approveChecked}>Approve</button>
+            {suggestion && <button className="pp-btn pp-ghost" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={createInstead}>Create new</button>}
             {editable && <button className="pp-btn pp-ghost" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={startEdit}>Edit</button>}
             <button className="pp-btn pp-ghost pp-danger" style={{ flex: 1, padding: '6px 0' }} disabled={busy} onClick={reject}>Reject</button>
           </>

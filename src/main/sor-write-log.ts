@@ -17,6 +17,8 @@ import Datastore from '@seald-io/nedb';
 export type TargetSystem = 'jira'; // future: 'salesforce' | 'hubspot' | 'linear'
 export type SorOperation = 'create' | 'update' | 'transition' | 'comment';
 export type ApprovalPath = 'auto' | 'user' | 'opt-in-gated';
+/** Error message stamped on an entry the user skipped/rejected. */
+export const USER_REJECTED = 'User rejected';
 export type SorWriteResult = 'pending' | 'success' | 'failed' | 'pending-approval' | 'retrying';
 
 export interface FieldDiff {
@@ -37,6 +39,20 @@ export interface WriteProvenance {
   linkedTaskId?: string;
   confidence?: number;
   approvalPath?: ApprovalPath;
+  /** Stable per (meeting, normalized item) or per local task; at most one write per key. */
+  idempotencyKey?: string;
+  /** 'user' when a click in the UI started the write, 'system' for meeting/sync writes. */
+  initiator?: 'user' | 'system';
+  /** Why the gate held or pushed it, in plain words. */
+  gateReason?: string;
+  /** Shown on held writes: "Update PILOT-42 instead?" */
+  suggestion?: string | null;
+  /** Target ticket title when known. */
+  issueTitle?: string | null;
+  /** Short transcript quote behind the write. */
+  evidence?: string | null;
+  /** Ticket intent kind from the meeting (done, due_moved, decision, new). */
+  intent?: string | null;
 }
 
 /**
@@ -65,6 +81,13 @@ export interface SorWriteEntry {
   result: SorWriteResult;
   errorMessage: string | null;
   pushParams: PushParams | null; // stored for retry
+  idempotencyKey?: string | null;
+  initiator?: 'user' | 'system';
+  gateReason?: string | null;
+  suggestion?: string | null;
+  issueTitle?: string | null;
+  evidence?: string | null;
+  intent?: string | null;
   createdAt: string;             // ISO
   completedAt: string | null;    // ISO, set when result transitions to success|failed
   retryCount: number;
@@ -138,6 +161,13 @@ export async function recordWrite(input: RecordWriteInput): Promise<string> {
     result: input.result ?? 'pending',
     errorMessage: null,
     pushParams: input.pushParams ?? null,
+    idempotencyKey: input.provenance?.idempotencyKey ?? null,
+    initiator: input.provenance?.initiator ?? 'system',
+    gateReason: input.provenance?.gateReason ?? null,
+    suggestion: input.provenance?.suggestion ?? null,
+    issueTitle: input.provenance?.issueTitle ?? null,
+    evidence: input.provenance?.evidence ?? null,
+    intent: input.provenance?.intent ?? null,
     createdAt: new Date().toISOString(),
     completedAt: null,
     retryCount: 0,
@@ -227,6 +257,17 @@ export async function listByMeeting(meetingId: string): Promise<SorWriteEntry[]>
   return rows as SorWriteEntry[];
 }
 
+/** Every entry carrying this idempotency key (any result), newest first. */
+export async function listByIdempotencyKey(key: string): Promise<SorWriteEntry[]> {
+  const db = getDb();
+  const rows = await (db as any).findAsync({ idempotencyKey: key }).sort({ createdAt: -1 });
+  return rows as SorWriteEntry[];
+}
+
+export function isUserRejected(entry: Pick<SorWriteEntry, 'result' | 'errorMessage'>): boolean {
+  return entry.result === 'failed' && entry.errorMessage === USER_REJECTED;
+}
+
 export async function listByTaskId(taskId: string): Promise<SorWriteEntry[]> {
   const db = getDb();
   const rows = await (db as any).findAsync({ linkedTaskId: taskId }).sort({ createdAt: -1 });
@@ -303,26 +344,9 @@ export async function listStuckEntries(olderThanMs: number, now: Date = new Date
   return rows as SorWriteEntry[];
 }
 
-// ── Approval-gate logic (US-006) ─────────────────────────────────────────────
-
-/**
- * Pure predicate for the opt-in approval gate. Gate applies only when:
- *   1. The gate is enabled in config.
- *   2. The extractor/matcher returned a numeric confidence (not null/undefined).
- *   3. Confidence is strictly less than the user's threshold.
- *
- * When confidence is absent, writes always proceed auto — per PRD US-006:
- * "treat all writes as having confidence:undefined and NEVER gate them".
- */
-export function shouldGateWrite(
-  confidence: number | null | undefined,
-  gateEnabled: boolean,
-  threshold: number,
-): boolean {
-  if (!gateEnabled) return false;
-  if (typeof confidence !== 'number' || Number.isNaN(confidence)) return false;
-  return confidence < threshold;
-}
+// The approval gate lives in jira-gate.ts (decideJiraWrite) and is applied by
+// jira-writes.ts. Every write carries a numeric confidence; nothing is ungated
+// because a value is missing.
 
 // ── Pure field-diff helpers ──────────────────────────────────────────────────
 

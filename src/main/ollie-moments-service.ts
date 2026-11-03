@@ -19,6 +19,7 @@ import { getWriteEntry, listByMeeting as sorListByMeeting } from './sor-write-lo
 import { listActionExecutionsUpdatedSince } from './action-execution-log';
 import { getLastSlackPollAt } from './slack-poller';
 import { getSlackConnectionInfo } from './slack-client';
+import { waitForMeetingSync } from './jira-sync';
 import {
   buildCatchUpNotes,
   buildMorning,
@@ -382,6 +383,9 @@ async function fireWrapUp(): Promise<void> {
  * notifications with one per meeting outcome.
  */
 export async function announceProcessed(meetingId: string): Promise<void> {
+  // Let the Jira pass for this meeting finish so the recap and the
+  // notification show what was pushed and what waits for an OK.
+  await waitForMeetingSync(meetingId).catch(() => undefined);
   emitChanged({ reason: 'processed', meetingId });
   try {
     if (getNotificationSettings().processed !== 'notify') return;

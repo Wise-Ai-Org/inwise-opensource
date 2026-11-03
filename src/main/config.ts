@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { storeLocationOptions } from './store-location';
 import { normalizeNotificationSettings } from './ollie-moments';
 import type { NotificationSettings } from './ollie-moments-types';
+import { JIRA_AUTO_THRESHOLD, resolveJiraWriteMode, type JiraWriteMode } from './jira-gate';
 
 export type CalendarProvider = 'google' | 'outlook' | 'ics';
 
@@ -19,6 +20,12 @@ export interface SorJiraPrefs {
   approvalGateEnabled: boolean;
   /** 0..1. Writes strictly below this confidence are gated. Ignored when approvalGateEnabled is false or confidence is undefined. */
   approvalThreshold: number;
+  /**
+   * "Jira changes" setting (docs/JIRA_SAFETY.md). 'ask' = every write waits for
+   * an OK (default); 'auto' = writes at or above JIRA_AUTO_THRESHOLD apply on
+   * their own. Absent on installs from before this setting; see resolveJiraWriteMode.
+   */
+  writeMode?: JiraWriteMode;
 }
 
 export interface SorPrefs {
@@ -153,6 +160,22 @@ export function getSorJiraPrefs(): SorJiraPrefs {
     approvalGateEnabled: jira?.approvalGateEnabled ?? false,
     approvalThreshold: typeof jira?.approvalThreshold === 'number' ? jira.approvalThreshold : 0.6,
   };
+}
+
+/**
+ * The one Jira write setting. `threshold` is fixed at JIRA_AUTO_THRESHOLD; the
+ * legacy approvalThreshold slider only feeds the one-time migration.
+ */
+export function getJiraWritePrefs(): { mode: JiraWriteMode; threshold: number } {
+  const sor = store.get('sor') as SorPrefs | undefined;
+  return { mode: resolveJiraWriteMode(sor?.jira as any), threshold: JIRA_AUTO_THRESHOLD };
+}
+
+export function setJiraWriteMode(mode: JiraWriteMode): { mode: JiraWriteMode; threshold: number } {
+  const sor = (store.get('sor') as SorPrefs | undefined) || { dismissedReceiptIds: [], jira: { approvalGateEnabled: false, approvalThreshold: 0.6 } };
+  const jira = { ...(sor.jira || { approvalGateEnabled: false, approvalThreshold: 0.6 }), writeMode: mode === 'auto' ? 'auto' as const : 'ask' as const };
+  store.set('sor', { ...sor, jira });
+  return getJiraWritePrefs();
 }
 
 /**
