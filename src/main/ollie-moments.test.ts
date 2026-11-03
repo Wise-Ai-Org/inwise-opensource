@@ -84,7 +84,8 @@ const prep: PrepContent = {
     owesYou: [{ kind: 'task', taskId: 't1', meetingId: null, text: 'Send pricing deck', dueDate: '2026-10-30', daysLate: 3 }],
     youOwe: [{ kind: 'task', taskId: 't2', meetingId: null, text: 'Review contract', dueDate: null, daysLate: null }],
   }],
-  pendingApprovals: [{ id: 's1', operation: 'create', summary: 'Create', issueKey: null, meetingId: 'm', meetingTitle: null, createdAt: '' }],
+  pendingApprovals: [{ id: 's1', operation: 'create', summary: 'Create', issueKey: null, meetingId: 'm', meetingTitle: null, createdAt: '', issueTitle: null, evidence: null, suggestion: null, intent: null, confidence: null, url: null }],
+  jira: null,
 };
 assert.deepEqual(prepNotificationCopy(prep), {
   title: 'Standup in 10 min',
@@ -96,7 +97,7 @@ assert.match(prepNotificationCopy({ ...prep, owes: [], pendingApprovals: [], las
 const processed: ProcessedContent = {
   meetingId: 'm1', title: 'Design review', source: 'desktop_recording', status: 'processed', startedAt: null, endedAt: null,
   taskCount: 3, decisionCount: 1, tasks: [], decisions: ['Ship'], patchyAudio: null,
-  jira: { pushedCount: 2, failedCount: 0, pushed: [], pending: [prep.pendingApprovals[0]] }, failure: null, slackConnected: false,
+  jira: { pushedCount: 2, failedCount: 0, pushed: [], pending: [prep.pendingApprovals[0]], failed: [] }, failure: null, slackConnected: false,
 };
 assert.deepEqual(processedNotificationCopy(processed), {
   title: 'Inwise processed Design review',
@@ -111,7 +112,7 @@ assert.match(processedNotificationCopy({ ...processed, status: 'needs_review' })
 const wrap: WrapUpContent = {
   firstName: 'Shrav', today: { meetingCount: 4, tasksFound: 6, decisions: 2 },
   tomorrow: { firstMeeting: { eventId: 't', title: 'Tomorrow sync', startTime: at(10, 0, 3).getTime(), agendaDrafted: false, tasksDueBefore: [] }, overdueWithAttendees: [], crunch: null, cancelledToday: [] },
-  goneQuiet: [], slackToday: [{ channelId: 'C1', threadCount: 3, taskCount: 1, decisionCount: 0 }], snoozedToday: [], receipts: [], needsRetry: [], slackSyncedAt: null,
+  goneQuiet: [], slackToday: [{ channelId: 'C1', threadCount: 3, taskCount: 1, decisionCount: 0 }], snoozedToday: [], receipts: [], needsRetry: [], slackSyncedAt: null, jira: null,
 };
 assert.deepEqual(wrapUpNotificationCopy(wrap), {
   title: 'Tomorrow starts at 10:00 AM with Tomorrow sync',

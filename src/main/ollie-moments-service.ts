@@ -15,7 +15,9 @@ import { log } from './logger';
 import { isSelf } from './self-identity';
 import { scoreTasks } from './task-scorer';
 import { listPending } from './sor-pending-approvals';
-import { getWriteEntry, listByMeeting as sorListByMeeting } from './sor-write-log';
+import { getWriteEntry, listByMeeting as sorListByMeeting, listRecent as sorListRecent } from './sor-write-log';
+import { isJiraConnected } from './jira-client';
+import { listCachedIssues, type JiraIssueSnapshot } from './jira-pull';
 import { listActionExecutionsUpdatedSince } from './action-execution-log';
 import { getLastSlackPollAt } from './slack-poller';
 import { getSlackConnectionInfo } from './slack-client';
@@ -171,8 +173,12 @@ async function loadContext(now: Date): Promise<{ ctx: ContentContext; allTasks: 
   const [allTasks, meetings, people] = await Promise.all([getTasks({ includeSnoozed: true }), getMeetings(), getPeople()]);
   const tasks = allTasks.filter((t: any) => t.snoozedAt == null);
   const scored = scoreTasks(tasks.filter((t: any) => t.status !== 'done' && t.status !== 'completed'), meetings, people);
+  let jiraIssues: JiraIssueSnapshot[] | null = null;
+  if (isJiraConnected()) {
+    try { jiraIssues = await listCachedIssues(); } catch { jiraIssues = []; }
+  }
   return {
-    ctx: { now, userName: cfg.userName?.trim() || '', isSelf, tasks, meetings, people, scored },
+    ctx: { now, userName: cfg.userName?.trim() || '', isSelf, tasks, meetings, people, scored, jiraIssues },
     allTasks,
   };
 }
@@ -181,11 +187,27 @@ export async function loadPendingApprovals(): Promise<PendingJiraApproval[]> {
   const rows = await listPending();
   const out: PendingJiraApproval[] = [];
   for (const row of rows) {
-    let meetingId: string | null = null;
-    try { meetingId = (await getWriteEntry(row._id))?.sourceMeetingId || null; } catch { meetingId = null; }
-    out.push(summarizePendingApproval(row, meetingId));
+    let entry: any = null;
+    try { entry = await getWriteEntry(row._id); } catch { entry = null; }
+    if (entry && entry.result !== 'pending-approval') continue; // stale queue row
+    out.push(summarizePendingApproval(row, entry?.sourceMeetingId || null, entry));
   }
   return out;
+}
+
+async function loadJiraToday(now: Date, meetings: any[], allTasks: any[]): Promise<{ writesToday: any[]; pendingCount: number; linkedKeysToday: string[] } | null> {
+  if (!isJiraConnected()) return null;
+  const dayStart = startOfLocalDay(now).getTime();
+  const [writesToday, pending] = await Promise.all([
+    sorListRecent(200, dayStart).catch(() => [] as any[]),
+    loadPendingApprovals().catch(() => [] as PendingJiraApproval[]),
+  ]);
+  const todayIds = new Set(meetings.filter((m: any) => { const ms = toMs(m.date); return ms !== null && ms >= dayStart && ms < startOfLocalDay(now, 1).getTime(); }).map((m: any) => m._id));
+  const linkedKeysToday = allTasks
+    .filter((t: any) => t.meetingId && todayIds.has(t.meetingId))
+    .map((t: any) => (t.source?.type === 'jira' ? t.source.id : t.jiraKey))
+    .filter((k: any): k is string => typeof k === 'string' && !!k);
+  return { writesToday: writesToday.filter((w: any) => w.targetSystem === 'jira'), pendingCount: pending.length, linkedKeysToday };
 }
 
 function eventsForToday(events: CalendarEventLike[], now: Date): CalendarEventLike[] {
@@ -236,6 +258,7 @@ export async function getOllieMoment(now: Date = new Date()): Promise<OllieMomen
       allTasks,
       executions,
       slackSyncedAt: getSlackConnectionInfo().connected ? getLastSlackPollAt() : null,
+      jiraToday: await loadJiraToday(now, ctx.meetings, allTasks),
     });
     return { kind: 'wrap', key: selected.key, generatedAt, wrapUp };
   }

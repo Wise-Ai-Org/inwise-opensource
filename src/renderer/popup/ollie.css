@@ -129,3 +129,20 @@ button.ol-row:hover, .ol-row.ol-clickable:hover { border-color: var(--owl-mint);
 .ol-setting { display: flex; flex-direction: column; gap: 6px; padding: 12px 4px; border-bottom: 1px solid var(--line); }
 .ol-setting .pp-seg button { padding: 6px 2px; }
 .ol-setting .pp-seg button:disabled { cursor: default; }
+
+/* Jira rows (docs/OLLIE_MOMENTS.md, Jira sections) */
+.ol-row.ol-stack { flex-direction: column; align-items: stretch; gap: 6px; }
+.ol-row.ol-stack .ol-actions { justify-content: flex-start; }
+.ol-key {
+  flex: none;
+  font: 600 11px/1.5 var(--font-ui);
+  color: var(--owl-teal);
+  background: var(--surface-status);
+  border-radius: var(--radius-control);
+  padding: 0 5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ol-quote { margin-top: 3px; color: var(--text-muted); font-style: italic; overflow-wrap: anywhere; }
+.ol-inline-link { padding: 0; font: inherit; text-align: left; }
+.ol-warn-text { color: #b4570b; }

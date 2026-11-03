@@ -234,6 +234,10 @@ export function prepNotificationCopy(prep: PrepContent): NotificationCopy {
     const n = prep.pendingApprovals.length;
     parts.push(`${plural(n, 'Jira update')} ${n === 1 ? 'needs' : 'need'} your OK.`);
   }
+  const blocked = prep.jira?.rows.find((r) => r.kind === 'blocked');
+  if (parts.length === 0 && blocked) {
+    parts.push(`${blocked.owner ? `${blocked.owner.split(/\s+/)[0]}'s ` : ''}${blocked.key} is blocked.`);
+  }
   if (parts.length === 0) {
     parts.push(prep.lastMet ? `Last met ${shortDate(prep.lastMet.date)} · ${prep.lastMet.title}.` : 'Your prep is ready in Inwise.');
   }
@@ -271,6 +275,8 @@ export function wrapUpNotificationCopy(w: WrapUpContent): NotificationCopy {
   let body = `Today: ${plural(w.today.meetingCount, 'meeting')}, ${plural(w.today.tasksFound, 'task')} found.`;
   const threads = w.slackToday.reduce((sum, c) => sum + c.threadCount, 0);
   if (threads > 0) body += ` Slack brought in ${plural(threads, 'thread')}.`;
+  const waiting = w.jira?.waitingCount || 0;
+  if (waiting > 0) body += ` ${plural(waiting, 'Jira change')} ${waiting === 1 ? 'waits' : 'wait'} for your OK.`;
   return { title, body };
 }
 

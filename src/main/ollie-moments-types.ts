@@ -70,6 +70,8 @@ export interface MorningContent {
   catchUp: CatchUpPerson[];
   /** Present on the first day back after a gap; the card renders this instead of the morning sections. */
   welcomeBack: WelcomeBackContent | null;
+  /** "Your Jira": null when nothing to show or Jira is not connected. */
+  jira: MorningJira | null;
 }
 
 export interface OwedItem {
@@ -99,6 +101,53 @@ export interface PendingJiraApproval {
   meetingId: string | null;
   meetingTitle: string | null;
   createdAt: string;
+  /** Target ticket title when known. */
+  issueTitle: string | null;
+  /** Short quote from the meeting behind the change. */
+  evidence: string | null;
+  /** "Update PILOT-42 instead?" when Inwise thinks the work already has a ticket. */
+  suggestion: string | null;
+  /** Ticket intent from the meeting: done, due_moved, decision, new. */
+  intent: string | null;
+  /** 0..1, how sure Inwise is about the change. */
+  confidence: number | null;
+  /** Link to the target ticket, when there is one. */
+  url: string | null;
+}
+
+/** One Jira ticket row in an Ollie card. Tap opens `url`. */
+export interface JiraTicketRow {
+  key: string;
+  title: string;
+  url: string | null;
+  /** Plain one-line reason the row is here ("Blocked 4 days by OPS-1"). */
+  detail: string;
+  kind: 'blocked' | 'moved' | 'stale' | 'yours' | 'due_today' | 'overdue' | 'sprint' | 'mention';
+  /** Assignee display name, when the row is about someone else's ticket. */
+  owner: string | null;
+}
+
+export interface PrepJira {
+  /** Max 4 rows: blocked, yours that involve them, moved since you last met, quiet 7+ days. */
+  rows: JiraTicketRow[];
+}
+
+export interface MorningJira {
+  dueToday: JiraTicketRow[];
+  overdue: JiraTicketRow[];
+  /** The active sprint ends within a day and still has your open tickets. */
+  sprintEnding: { name: string; endsAt: string; openCount: number; rows: JiraTicketRow[] } | null;
+  /** @mentions of you newer than your last comment on that ticket. */
+  mentions: JiraTicketRow[];
+}
+
+export interface WrapJira {
+  /** What Inwise changed in Jira today from meetings (write log). */
+  changedToday: { id: string; issueKey: string; url: string | null; operation: string; summary: string }[];
+  /** Jira changes still waiting for your OK (opens Review). */
+  waitingCount: number;
+  /** Tickets discussed today with no Jira update for 7+ days. */
+  staleDiscussed: JiraTicketRow[];
 }
 
 export interface PrepContent {
@@ -115,6 +164,8 @@ export interface PrepContent {
   pendingApprovals: PendingJiraApproval[];
   /** True when "Record when it starts" is armed for this event. */
   recordArmed: boolean;
+  /** "Their Jira": null when nothing to show or Jira is not connected. */
+  jira: PrepJira | null;
 }
 
 export interface ProcessedTask {
@@ -146,6 +197,8 @@ export interface ProcessedContent {
     failedCount: number;
     pushed: { id: string; issueKey: string; url: string | null; operation: string }[];
     pending: PendingJiraApproval[];
+    /** Failed writes with the reason ("PILOT-42 has no transition to Done"). */
+    failed: { id: string; issueKey: string | null; operation: string; message: string }[];
   } | null;
   /** status === 'failed' only. Retry = retryRecording(meetingId); Export = exportRecording(meetingId). */
   failure: { message: string; stage: string | null; audioSaved: boolean } | null;
@@ -177,6 +230,8 @@ export interface WrapUpContent {
   receipts: { executionId: string; title: string; client: string; status: string; summary: string | null; at: string }[];
   needsRetry: { meetingId: string; title: string; date: string; message: string | null }[];
   slackSyncedAt: number | null;
+  /** "Jira today": null when nothing to show or Jira is not connected. */
+  jira: WrapJira | null;
 }
 
 interface MomentBase {

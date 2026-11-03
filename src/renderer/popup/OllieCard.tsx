@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import type {
-  MorningContent, OllieMoment, OwedItem, PendingJiraApproval, PrepContent, ProcessedContent, TaskRef, WrapUpContent,
+  JiraTicketRow, MorningContent, OllieMoment, OwedItem, PendingJiraApproval, PrepContent, ProcessedContent, TaskRef, WrapUpContent,
 } from '../api';
 import { api, fmtDueDate, fmtTime, useNav, OLLIE_SLACK_SYNCED_EVENT } from './nav';
 import { useReview } from './PopupShell';
@@ -106,23 +106,73 @@ function useBusy() {
   return { busy, run };
 }
 
+/**
+ * Jira changes waiting for an OK. Each row names the target ticket and the
+ * words from the meeting behind it; Approve / Skip go through the same gate
+ * as the Review page.
+ */
 function ApprovalRows({ rows, onDone }: { rows: PendingJiraApproval[]; onDone: () => void }) {
   const { busy, run } = useBusy();
   const [gone, setGone] = useState<Record<string, string>>({});
-  const opLabel: Record<string, string> = { create: 'Create', update: 'Update', transition: 'Move', comment: 'Comment' };
+  const [errors, setErrors] = useState<Record<string, string>>({});
   return (
     <>
-      {rows.map(a => (
+      {rows.map(a => {
+        const target = a.issueKey ? `${a.issueKey}${a.issueTitle ? ` · ${a.issueTitle}` : ''}` : 'New ticket';
+        const settled = gone[a.id];
+        return (
+          <div key={a.id} className="ol-row ol-stack">
+            <div className="ol-row-main">
+              <div className="ol-row-title">{a.summary}</div>
+              <div className="ol-row-sub">
+                {a.url
+                  ? <button className="pp-link ol-inline-link" onClick={() => api().openExternal?.(a.url!)}>{target}</button>
+                  : target}
+                {a.meetingTitle && !a.evidence ? ` · from ${a.meetingTitle}` : ''}
+              </div>
+              {a.evidence && <div className="ol-quote">“{a.evidence}”</div>}
+              {errors[a.id] && <div className="ol-row-sub ol-warn-text">{errors[a.id]}</div>}
+            </div>
+            <div className="ol-actions" onClick={e => e.stopPropagation()}>
+              {settled ? <span className="ol-chip">{settled}</span> : (
+                <>
+                  <button className="ol-btn ol-primary" disabled={busy[a.id]} onClick={() => run(a.id, async () => {
+                    const res = await api().sorApprove?.(a.id);
+                    if (res && res.ok === false) setErrors(e => ({ ...e, [a.id]: res.error || 'Jira did not accept the change.' }));
+                    else setGone(g => ({ ...g, [a.id]: 'Approved' }));
+                    onDone();
+                  })}>Approve</button>
+                  {a.suggestion && (
+                    <button className="ol-btn" disabled={busy[a.id]} onClick={() => run(a.id, async () => {
+                      const res = await api().jiraCreateInstead?.(a.id);
+                      if (res && res.ok === false) setErrors(e => ({ ...e, [a.id]: res.error || 'Could not create the ticket.' }));
+                      else setGone(g => ({ ...g, [a.id]: res?.key ? `Created ${res.key}` : 'Created' }));
+                      onDone();
+                    })}>Create new</button>
+                  )}
+                  <button className="ol-btn ol-quiet" disabled={busy[a.id]} onClick={() => run(a.id, async () => { await api().sorReject?.(a.id); setGone(g => ({ ...g, [a.id]: 'Skipped' })); onDone(); })}>Skip</button>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/** Read-only ticket rows; tap opens the issue in Jira. */
+function JiraRows({ rows }: { rows: JiraTicketRow[] }) {
+  return (
+    <>
+      {rows.map(r => (
         <Row
-          key={a.id}
-          title={a.summary}
-          sub={[`${opLabel[a.operation] || a.operation}${a.issueKey ? ` ${a.issueKey}` : ''}`, a.meetingTitle ? `from ${a.meetingTitle}` : null].filter(Boolean).join(' · ')}
-          actions={gone[a.id] ? <span className="ol-chip">{gone[a.id]}</span> : (
-            <>
-              <button className="ol-btn ol-primary" disabled={busy[a.id]} onClick={() => run(a.id, async () => { await api().sorApprove?.(a.id); setGone(g => ({ ...g, [a.id]: 'Approved' })); onDone(); })}>Approve</button>
-              <button className="ol-btn ol-quiet" disabled={busy[a.id]} onClick={() => run(a.id, async () => { await api().sorReject?.(a.id); setGone(g => ({ ...g, [a.id]: 'Skipped' })); onDone(); })}>Skip</button>
-            </>
-          )}
+          key={`${r.kind}-${r.key}`}
+          lead={<span className="ol-key">{r.key}</span>}
+          title={r.title}
+          sub={[r.owner, r.detail].filter(Boolean).join(' · ')}
+          chip={r.kind === 'overdue' || r.kind === 'blocked' ? <span className="ol-chip ol-late">{r.kind === 'blocked' ? 'Blocked' : 'Overdue'}</span> : undefined}
+          onOpen={r.url ? () => api().openExternal?.(r.url!) : undefined}
         />
       ))}
     </>
@@ -187,6 +237,16 @@ function MorningBody({ m, refresh }: { m: MorningContent; refresh: () => void })
           ))}
         </Section>
       )}
+      {m.jira && (
+        <Section label="Your Jira">
+          {m.jira.sprintEnding && (
+            <div className="ol-warn">
+              {m.jira.sprintEnding.name} ends {sprintEnds(m.jira.sprintEnding.endsAt)} with {plural(m.jira.sprintEnding.openCount, 'open ticket')} of yours.
+            </div>
+          )}
+          <JiraRows rows={morningJiraRows(m)} />
+        </Section>
+      )}
       {m.catchUp.length > 0 && (
         <Section label="Catch up">
           {m.catchUp.map(p => (
@@ -201,6 +261,22 @@ function MorningBody({ m, refresh }: { m: MorningContent; refresh: () => void })
       )}
     </>
   );
+}
+
+function sprintEnds(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'soon';
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return `${sameDay ? 'today' : 'tomorrow'} at ${hhmm(d.getTime())}`;
+}
+
+/** Overdue, due today, unanswered mentions, then sprint tickets not already listed. Max 6. */
+function morningJiraRows(m: MorningContent): JiraTicketRow[] {
+  const j = m.jira;
+  if (!j) return [];
+  const rows = [...j.overdue, ...j.dueToday, ...j.mentions];
+  for (const r of j.sprintEnding?.rows || []) if (!rows.some(x => x.key === r.key)) rows.push(r);
+  return rows.slice(0, 6);
 }
 
 function morningHeader(m: MorningContent) {
@@ -287,6 +363,11 @@ function PrepBody({ p, refresh }: { p: PrepContent; refresh: () => void }) {
           )}
         </React.Fragment>
       ))}
+      {p.jira && p.jira.rows.length > 0 && (
+        <Section label="Their Jira">
+          <JiraRows rows={p.jira.rows} />
+        </Section>
+      )}
       {p.pendingApprovals.length > 0 && (
         <Section label="Waiting on your OK">
           <ApprovalRows rows={p.pendingApprovals} onDone={() => { review.reload(); refresh(); }} />
@@ -442,6 +523,26 @@ function WrapBody({ w, refresh }: { w: WrapUpContent; refresh: () => void }) {
           {w.receipts.map(r => (
             <Row key={r.executionId} title={r.title} sub={[r.client, r.summary || r.status].filter(Boolean).join(' · ')} />
           ))}
+        </Section>
+      )}
+      {w.jira && (
+        <Section label="Jira today">
+          {w.jira.changedToday.map(c => (
+            <Row
+              key={c.id}
+              lead={<span className="ol-key">{c.issueKey}</span>}
+              title={c.summary}
+              sub="From a meeting today"
+              onOpen={c.url ? () => api().openExternal?.(c.url!) : undefined}
+            />
+          ))}
+          {w.jira.waitingCount > 0 && (
+            <Row
+              title={`${plural(w.jira.waitingCount, 'Jira change')} ${w.jira.waitingCount === 1 ? 'is' : 'are'} waiting for your OK`}
+              actions={<button className="ol-btn" onClick={() => push({ kind: 'review', focus: 'approvals' })}>Open review</button>}
+            />
+          )}
+          <JiraRows rows={w.jira.staleDiscussed} />
         </Section>
       )}
       {w.needsRetry.length > 0 && (
@@ -683,7 +784,7 @@ export function ProcessedRecap({ meetingId, revision, always }: { meetingId: str
         </Section>
       )}
       {content.jira && (content.jira.pushedCount > 0 || content.jira.failedCount > 0 || jiraPending.length > 0) && (
-        <Section label="Jira">
+        <Section label="Jira from this meeting">
           {(content.jira.pushedCount > 0 || content.jira.failedCount > 0) && (
             <div className="ol-receipt">
               {content.jira.pushedCount > 0 && <>Pushed {plural(content.jira.pushedCount, 'update')}{content.jira.pushed.length ? ': ' : '.'}</>}
@@ -693,9 +794,12 @@ export function ProcessedRecap({ meetingId, revision, always }: { meetingId: str
                   {p.url ? <button className="pp-link" style={{ padding: 0 }} onClick={() => api().openExternal?.(p.url!)}>{p.issueKey}</button> : p.issueKey}
                 </React.Fragment>
               ))}
-              {content.jira.failedCount > 0 && <span style={{ color: '#b4570b' }}>{content.jira.pushedCount > 0 ? ' · ' : ''}{plural(content.jira.failedCount, 'update')} failed</span>}
+              {content.jira.failedCount > 0 && content.jira.failed.length === 0 && <span style={{ color: '#b4570b' }}>{content.jira.pushedCount > 0 ? ' · ' : ''}{plural(content.jira.failedCount, 'update')} failed</span>}
             </div>
           )}
+          {content.jira.failed.map(f => (
+            <div key={f.id} className="ol-warn">{f.message}</div>
+          ))}
           {jiraPending.length > 0 && <ApprovalRows rows={jiraPending} onDone={refresh} />}
         </Section>
       )}

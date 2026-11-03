@@ -99,8 +99,8 @@ const pending = [
   summarizePendingApproval({ _id: 's1', pushParams: { operation: 'create', args: { title: 'Pricing page', projectKey: 'P' } }, meetingTitle: 'Pricing kickoff', createdAt: iso(d(5, 12, 0, 9)) }, 'm-old'),
   summarizePendingApproval({ _id: 's2', pushParams: { operation: 'transition', args: { issueKey: 'P-9', targetStatus: 'Done' } }, meetingTitle: 'Hiring sync', createdAt: iso(d(1, 12, 0, 9)) }, 'm-marco'),
 ];
-assert.equal(pending[0].summary, 'Create “Pricing page”');
-assert.equal(pending[1].summary, 'Move P-9 to Done');
+assert.equal(pending[0].summary, 'Create ticket “Pricing page”?');
+assert.equal(pending[1].summary, 'Move P-9 to Done?');
 const prep = buildPrep({ ...ctx, event, draftAgenda: ['Pricing tiers'], pendingApprovals: pending, recordArmed: true });
 assert.equal(prep.minutesUntil, 10);
 assert.deepEqual(prep.attendees, ['Priya']);
