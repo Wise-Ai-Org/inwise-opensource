@@ -49,13 +49,15 @@ import { extractChannel, trimWav, wavBufferToSamples, stitchWavBuffers } from '@
 import {
   connectJira, disconnectJira, isJiraConnected, getJiraInfo,
   getJiraProjects, getJiraStories, searchJiraUsers, JiraHttpError,
+  getJiraAccountId, reportPersonalDataAccounts,
 } from './jira-client';
 import {
   submitJiraWrite, approveHeldWrite, rejectHeldWrite, retryJiraWrite, onTaskReviewed,
   linkedIssueKey, linkTaskToIssue, resolveHeldAssignee,
 } from './jira-writes';
 import { afterInsightsSaved, replanTaskAfterDedup, runJiraPull, taskEditKey } from './jira-sync';
-import { initJiraCache, PULL_INTERVAL_MS } from './jira-pull';
+import { initJiraCache, PULL_INTERVAL_MS, listCachedIssues, removeCachedIssues } from './jira-pull';
+import { runPersonalDataReport, REPORT_CHECK_MS } from './jira-personal-data';
 import { statusLabel } from './jira-transitions';
 import {
   initSorWriteLog, onWriteCompleted,
@@ -67,6 +69,8 @@ import {
   listFailedSince as sorListFailedSince,
   listStuckEntries as sorListStuckEntries,
   getWriteEntry as sorGetWriteEntry,
+  listAccountWrites as sorListAccountWrites,
+  redactClosedAccount as sorRedactClosedAccount,
 } from './sor-write-log';
 import { initPendingApprovals, listPending } from './sor-pending-approvals';
 import { buildActionExecutionSummary, getActionExecution, initActionExecutionLog } from './action-execution-log';
@@ -3466,6 +3470,29 @@ async function runScheduledJiraPull(): Promise<void> {
   if (changed > 0) mainWindow?.webContents.send('jira:auto-synced', { pulled: changed });
 }
 
+// Atlassian personal data reporting (jira-personal-data.ts): weekly, checked daily.
+async function runScheduledPersonalDataReport(): Promise<void> {
+  try {
+    await runPersonalDataReport({
+      isConnected: isJiraConnected,
+      selfAccountId: getJiraAccountId,
+      listIssues: listCachedIssues,
+      listPeople: async () => [...(await getPeople()), ...(await getArchivedPeople())],
+      listWrites: sorListAccountWrites,
+      post: reportPersonalDataAccounts,
+      removeIssues: removeCachedIssues,
+      clearPersonLink: async (id) => { await setPersonJiraLink(id, null); },
+      redactWrite: sorRedactClosedAccount,
+      disconnect: disconnectJira,
+      getLastReportAt: () => (getConfig() as any).jiraPersonalDataReportAt || null,
+      setLastReportAt: (iso) => setConfig({ jiraPersonalDataReportAt: iso } as any),
+      log: (level, msg) => log(level, 'jira:personal-data', msg),
+    });
+  } catch (e: any) {
+    log('error', 'jira:personal-data', String(e?.message || e));
+  }
+}
+
 // Serve the renderer over a privileged app:// scheme. Calendar-free recording's
 // Silero VAD loads its ONNX model via fetch() and onnxruntime-web loads its wasm
 // via dynamic ESM import() of .mjs glue — Chromium blocks both over file://.
@@ -3669,6 +3696,8 @@ app.whenReady().then(() => {
   // Jira pull: whenever Jira is connected, at launch and every 30 minutes.
   setTimeout(() => { void runScheduledJiraPull(); }, 10_000);
   setInterval(() => { void runScheduledJiraPull(); }, PULL_INTERVAL_MS);
+  setTimeout(() => { void runScheduledPersonalDataReport(); }, 60_000);
+  setInterval(() => { void runScheduledPersonalDataReport(); }, REPORT_CHECK_MS);
 
   globalShortcut.register('CommandOrControl+Shift+T', () => {
     createOverlayWindow('Test Meeting');

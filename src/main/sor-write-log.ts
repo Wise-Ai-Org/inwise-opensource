@@ -413,3 +413,36 @@ function shallowEqual(a: any, b: any): boolean {
   if (ka.length !== kb.length) return false;
   return ka.every((k) => a[k] === b[k]);
 }
+
+// ── Personal data (jira-personal-data.ts) ───────────────────────────────────
+
+/** Write-log entries that hold a Jira account (suggested assignments). */
+export async function listAccountWrites(): Promise<SorWriteEntry[]> {
+  return (await getDb().findAsync({ operation: 'assign' })) as SorWriteEntry[];
+}
+
+export const FORMER_JIRA_USER = 'Former Jira user';
+
+/**
+ * The person closed their Atlassian account: erase their id and name from the
+ * entry. A suggestion still waiting for approval can no longer apply, so it
+ * is closed out.
+ */
+export async function redactClosedAccount(id: string): Promise<void> {
+  const db = getDb();
+  const entry = (await db.findOneAsync({ _id: id })) as SorWriteEntry | null;
+  if (!entry) return;
+  const set: Record<string, any> = {
+    fieldDiffs: (entry.fieldDiffs || []).map(d => (d.field === 'assignee' ? { ...d, before: d.before == null ? null : FORMER_JIRA_USER, after: FORMER_JIRA_USER } : d)),
+  };
+  if (entry.pushParams?.operation === 'assign') {
+    set.pushParams = { ...entry.pushParams, args: { ...entry.pushParams.args, accountId: null, assigneeName: FORMER_JIRA_USER, personId: null } };
+    set.suggestion = `Assign ${entry.pushParams.args.issueKey} to a former Jira user`;
+  }
+  if (entry.result === 'pending-approval' || entry.result === 'pending') {
+    set.result = 'failed';
+    set.errorMessage = 'That Jira account was closed';
+    set.completedAt = new Date().toISOString();
+  }
+  await db.updateAsync({ _id: id }, { $set: set }, {});
+}

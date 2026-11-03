@@ -397,6 +397,31 @@ export async function findSprintFieldId(): Promise<string | null> {
   }
 }
 
+/**
+ * Atlassian personal data reporting (jira-personal-data.ts): one batch of up
+ * to 90 accounts. Returns the accounts that need action, or null for 204.
+ */
+export async function reportPersonalDataAccounts(
+  accounts: { accountId: string; updatedAt: string }[],
+): Promise<{ accountId: string; status: 'closed' | 'updated' }[] | null> {
+  const send = async (token: string) => fetch('https://api.atlassian.com/app/report-accounts/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ accounts }),
+  });
+  let res = await send(await getValidToken());
+  if (res.status === 401) res = await send(await getValidToken());
+  if (res.status === 204) return null;
+  if (!res.ok) {
+    const err: any = new JiraHttpError(res.status, `Personal data report failed: ${res.status}`);
+    const retry = Number(res.headers.get('retry-after'));
+    if (Number.isFinite(retry)) err.retryAfterSec = retry;
+    throw err;
+  }
+  const data = await res.json() as any;
+  return Array.isArray(data?.accounts) ? data.accounts : [];
+}
+
 export function getJiraAccountId(): string | null {
   const tokens = (getConfig() as any).jiraTokens as JiraTokens | null;
   return tokens?.accountId || null;

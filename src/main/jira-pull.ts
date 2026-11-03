@@ -224,3 +224,9 @@ export async function pruneIssueCache(now = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - 120 * DAY_MS).toISOString();
   return cacheDb.removeAsync({ pulledAt: { $lt: cutoff } }, { multi: true });
 }
+
+/** Drop cached issues (personal data reporting: closed or updated accounts). */
+export async function removeCachedIssues(keys: string[]): Promise<void> {
+  if (!cacheDb || keys.length === 0) return;
+  await cacheDb.removeAsync({ _id: { $in: keys } }, { multi: true });
+}

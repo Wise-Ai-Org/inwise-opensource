@@ -104,3 +104,15 @@ Every Jira date shown (recap, prep, wrap, Review, notification copy) reads like 
 ## What this does not cover
 
 There is no test against a real Jira site; the HTTP layer is exercised with mocked `fetch`. People whose email Jira hides need a one-time Find in Jira. The issue-link direction for "Blocks" (outward = blocker) follows Atlassian's documentation and has not been checked against a live site.
+
+## Personal data
+
+Inwise keeps some Jira people data on your device for longer than a day: the cached issues (assignee, reporter, comment authors), the Jira accounts linked on the People tab, and suggested assignments waiting for your OK. Atlassian requires apps that keep this data to check in with them weekly, so Inwise does.
+
+- About a minute after launch, and once a day after that, Inwise checks whether a week has passed since the last check-in. If it has, it sends Atlassian the list of Jira account IDs it holds, with when each was last fetched. Nothing else is sent.
+- If someone deleted their Atlassian account, Inwise erases them: their cached issues are dropped (the next pull fetches them again without that person), their People tab link is removed, and any suggestion to assign them work is closed with their name removed.
+- If someone's profile changed, Inwise drops its cached copy, and the next pull or People tab lookup picks up the new details.
+- If your own account was deleted, Inwise disconnects Jira.
+- If Atlassian is busy or the check-in fails, Inwise does not count it and tries again the next day.
+
+Code: `src/main/jira-personal-data.ts`, `reportPersonalDataAccounts` in `jira-client.ts`.
