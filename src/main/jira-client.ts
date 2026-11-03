@@ -205,6 +205,8 @@ export async function connectJira(): Promise<{ ok: boolean; error?: string }> {
       const scopes = [
         'read:jira-work', 'write:jira-work', 'read:jira-user', 'offline_access',
         'read:board-scope:jira-software', 'read:sprint:jira-software', 'write:sprint:jira-software',
+        // Weekly personal data check-in (jira-personal-data.ts).
+        'report:personal-data',
       ].join(' ');
       const authUrl = `https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent('http://localhost:17291/callback')}&state=${state}&response_type=code&prompt=consent&code_challenge=${codeChallenge}&code_challenge_method=S256`;
       shell.openExternal(authUrl);
