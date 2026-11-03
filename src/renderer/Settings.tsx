@@ -2289,6 +2289,8 @@ function IntegrationsSection() {
         Status and recent sync activity for every connected system of record. Last 30 days.
       </p>
 
+      <ApprovalGateSettings />
+
       {/* Jira card */}
       <div style={{
         border: '1px solid var(--slate-200)', borderRadius: 10, padding: 14, background: 'white',

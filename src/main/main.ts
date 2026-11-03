@@ -3613,7 +3613,8 @@ app.whenReady().then(() => {
   // for more than 24 hours â€” these indicate an interrupted/crashed prior session.
   setTimeout(async () => {
     try {
-      const stuck = await sorListStuckEntries(24 * 60 * 60 * 1000);
+      // Writes waiting for the user's OK are not interrupted; only in-flight ones are.
+      const stuck = (await sorListStuckEntries(24 * 60 * 60 * 1000)).filter((e) => e.result !== 'pending-approval');
       if (stuck.length > 0) {
         log('info', 'sor:stuck-entries', `${stuck.length} interrupted writes found`);
         if (Notification.isSupported()) {

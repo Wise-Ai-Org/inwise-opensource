@@ -144,5 +144,5 @@ button.ol-row:hover, .ol-row.ol-clickable:hover { border-color: var(--owl-mint);
   font-variant-numeric: tabular-nums;
 }
 .ol-quote { margin-top: 3px; color: var(--text-muted); font-style: italic; overflow-wrap: anywhere; }
-.ol-inline-link { padding: 0; font: inherit; text-align: left; }
+.ol-row .pp-link.ol-inline-link { padding: 0; margin: 0; font: inherit; text-align: left; }
 .ol-warn-text { color: #b4570b; }

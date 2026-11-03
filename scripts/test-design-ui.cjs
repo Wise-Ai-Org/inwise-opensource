@@ -32,26 +32,45 @@ app.whenReady().then(async()=>{
  // Moment cards are time-driven; these forced payloads (real seeded ids) override only ollie:getMoment / ollie:catchUpNotes in this QA process.
  const ollie=require('../dist/main/ollie-moments-service'),forced={moment:null,catchUp:null};
  ipcMain.removeHandler('ollie:getMoment');ipcMain.handle('ollie:getMoment',async()=>forced.moment||ollie.getOllieMoment());
+ ipcMain.removeHandler('ollie:getProcessed');ipcMain.handle('ollie:getProcessed',async(_e,id)=>{const p=await ollie.getProcessedSummary(id);return p&&id===pilotId?{...p,jira:jiraRecap}:p});
+ // Jira settings screen without a real connection: status and projects are synthetic in this QA process only.
+ ipcMain.removeHandler('jira:status');ipcMain.handle('jira:status',()=>({connected:true,info:{cloudName:'Example Jira',email:'alex@example.invalid',cloudUrl:'https://example.invalid'}}));
+ ipcMain.removeHandler('jira:getProjects');ipcMain.handle('jira:getProjects',async()=>({ok:true,projects:[{id:'1',key:'PILOT',name:'Pilot'}]}));
  ipcMain.removeHandler('ollie:catchUpNotes');ipcMain.handle('ollie:catchUpNotes',async()=>forced.catchUp||ollie.getCatchUpNotes());
  const now=new Date(),tomorrowAt=(h,m)=>{const d=new Date(now);d.setDate(d.getDate()+1);d.setHours(h,m,0,0);return d.getTime()},yesterday=dayKey(new Date(Date.now()-86400000));
  const inviteRef={taskId:inviteTask,title:'Prepare the pilot invite list',dueDate:yesterday,daysLate:1};
  const surveyRef={taskId:surveyTask,title:'Book the pilot customer calls',dueDate:null,daysLate:null};
- const approval={id:'qa-approval',operation:'create',summary:'Create story: Pilot invite list',issueKey:null,meetingId,meetingTitle:'Launch readiness sync',createdAt:now.toISOString()};
+ const approval={id:'qa-approval',operation:'create',summary:'Create ticket “Prepare the pilot invite list”?',issueKey:null,meetingId,meetingTitle:'Launch readiness sync',createdAt:now.toISOString(),issueTitle:null,evidence:'I will pull the invite list together this week',suggestion:null,intent:'new',confidence:0.72,url:null};
+ // Jira fixtures (docs/JIRA_SAFETY.md): synthetic keys and example.invalid links only; no Jira connection or writes.
+ const jurl=k=>'https://example.invalid/browse/'+k,jrow=(key,title,kind,detail,owner=null)=>({key,title,url:jurl(key),kind,detail,owner});
+ const jiraPending=[
+  {id:'qa-jira-done',operation:'transition',summary:'Move PILOT-42 to Done?',issueKey:'PILOT-42',issueTitle:'Send onboarding survey to pilot customers',url:jurl('PILOT-42'),evidence:'the survey went out yesterday, so that one is done',suggestion:null,intent:'done',confidence:0.84,meetingId:pilotId,meetingTitle:'Pilot planning',createdAt:now.toISOString()},
+  {id:'qa-jira-due',operation:'update',summary:'Move the due date on PILOT-51 to '+dayKey(new Date(Date.now()+2*86400000))+'?',issueKey:'PILOT-51',issueTitle:'Pilot customer calls',url:jurl('PILOT-51'),evidence:'the calls slipped to Thursday',suggestion:null,intent:'due_moved',confidence:0.78,meetingId:pilotId,meetingTitle:'Pilot planning',createdAt:now.toISOString()},
+  {id:'qa-jira-sug',operation:'comment',summary:'Update PILOT-38 instead?',issueKey:'PILOT-38',issueTitle:'Draft the pilot survey questions',url:jurl('PILOT-38'),evidence:'Jordan will draft the survey',suggestion:'Update PILOT-38 instead?',intent:'new',confidence:0.61,meetingId:pilotId,meetingTitle:'Pilot planning',createdAt:now.toISOString()},
+ ];
+ const jiraRecap={pushedCount:1,failedCount:1,pushed:[{id:'qa-pushed',issueKey:'PILOT-44',url:jurl('PILOT-44'),operation:'comment'}],pending:jiraPending,failed:[{id:'qa-failed',issueKey:'PILOT-12',operation:'transition',message:'PILOT-12 has no transition to Done'}]};
+ const morningJira={dueToday:[jrow('PILOT-51','Pilot customer calls','due_today','Due today · In Progress')],overdue:[jrow('PILOT-47','Fix invite email links','overdue','2 days overdue · In Review')],
+  sprintEnding:{name:'Pilot sprint 4',endsAt:new Date(new Date().setHours(17,0,0,0)).toISOString(),openCount:2,rows:[jrow('PILOT-49','Pilot analytics dashboard','sprint','In Progress')]},
+  mentions:[jrow('PILOT-38','Draft the pilot survey questions','mention','Jordan Lee mentioned you')]};
+ const prepJira={rows:[jrow('PILOT-33','Pilot SSO setup','blocked','Blocked 4 days by OPS-12','Jordan Lee'),jrow('PILOT-47','Fix invite email links','yours','Yours · In Review'),
+  jrow('PILOT-41','Pilot pricing page','moved','Moved to In Review since you last met','Jordan Lee'),jrow('PILOT-29','Customer data export','stale','No update for 9 days','Jordan Lee')]};
+ const wrapJira={changedToday:[{id:'qa-w1',issueKey:'PILOT-44',url:jurl('PILOT-44'),operation:'comment',summary:'Commented on PILOT-44'},{id:'qa-w2',issueKey:'PILOT-52',url:jurl('PILOT-52'),operation:'create',summary:'Created PILOT-52: Book the pilot customer calls'}],
+  waitingCount:3,staleDiscussed:[jrow('PILOT-29','Customer data export','stale','Discussed today, no Jira update for 9 days','Jordan Lee')]};
  const moments={
   morning:{kind:'morning',key:'morning:'+dayKey(now),generatedAt:Date.now(),morning:{firstName:'Alex',meetingCount:3,priorityCount:2,overduePromiseCount:1,
    topPriorities:[{...inviteRef,rank:1,score:82,sourceMeetingId:meetingId,sourceMeetingTitle:'Launch readiness sync'},{...surveyRef,dueDate:dayKey(now),rank:2,score:64,sourceMeetingId:pilotId,sourceMeetingTitle:'Pilot planning'}],
    doneSinceYesterday:[{taskId:surveyTask,title:'Share the onboarding draft',dueDate:null,daysLate:null}],
-   catchUp:[{personId,name:'Jordan Lee',daysSinceMet:24,weeksSinceMet:3,waitingOn:'the onboarding draft',waitingCount:1}],welcomeBack:null}},
+   catchUp:[{personId,name:'Jordan Lee',daysSinceMet:24,weeksSinceMet:3,waitingOn:'the onboarding draft',waitingCount:1}],welcomeBack:null,jira:morningJira}},
   prep:{kind:'prep',key:'prep:qa-event',generatedAt:Date.now(),prep:{eventId:'qa-event',title:'Pilot kickoff with Jordan',startTime:Date.now()+8*60000,endTime:Date.now()+38*60000,minutesUntil:8,attendees:['Jordan Lee'],
    lastMet:{meetingId,title:'Launch readiness sync',date:now.toISOString()},draftAgenda:['Confirm the pilot invite list','Review the first onboarding version','Pick the first pilot date'],
    owes:[{name:'Jordan Lee',personId,owesYou:[{kind:'commitment',taskId:null,meetingId,text:'Review the first onboarding version',dueDate:yesterday,daysLate:2}],youOwe:[{kind:'task',taskId:inviteTask,meetingId,text:'Prepare the pilot invite list',dueDate:yesterday,daysLate:1}]}],
-   pendingApprovals:[approval],recordArmed:false}},
+   pendingApprovals:[approval],recordArmed:false,jira:prepJira}},
   wrap:{kind:'wrap',key:'wrap:'+dayKey(now),generatedAt:Date.now(),wrapUp:{firstName:'Alex',today:{meetingCount:3,tasksFound:2,decisions:2},
    tomorrow:{firstMeeting:{eventId:'qa-event-2',title:'Pilot kickoff with Jordan',startTime:tomorrowAt(9,30),agendaDrafted:true,tasksDueBefore:[inviteRef]},overdueWithAttendees:[{...inviteRef,attendee:'Jordan Lee'}],
     crunch:{from:tomorrowAt(10,0),to:tomorrowAt(16,0),topOverdue:inviteRef},cancelledToday:[]},
    goneQuiet:[{...surveyRef,score:72,commitmentToOther:true,lastActivityAt:new Date(Date.now()-9*86400000).toISOString()}],
    slackToday:[{channelId:'unknown',threadCount:2,taskCount:1,decisionCount:0}],snoozedToday:[{taskId:inviteTask,title:'Update the beta FAQ',dueDate:null,daysLate:null}],receipts:[],
-   needsRetry:[{meetingId:failedId,title:'Customer call (saved audio)',date:now.toISOString(),message:'Transcription failed.'}],slackSyncedAt:Date.now()-12*60000}},
+   needsRetry:[{meetingId:failedId,title:'Customer call (saved audio)',date:now.toISOString(),message:'Transcription failed.'}],slackSyncedAt:Date.now()-12*60000,jira:wrapJira}},
  };
  const win=new BrowserWindow({width:380,height:720,show:false,frame:false,webPreferences:{preload:path.resolve(__dirname,'../dist/main/preload.js'),contextIsolation:true,offscreen:true,backgroundThrottling:false}});
  win.webContents.on('console-message',(_e,...a)=>{const t=a.join(' ');if(/Uncaught|The above error occurred/.test(t))errors.push(t)});
@@ -76,11 +95,14 @@ app.whenReady().then(async()=>{
  await win.loadURL('app://bundle/index.html');await delay(1200);
  for(const view of ['communications','tasks','people']){await nav(view);await snap(view);}
  // Ollie moments: forced card payloads through the real renderer and IPC events.
+ const showSection=async label=>{const ok=await js(`(()=>{const l=[...document.querySelectorAll('.ol-seclabel')].find(x=>x.textContent.trim()===${JSON.stringify(label)});if(!l)return false;l.scrollIntoView({block:'start'});return true})()`);assert.ok(ok,label+' section rendered');await delay(100)};
  const cardTop=async()=>{await js("(()=>{const c=document.getElementById('ollie-moment-card');const b=c&&c.closest('.pp-body');if(b)b.scrollTop=Math.max(0,c.offsetTop-b.offsetTop-8)})()");await delay(80)};
  for(const [kind,label] of [['morning','Ollie planned your day'],['prep','Up next'],['wrap','Day wrapped']]){
   forced.moment=moments[kind];await nav('communications');win.webContents.send('ollie:moment-changed',{reason:'action'});await delay(350);
   assert.ok((await js("document.getElementById('ollie-moment-card')?.innerText||''")).toUpperCase().includes(label.toUpperCase()),kind+' card rendered');
   await cardTop();await snap('ollie-'+kind+'-card');
+  const jiraLabel={morning:'Your Jira',prep:'Their Jira',wrap:'Jira today'}[kind];
+  await showSection(jiraLabel);await snap('jira-'+kind);
   if(kind==='wrap')assert.ok((await js("document.querySelector('.pp-statusbar').innerText")).includes('Slack synced 12 min ago'),'footer shows Slack sync');
  }
  forced.moment=null;
@@ -88,6 +110,9 @@ app.whenReady().then(async()=>{
  assert.ok(await js(`!!document.querySelector('[data-meeting-id="${pilotId}"].ol-focus .ol-card')`),'focus-moment opens the processed recap row');
  assert.ok((await js(`document.querySelector('[data-meeting-id="${pilotId}"]').innerText`)).includes('Keep'),'recap offers Keep / Skip');
  await js(`document.querySelector('[data-meeting-id="${pilotId}"]').scrollIntoView({block:'start'})`);await snap('ollie-processed-recap');
+ const recapText=await js(`document.querySelector('[data-meeting-id="${pilotId}"]').innerText`);
+ for(const t of ['Move PILOT-42 to Done?','Update PILOT-38 instead?','Create new','PILOT-12 has no transition to Done'])assert.ok(recapText.includes(t),'recap shows '+t);
+ await showSection('Jira from this meeting');await snap('jira-recap');
  assert.ok((await js(`document.querySelector('[data-meeting-id="${failedId}"]').innerText`)).includes('Export audio'),'failure card offers recovery');
  await js(`document.querySelector('[data-meeting-id="${failedId}"]').scrollIntoView({block:'start'})`);await snap('ollie-failure-card');
  forced.catchUp=[{personId,weeksSinceMet:3,waitingOn:'the onboarding draft',text:'3 weeks since you met · waiting on the onboarding draft'}];
@@ -113,6 +138,10 @@ app.whenReady().then(async()=>{
  for(const section of ['Calendar','Jira','Slack','Zoom','Microsoft Teams','Google Meet','Approval gates & sync']){
   await nav('settings');await click('Integrations','.pp-setrow');await click(section,'.pp-setrow');await snap('integration-'+section.toLowerCase().replace(/[^a-z]+/g,'-'));
  }
+ await nav('settings');await click('Integrations','.pp-setrow');await click('Jira','.pp-setrow');await delay(300);
+ assert.ok(await js(`(()=>{const g=document.querySelector('[role=radiogroup][aria-label="Jira changes"]');if(!g)return false;g.scrollIntoView({block:'center'});return true})()`),'Jira changes setting rendered');
+ assert.ok(await js(`[...document.querySelectorAll('[role=radiogroup][aria-label="Jira changes"] input')][0].checked`),'Ask me every time is the default');
+ await delay(100);fs.writeFileSync(path.join(out,'settings-jira-approval.png'),await capture(win));results.push({screen:'settings-jira-approval',passed:true});
  await nav('settings');await click('Integrations','.pp-setrow');await snap('integrations-hub');
  await nav('voice-capture');await delay(500);await snap('voice-capture');await nav('communications');
  await win.loadURL('app://bundle/index.html?review='+meetingId);await delay(700);await snap('transcript-review');
