@@ -13,6 +13,8 @@ export default function WorkBrain({ onClose }: { onClose: () => void }) {
   const [title, setTitle] = useState(''), [summary, setSummary] = useState(''), [references, setReferences] = useState('');
   const [reviewed, setReviewed] = useState(false), [shared, setShared] = useState(false);
   const [observedOn, setObservedOn] = useState(localDay(new Date()));
+  const [drafts, setDrafts] = useState<any[]>([]), [reason, setReason] = useState(''), [draftConfidence, setDraftConfidence] = useState<number | null>(null);
+  const [draftIndex, setDraftIndex] = useState(0);
   const id = useRef(crypto.randomUUID()), alive = useRef(true), dialog = useRef<HTMLDivElement>(null), previousFocus = useRef<HTMLElement | null>(null);
   const selected = meetings.find(m => m._id === meetingId);
   const message = (e: any) => String(e?.message || e || 'Try again.').replace(/^Error invoking remote method '[^']+': Error: /, '');
@@ -43,6 +45,16 @@ export default function WorkBrain({ onClose }: { onClose: () => void }) {
   }, [code]);
   const run = async (fn: () => Promise<void>) => { setBusy(true); setError(''); try { await fn(); } catch (e) { setError(message(e)); } finally { if (alive.current) setBusy(false); } };
   const change = () => { setReviewed(false); setShared(false); id.current = crypto.randomUUID(); };
+  const chooseSource = (value: string) => {
+    const meeting = meetings.find(m=>m._id===value), date = new Date(meeting?.date || Date.now());
+    setMeetingId(value); setDrafts([]); setDraftIndex(0); setReason(''); setDraftConfidence(null);
+    setTitle(''); setSummary(''); setReferences(''); setProjectId(''); setWorkType('update');
+    setObservedOn(Number.isFinite(date.getTime())?localDay(date):localDay(new Date())); change();
+  };
+  const chooseDraft = (draft: any) => {
+    setTitle(draft.title); setSummary(draft.orgSummary); setProjectId(draft.projectId || ''); setWorkType(draft.workType);
+    setReferences((draft.relatedWorkItems || []).join(', ')); setReason(draft.reason || ''); setDraftConfidence(draft.confidence); change();
+  };
   const submit = () => run(async () => {
     if (!reviewed || !title.trim() || !summary.trim()) throw new Error('Review the exact text before sharing.');
     await api().workBrainShare({ contributionId: id.current, projectId: projectId || null, workType, title: title.trim(), orgSummary: summary.trim(), observedOn, relatedWorkItems: references.split(',').map(x=>x.trim()).filter(Boolean), reviewedAt: new Date().toISOString() }, meetingId || undefined);
@@ -60,9 +72,12 @@ export default function WorkBrain({ onClose }: { onClose: () => void }) {
     </> : <><div className="wb-connected">Connected to {org}<button className="pp-link" disabled={busy} onClick={()=>run(async()=>{await api().workBrainDisconnect();setConnected(false);setProjects([]);setMeetings([]);})}>Disconnect</button></div>
       <p className="wb-meta">Disconnect stops future contributions. Updates you already shared remain in the organisation.</p>
       <fieldset disabled={busy}>
-      <label>Private source meeting<select value={meetingId} onChange={e=>{setMeetingId(e.target.value);change();}}><option value="">Choose local context (optional)</option>{meetings.map(m=><option key={m._id} value={m._id}>{m.title || 'Untitled meeting'}</option>)}</select></label>
+      <label>Private source meeting<select value={meetingId} onChange={e=>chooseSource(e.target.value)}><option value="">Choose local context (optional)</option>{meetings.map(m=><option key={m._id} value={m._id}>{m.title || 'Untitled meeting'}</option>)}</select></label>
       {selected && <details><summary>Private context — never included in the contribution</summary><p>{typeof selected.summary==='string'?selected.summary:'Use this meeting’s insights to write a safe org update.'}</p><p>{(selected.decisions||[]).slice(0,5).map((d:any)=>typeof d==='string'?d:d.text||d.title||'').join(' · ')}</p></details>}
-      <label>Project<select value={projectId} onChange={e=>{setProjectId(e.target.value);change();}}><option value="">Unassigned — don’t guess</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+      {selected && <><p className="wb-meta">AI drafting uses this meeting’s private context and the project catalogue with your configured AI provider. Drafts can miss sensitive details; nothing is sent to the org until you review and share.</p><button type="button" className="pp-link" disabled={busy} onClick={()=>run(async()=>{const r=await api().workBrainDraft(meetingId);setDrafts(r.drafts||[]);setDraftIndex(0);if(r.drafts?.length)chooseDraft(r.drafts[0]);else setError('No shareable draft was found. Write an org-safe update manually.');})}>Draft with my AI provider</button></>}
+      {drafts.length>1 && <label>Suggested contribution<select value={draftIndex} onChange={e=>{setDraftIndex(Number(e.target.value));chooseDraft(drafts[Number(e.target.value)]);}}>{drafts.map((d,i)=><option key={i} value={i}>{d.workType}: {d.title}</option>)}</select></label>}
+      <label>Project<select value={projectId} onChange={e=>{setProjectId(e.target.value);setReason('');setDraftConfidence(null);change();}}><option value="">Unassigned — don’t guess</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+      {draftConfidence !== null && <p className="wb-meta">Suggested project confidence: {Math.round(draftConfidence*100)}% (AI estimate). {reason}</p>}
       <p className="wb-meta">Only projects explicitly marked for organisation-wide visibility appear here. Private or unclassified projects are excluded.</p>
       <label>Work type<select value={workType} onChange={e=>{setWorkType(e.target.value);change();}}>{workTypes.map(t=><option key={t}>{t}</option>)}</select></label>
       <label>Observed on<input type="date" value={observedOn} onChange={e=>{setObservedOn(e.target.value);change();}} /></label>

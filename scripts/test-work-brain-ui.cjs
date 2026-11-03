@@ -13,11 +13,12 @@ const capture=async win=>{for(let n=0;n<3;n++){try{return (await win.webContents
 fs.mkdirSync(out,{recursive:true});const results=[],errors=[];
 
 let linked=false,failNext=false,packets=[];
-for(const action of ['status','connect','poll','catalogue','share','disconnect','open'])ipcMain.removeHandler('work-brain:'+action);
+for(const action of ['status','connect','poll','catalogue','share','disconnect','open','draft'])ipcMain.removeHandler('work-brain:'+action);
 ipcMain.handle('work-brain:status',()=>({connected:linked,organisationId:linked?'org-qa':undefined}));
 ipcMain.handle('work-brain:connect',()=>({verificationCode:'ABC123',expiresAt:Date.now()+300000}));
 ipcMain.handle('work-brain:poll',()=>{linked=true;return{state:'connected',organisationId:'org-qa'}});
 ipcMain.handle('work-brain:catalogue',()=>({projects:[{id:'public-project',name:'Platform',description:'Shared project'}]}));
+ipcMain.handle('work-brain:draft',()=>({drafts:[{title:'Draft testing blocker',orgSummary:'The release needs a test environment.',projectId:'public-project',workType:'blocker',confidence:.8,reason:'PRIVATE-REASON-SENTINEL',relatedWorkItems:['PLAT-42']}]}));
 ipcMain.handle('work-brain:share',(_e,packet)=>{packets.push(packet);if(failNext){failNext=false;throw Error('Synthetic service interruption')}return{shared:true}});
 ipcMain.handle('work-brain:disconnect',()=>{linked=false;return{disconnected:true}});
 ipcMain.handle('work-brain:open',()=>true);
@@ -30,7 +31,7 @@ app.whenReady().then(async()=>{
  await win.loadURL('app://bundle/index.html');await delay(800);await snap('footer');await click('Org’s work brain');await snap('disconnected');
  assert.equal(await js('!!document.querySelector("[role=dialog]")'),true);await click('Connect your organisation');await snap('pairing');await delay(3300);await snap('connected');
  const fill=async(label,value)=>{await js('(()=>{const label=[...document.querySelectorAll("label")].find(x=>x.textContent.startsWith('+JSON.stringify(label)+'));const el=label.querySelector("input,textarea,select");const proto=el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:el instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,"value").set.call(el,'+JSON.stringify(value)+');el.dispatchEvent(new Event(el instanceof HTMLSelectElement?"change":"input",{bubbles:true}));})()');await delay(100)};
- await fill('Private source meeting',m);await fill('Project','public-project');await fill('Work type','blocker');await fill('Shared title','Release testing blocked');await fill('Summary everyone','The platform release needs a test environment.');await fill('Related work IDs','PLAT-42');
+ await fill('Private source meeting',m);await click('Draft with my AI provider');await snap('ai-draft');assert.equal(await js('document.querySelector("input[type=checkbox]").checked'),false);await fill('Project','public-project');await fill('Work type','blocker');await fill('Shared title','Release testing blocked');await fill('Summary everyone','The platform release needs a test environment.');await fill('Related work IDs','PLAT-42');
  assert.equal(await js('[...document.querySelectorAll("button")].find(b=>b.textContent.includes("Share reviewed context")).disabled'),true);
  await js('document.querySelector("input[type=checkbox]").click()');await delay(100);failNext=true;await click('Share reviewed context');await snap('failed-share');assert.ok(await js('document.body.innerText.includes("Synthetic service interruption")'));
  await click('Share reviewed context');await snap('shared');assert.ok(await js('document.body.innerText.includes("Shared successfully")'));assert.equal(packets.length,2);assert.equal(packets[0].contributionId,packets[1].contributionId,'retry retains id');assert.ok(!JSON.stringify(packets).includes('PRIVATE-'));assert.ok(!JSON.stringify(packets).includes('Private person'));

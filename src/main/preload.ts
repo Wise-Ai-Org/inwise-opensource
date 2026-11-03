@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   workBrainConnect: () => ipcRenderer.invoke('work-brain:connect'),
   workBrainPoll: () => ipcRenderer.invoke('work-brain:poll'),
   workBrainCatalogue: () => ipcRenderer.invoke('work-brain:catalogue'),
+  workBrainDraft: (meetingId: string) => ipcRenderer.invoke('work-brain:draft', meetingId),
   workBrainShare: (contribution: unknown, sourceMeetingId?: string) => ipcRenderer.invoke('work-brain:share', contribution, sourceMeetingId),
   workBrainDisconnect: () => ipcRenderer.invoke('work-brain:disconnect'),
   workBrainOpen: () => ipcRenderer.invoke('work-brain:open'),

@@ -2,6 +2,7 @@ import { app, ipcMain, safeStorage, shell } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getMeeting } from './database';
+import { draftOrgContext } from './work-brain-ai';
 
 const apiBase = () => (process.env.INWISE_WORK_BRAIN_API_BASE || 'https://appwise-functions.azurewebsites.net/api').replace(/\/$/, '');
 const webBase = () => (process.env.INWISE_WORK_BRAIN_WEB_BASE || 'https://projects.inwise.ai').replace(/\/$/, '');
@@ -56,6 +57,13 @@ export function registerWorkBrainHandlers() {
     return { state: 'pending' };
   });
   ipcMain.handle('work-brain:catalogue', () => connected('catalogue'));
+  ipcMain.handle('work-brain:draft', async (_event, meetingId: string) => {
+    if (typeof meetingId !== 'string') throw new Error('Choose a source meeting.');
+    const meeting = await getMeeting(meetingId);
+    if (!meeting) throw new Error('The private source meeting is no longer available.');
+    const catalogue = await connected('catalogue');
+    return { drafts: await draftOrgContext(meeting, catalogue.projects || []) };
+  });
   ipcMain.handle('work-brain:share', async (_event, contribution: any, sourceMeetingId?: string) => {
     if (sourceMeetingId && (typeof sourceMeetingId !== 'string' || !(await getMeeting(sourceMeetingId)))) throw new Error('The private source meeting is no longer available. Choose it again.');
     const result = await connected('share', { contribution });
