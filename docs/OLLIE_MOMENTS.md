@@ -21,6 +21,7 @@ Dismissing (×) hides the card until the next moment begins. Dismissal is stored
 - **Top priorities**: top 3 scored tasks (existing daily briefing), numbered, with due/overdue chip and source meeting.
 - **Done since yesterday**: tasks auto-completed by task-completion inference since the previous local day start, each with **Undo** (reopens the task).
 - **Catch up**: people not met in ≥ 21 days who are waiting on the user (an open commitment by the user to that person, or an open task linked to them). Max 2. Row opens the person.
+- **Your Jira** (when Jira is connected and the pull cache has something): an orange line when the active sprint ends within a day with your open tickets ("Sprint 12 ends today at 17:00 with 2 open tickets of yours."), then up to 6 rows: overdue, due today, unanswered @mentions (a mention of you newer than your last comment on that ticket), then the sprint's other open tickets. Tap opens the issue.
 - Daily plan window behaviour is unchanged.
 
 ### Prep (Before a meeting)
@@ -29,6 +30,7 @@ Dismissing (×) hides the card until the next moment begins. Dismissal is stored
 - **Ollie's draft agenda**: existing draft agenda for the event if present.
 - **<Name> owes you**: open commitments/tasks owned by an attendee that the user is waiting on, with "N days late" chip when past due.
 - **You owe <Name>**: open commitments/tasks owned by the user tied to those attendees, with Overdue chip.
+- **Their Jira**: up to 4 ticket rows for the attendees, in this order: their tickets that are blocked (status says blocked, with days blocked, or an open "is blocked by" link), your open tickets that involve them (they reported it or commented), their tickets whose status category moved since you last met, their open tickets with no update for 7+ days. Tap opens the issue.
 - **Waiting on your OK**: pending Jira approvals (`sor-pending-approvals`) whose source meeting included any of these attendees. Approve / Skip.
 - Buttons: **Record when it starts** (arms auto-start for that event), **Copy agenda**.
 - During the meeting the card stays, with kicker "Now · HH:MM to HH:MM". The record button becomes **Recording** while one runs, **Record now** if the meeting has not been recorded, and disappears once it has.
@@ -37,7 +39,8 @@ Dismissing (×) hides the card until the next moment begins. Dismissal is stored
 ### Processed (After a meeting)
 - Trigger: a meeting's transcript finishes processing (recorded, Zoom, Teams, Meet).
 - Inline recap card on that meeting's row in Meetings (the old separate Review page entry point remains reachable but the card is primary).
-- Contents: kicker "Processed · HH:MM–HH:MM"; "Inwise found N tasks and N decision(s)"; **patchy-audio warning** when transcription quality flags a stretch; **Tasks found** with Keep / Skip; possible duplicates with Merge / Keep both; **Decision(s)**; **Jira** receipt line for writes pushed automatically plus rows for writes held for approval (Approve / Skip); buttons **Post recap to #<channel>** (reuses existing Slack recap send, only when Slack is connected) and Open meeting.
+- Contents: kicker "Processed · HH:MM–HH:MM"; "Inwise found N tasks and N decision(s)"; **patchy-audio warning** when transcription quality flags a stretch; **Tasks found** with Keep / Skip; possible duplicates with Merge / Keep both; **Decision(s)**; **Jira from this meeting**; buttons **Post recap to #<channel>** (reuses existing Slack recap send, only when Slack is connected) and Open meeting.
+- **Jira from this meeting**: a receipt line for writes already applied (keys link to Jira), an orange line per failed write with its reason ("PILOT-42 has no transition to Done"), and one row per change waiting for an OK. Rows read as questions: "Move PILOT-42 to Done?" (someone said it is done), "Move the due date on PILOT-42 to 2026-11-04?" (it slipped), "Add the decision to PILOT-42 as a comment?", "Create ticket “…”?" (new work), "Update PILOT-42 instead?" (Inwise thinks the work already has a ticket). Each row shows the target key and title and the quote behind it, with Approve / Skip, plus Create new on suggestions. All of it goes through the Jira gate (docs/JIRA_SAFETY.md).
 - **Failure**: if processing failed but audio is saved, an orange "Needs a retry" card with **Retry** and **Export audio** (existing recovery actions).
 - Notification (one per meeting): title "Inwise processed <Meeting>", body "Found N tasks and N decision(s). Pushed N Jira update(s), N need(s) your OK." Failure variant: "Couldn't process <Meeting>. The audio is saved." This replaces the separate "Zoom transcript imported", "N updates pushed to Jira" and "Transcription failed" notifications.
 
@@ -49,8 +52,11 @@ Dismissing (×) hides the card until the next moment begins. Dismissal is stored
 - **Came in from Slack**: today's ingested Slack threads grouped by channel with counts and tasks/decisions found.
 - **Cleaned up**: tasks snoozed by the staleness sweep today, with **Undo**; receipts from the action-execution log (work done by Claude/Codex/OpenWorker today).
 - **Still needs a retry**: meetings with saved audio not yet processed.
+- **Jira today**: what Inwise changed in Jira today from meetings (write log: created, moved, due date, commented), a row "N Jira changes are waiting for your OK" with Open review, and tickets discussed today (keys in today's items, intents, decisions, linked tasks, or writes) that have had no Jira update for 7+ days.
 - Footer line in the tray: "Slack synced N min ago" when Slack is connected.
-- Notification: title "Tomorrow starts at HH:MM with <Meeting>" (or "Day wrapped" if nothing tomorrow), body "Today: N meetings, N tasks found. Slack brought in N threads." Actions: See wrap-up, Dismiss.
+- Notification: title "Tomorrow starts at HH:MM with <Meeting>" (or "Day wrapped" if nothing tomorrow), body "Today: N meetings, N tasks found. Slack brought in N threads. N Jira changes wait for your OK." Actions: See wrap-up, Dismiss.
+
+Jira adds no notifications of its own. The prep body mentions a blocked ticket ("Priya's PILOT-1 is blocked.") only when it has no owed item to lead with; the processed and wrap bodies count Jira changes waiting for an OK. Loudness follows Settings > Notifications as before.
 
 ### People tab
 - A small teal note under a person's row when they are in the Catch up set: "N weeks since you met · waiting on <thing>".
@@ -95,6 +101,10 @@ The main-process half is built. Payload types live in `src/main/ollie-moments-ty
 | `getOllieCatchUpNotes()` | `ollie:catchUpNotes` | `CatchUpNote[]`: People tab notes, the same set as the morning Catch up (max 2). `text` is ready to render. |
 | `ollieSetRecordAtStart(eventId, armed)` | `ollie:setRecordAtStart` | `{ armed }`. When armed, recording starts at the event's start time through the normal meeting-starting path (no-op if that event is already recording). Session-only. |
 | `ollieAddToTomorrow(taskId)` | `ollie:addToTomorrow` | updated task; `dueDate` becomes tomorrow's `YYYY-MM-DD`. |
+| `jiraGetWriteMode()` | `jira:getWriteMode` | `{ mode: 'ask' \| 'auto'; threshold: 0.9 }` (Settings > Jira > Jira changes) |
+| `jiraSetWriteMode(mode)` | `jira:setWriteMode` | same shape, after saving |
+| `jiraCreateInstead(id)` | `jira:createInstead` | `{ ok, key?, error? }`. Skips the held suggestion `id` and creates a new ticket for its task (a click). |
+| `jiraPullNow()` | `jira:pullNow` | pull summary; the scheduled pull runs at launch and every 30 min |
 | `getNotificationSettings()` | `notifications:get` | `NotificationSettings` |
 | `setNotificationSettings(patch)` | `notifications:set` | normalized `NotificationSettings`. The patch may be partial and `prep` merges (e.g. `{prep:{mode:'tray'}}`). Invalid values fall back to defaults. |
 
@@ -104,7 +114,9 @@ Card actions that reuse existing calls:
 |---|---|
 | Morning · Done since yesterday · Undo | `rejectLikelyDone(taskId)` (clears the inference flag; the task was never closed, see gaps) |
 | Wrap-up · Cleaned up · Undo | `bringBackTask(taskId)` |
-| Waiting on your OK · Approve / Skip | `sorApprove(id)` / `sorReject(id)` with `PendingJiraApproval.id` |
+| Waiting on your OK · Approve / Skip (prep and recap Jira rows) | `sorApprove(id)` / `sorReject(id)` with `PendingJiraApproval.id`. Approve returns `{ ok:false, error }` when Jira refuses (shown under the row). |
+| Jira ticket rows (Their Jira, Your Jira, Jira today) | `openExternal(row.url)` |
+| Jira today · Open review | navigation to Review, approvals |
 | Processed · Tasks found · Keep / Skip | `updateTask(taskId, { approval: { status: 'approved' } })` / `{ status: 'rejected' }` (as ReviewPage does) |
 | Processed · duplicate · Merge / Keep both | `dedupResolvePending(taskId, 'same')` / `dedupResolvePending(taskId, 'new')` |
 | Needs a retry · Retry / Export audio | `retryRecording(meetingId)` / `exportRecording(meetingId)` |
@@ -159,7 +171,25 @@ type PrepContent = {
 };
 type OwedItem = { kind: 'task' | 'commitment'; taskId: string | null; meetingId: string | null; text: string; dueDate: string | null; daysLate: number | null };
 // owesYou with daysLate -> "N days late" chip; youOwe with daysLate -> "Overdue" chip
-type PendingJiraApproval = { id: string; operation: 'create' | 'update' | 'transition' | 'comment'; summary: string; issueKey: string | null; meetingId: string | null; meetingTitle: string | null; createdAt: string };
+type PendingJiraApproval = {
+  id: string; operation: 'create' | 'update' | 'transition' | 'comment';
+  summary: string;               // a question: "Move PILOT-42 to Done?", or the suggestion text
+  issueKey: string | null; issueTitle: string | null; url: string | null;
+  evidence: string | null;       // quote from the meeting
+  suggestion: string | null;     // "Update PILOT-42 instead?" -> also offer Create new
+  intent: string | null;         // done | due_moved | decision | new
+  confidence: number | null;
+  meetingId: string | null; meetingTitle: string | null; createdAt: string;
+};
+
+type JiraTicketRow = { key: string; title: string; url: string | null; detail: string; owner: string | null;
+  kind: 'blocked' | 'moved' | 'stale' | 'yours' | 'due_today' | 'overdue' | 'sprint' | 'mention' };
+// PrepContent.jira:    null | { rows: JiraTicketRow[] }                                   // max 4
+// MorningContent.jira: null | { dueToday; overdue; mentions: JiraTicketRow[];             // max 3 each
+//                              sprintEnding: null | { name; endsAt; openCount; rows } }
+// WrapUpContent.jira:  null | { changedToday: { id; issueKey; url; operation; summary }[]; waitingCount: number; staleDiscussed: JiraTicketRow[] }
+// ProcessedContent.jira gains failed: { id; issueKey; operation; message }[]
+// Each is null when Jira is not connected or there is nothing to show.
 
 type ProcessedContent = {
   meetingId: string; title: string; source: string; status: 'processed' | 'needs_review' | 'failed';
@@ -203,6 +233,8 @@ type CatchUpNote = { personId: string; weeksSinceMet: number; waitingOn: string;
 - `briefing:get` and the daily plan window are unchanged; the Ollie card can replace the dismissible "today's brief" card.
 
 ### Data gaps
+
+- **Jira sections** read the local pull cache (`jira-issues.db`, refreshed every 30 min), so they can be up to 30 minutes behind Jira. "Moved since you last met" uses the status category change time, not the full changelog. Attendees are matched to Jira accounts by email; sites that hide emails leave "Their Jira" empty for those people.
 
 - **Done since yesterday**: task-completion inference never closes tasks; it flags `likelyDone`. The section lists tasks flagged since the previous day (new `likelyDoneAt` timestamp, so flags made before this change do not appear). Undo clears the flag.
 - **Draft agenda**: agendas are not stored per event. Prep shows the agenda the daily plan drafted for that event earlier in the same app session (recurring meetings with history, API key set); otherwise `null`. `agendaDrafted` in wrap-up uses the same source.
