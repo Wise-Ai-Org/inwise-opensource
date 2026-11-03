@@ -1,4 +1,6 @@
 import { recordingFailure, RecordingStage } from './recording-failure';
+import { registerWorkBrainHandlers } from './work-brain';
+registerWorkBrainHandlers();
 import { app, BrowserWindow, dialog, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage, powerMonitor, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';

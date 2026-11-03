@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import WorkBrain from './WorkBrain';
 import { NavProvider, useNav, api, Page, POPUP_NAV_EVENT, LegacyView, requestRecordSheet, VOICE_CAPTURE_TRIGGER_EVENT } from './nav';
 import { ReviewItems, useReviewItems } from './useReviewItems';
 import MeetingsTab from './MeetingsTab';
@@ -180,6 +181,7 @@ function PageView({ page }: { page: Page }) {
 }
 
 function ShellInner() {
+  const [orgBrainOpen, setOrgBrainOpen] = useState(false);
   const { tab, stack, setTab, openPage } = useNav();
   const review = useReviewItems();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -342,10 +344,11 @@ function ShellInner() {
             {tab === 'meetings' && <MeetingsTab />}
             {tab === 'tasks' && <TasksTab />}
             {tab === 'people' && <PeopleTab />}
-            <footer className="pp-statusbar"><span>{tab === 'meetings' ? 'Your meeting memory' : tab === 'tasks' ? 'Your commitments' : 'Your collaborators'}</span><button className="pp-link" onClick={() => openPage({ kind: 'settings-root' })}>Controls</button></footer>
+            <footer className="pp-statusbar"><span>{tab === 'meetings' ? 'Your meeting memory' : tab === 'tasks' ? 'Your commitments' : 'Your collaborators'}</span><button className="pp-link wb-footer-link" onClick={() => setOrgBrainOpen(true)}>Org’s work brain ↗</button><button className="pp-link" onClick={() => openPage({ kind: 'settings-root' })}>Controls</button></footer>
           </>
         )}
       </div>
+      {orgBrainOpen && <WorkBrain onClose={() => setOrgBrainOpen(false)} />}
     </ReviewContext.Provider>
   );
 }

@@ -1,6 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('inwiseAPI', {
+  workBrainStatus: () => ipcRenderer.invoke('work-brain:status'),
+  workBrainConnect: () => ipcRenderer.invoke('work-brain:connect'),
+  workBrainPoll: () => ipcRenderer.invoke('work-brain:poll'),
+  workBrainCatalogue: () => ipcRenderer.invoke('work-brain:catalogue'),
+  workBrainShare: (contribution: unknown, sourceMeetingId?: string) => ipcRenderer.invoke('work-brain:share', contribution, sourceMeetingId),
+  workBrainDisconnect: () => ipcRenderer.invoke('work-brain:disconnect'),
+  workBrainOpen: () => ipcRenderer.invoke('work-brain:open'),
   // Config
   getConfig: () => ipcRenderer.invoke('config:get'),
   setConfig: (updates: Record<string, any>) => ipcRenderer.invoke('config:set', updates),

@@ -1,0 +1,39 @@
+// Actual built renderer + real IPC and isolated synthetic data. Never opens user data.
+const {app,BrowserWindow,ipcMain}=require('electron');
+const fs=require('fs'),path=require('path'),os=require('os'),assert=require('assert/strict');
+app.disableHardwareAcceleration();app.setPath('userData',fs.mkdtempSync(path.join(os.tmpdir(),'inwise-owl-')));
+app.setName('Inwise design QA');process.argv.push('--hidden');
+app.commandLine.appendSwitch('use-fake-device-for-media-stream');app.commandLine.appendSwitch('use-fake-ui-for-media-stream');
+const config=require('../dist/main/config');
+config.setConfig({onboardingComplete:true,apiKey:'synthetic-test-placeholder',mcpEnabled:false,calendarFreeRecording:false,calendarUrls:[],userName:'Alex'});
+app.on('browser-window-created',(_e,w)=>{w.show=()=>{};w.focus=()=>{};});
+require('../dist/main/main');
+const delay=ms=>new Promise(r=>setTimeout(r,ms)),out=path.resolve(__dirname,'../artifacts/work-brain-ui');
+const capture=async win=>{for(let n=0;n<3;n++){try{return (await win.webContents.capturePage()).toPNG()}catch(e){if(!String(e).includes('UnknownVizError')||n===2)throw e;await delay(250);}}};
+fs.mkdirSync(out,{recursive:true});const results=[],errors=[];
+
+let linked=false,failNext=false,packets=[];
+for(const action of ['status','connect','poll','catalogue','share','disconnect','open'])ipcMain.removeHandler('work-brain:'+action);
+ipcMain.handle('work-brain:status',()=>({connected:linked,organisationId:linked?'org-qa':undefined}));
+ipcMain.handle('work-brain:connect',()=>({verificationCode:'ABC123',expiresAt:Date.now()+300000}));
+ipcMain.handle('work-brain:poll',()=>{linked=true;return{state:'connected',organisationId:'org-qa'}});
+ipcMain.handle('work-brain:catalogue',()=>({projects:[{id:'public-project',name:'Platform',description:'Shared project'}]}));
+ipcMain.handle('work-brain:share',(_e,packet)=>{packets.push(packet);if(failNext){failNext=false;throw Error('Synthetic service interruption')}return{shared:true}});
+ipcMain.handle('work-brain:disconnect',()=>{linked=false;return{disconnected:true}});
+ipcMain.handle('work-brain:open',()=>true);
+app.whenReady().then(async()=>{
+ const db=require('../dist/main/database');const m=await db.createMeeting({title:'Private planning',date:new Date().toISOString(),attendees:['Private person'],duration:20});
+ await db.updateMeetingTranscript(m,'PRIVATE-TRANSCRIPT-SENTINEL',20);await db.saveInsights(m,{summary:'PRIVATE-CONTEXT-SENTINEL',actionItems:[],decisions:[],blockers:[]});
+ const win=new BrowserWindow({width:380,height:720,show:false,frame:false,webPreferences:{preload:path.resolve(__dirname,'../dist/main/preload.js'),contextIsolation:true,offscreen:true,backgroundThrottling:false}});
+ const js=code=>win.webContents.executeJavaScript(code),click=async text=>{assert.ok(await js('(()=>{const b=[...document.querySelectorAll("button")].find(b=>b.textContent.includes('+JSON.stringify(text)+'));if(!b)return false;b.click();return true})()'));await delay(200)};
+ const snap=async name=>{assert.equal(await js('document.documentElement.scrollWidth>innerWidth'),false,name+' fits');fs.writeFileSync(path.join(out,name+'.png'),await capture(win));};
+ await win.loadURL('app://bundle/index.html');await delay(800);await snap('footer');await click('Org’s work brain');await snap('disconnected');
+ assert.equal(await js('!!document.querySelector("[role=dialog]")'),true);await click('Connect your organisation');await snap('pairing');await delay(3300);await snap('connected');
+ const fill=async(label,value)=>{await js('(()=>{const label=[...document.querySelectorAll("label")].find(x=>x.textContent.startsWith('+JSON.stringify(label)+'));const el=label.querySelector("input,textarea,select");const proto=el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:el instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,"value").set.call(el,'+JSON.stringify(value)+');el.dispatchEvent(new Event(el instanceof HTMLSelectElement?"change":"input",{bubbles:true}));})()');await delay(100)};
+ await fill('Private source meeting',m);await fill('Project','public-project');await fill('Work type','blocker');await fill('Shared title','Release testing blocked');await fill('Summary everyone','The platform release needs a test environment.');await fill('Related work IDs','PLAT-42');
+ assert.equal(await js('[...document.querySelectorAll("button")].find(b=>b.textContent.includes("Share reviewed context")).disabled'),true);
+ await js('document.querySelector("input[type=checkbox]").click()');await delay(100);failNext=true;await click('Share reviewed context');await snap('failed-share');assert.ok(await js('document.body.innerText.includes("Synthetic service interruption")'));
+ await click('Share reviewed context');await snap('shared');assert.ok(await js('document.body.innerText.includes("Shared successfully")'));assert.equal(packets.length,2);assert.equal(packets[0].contributionId,packets[1].contributionId,'retry retains id');assert.ok(!JSON.stringify(packets).includes('PRIVATE-'));assert.ok(!JSON.stringify(packets).includes('Private person'));
+ await fill('Shared title','Changed title');assert.equal(await js('document.querySelector("input[type=checkbox]").checked'),false,'changes need a fresh review');
+ await click('Disconnect');await snap('disconnected-again');assert.equal(linked,false);fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({passed:true,screens:8,packets:packets.length,privateDataSent:false},null,2));console.log('Work brain UI: pairing, review gate, failure/retry, private-data exclusion and disconnect passed');app.exit(0);
+}).catch(e=>{console.error(e);app.exit(1)});
