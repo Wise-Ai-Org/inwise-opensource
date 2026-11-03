@@ -71,6 +71,10 @@ export async function listPending(): Promise<PendingApprovalPayload[]> {
   return rows as PendingApprovalPayload[];
 }
 
+export async function updatePendingParams(id: string, pushParams: PushParams): Promise<void> {
+  await getDb().updateAsync({ _id: id }, { $set: { pushParams } }, {});
+}
+
 export async function removePending(id: string): Promise<void> {
   await getDb().removeAsync({ _id: id }, {});
 }

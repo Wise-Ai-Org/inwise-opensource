@@ -15,10 +15,15 @@ import { log } from './logger';
 import { isSelf } from './self-identity';
 import { scoreTasks } from './task-scorer';
 import { listPending } from './sor-pending-approvals';
-import { getWriteEntry, listByMeeting as sorListByMeeting } from './sor-write-log';
+import { getWriteEntry, listByMeeting as sorListByMeeting, listRecent as sorListRecent } from './sor-write-log';
+import { isJiraConnected } from './jira-client';
+import { listCachedIssues, type JiraIssueSnapshot } from './jira-pull';
+import { changelogCandidates } from './ollie-jira';
+import { statusChangesForIssues } from './jira-changelog';
 import { listActionExecutionsUpdatedSince } from './action-execution-log';
 import { getLastSlackPollAt } from './slack-poller';
 import { getSlackConnectionInfo } from './slack-client';
+import { waitForMeetingSync } from './jira-sync';
 import {
   buildCatchUpNotes,
   buildMorning,
@@ -26,6 +31,9 @@ import {
   buildProcessed,
   buildWrapUp,
   computeCatchUp,
+  findLastMet,
+  identitiesMatch,
+  jiraAccountIdResolver,
   summarizePendingApproval,
   type CalendarEventLike,
   type ContentContext,
@@ -170,8 +178,12 @@ async function loadContext(now: Date): Promise<{ ctx: ContentContext; allTasks: 
   const [allTasks, meetings, people] = await Promise.all([getTasks({ includeSnoozed: true }), getMeetings(), getPeople()]);
   const tasks = allTasks.filter((t: any) => t.snoozedAt == null);
   const scored = scoreTasks(tasks.filter((t: any) => t.status !== 'done' && t.status !== 'completed'), meetings, people);
+  let jiraIssues: JiraIssueSnapshot[] | null = null;
+  if (isJiraConnected()) {
+    try { jiraIssues = await listCachedIssues(); } catch { jiraIssues = []; }
+  }
   return {
-    ctx: { now, userName: cfg.userName?.trim() || '', isSelf, tasks, meetings, people, scored },
+    ctx: { now, userName: cfg.userName?.trim() || '', isSelf, tasks, meetings, people, scored, jiraIssues },
     allTasks,
   };
 }
@@ -180,11 +192,43 @@ export async function loadPendingApprovals(): Promise<PendingJiraApproval[]> {
   const rows = await listPending();
   const out: PendingJiraApproval[] = [];
   for (const row of rows) {
-    let meetingId: string | null = null;
-    try { meetingId = (await getWriteEntry(row._id))?.sourceMeetingId || null; } catch { meetingId = null; }
-    out.push(summarizePendingApproval(row, meetingId));
+    let entry: any = null;
+    try { entry = await getWriteEntry(row._id); } catch { entry = null; }
+    if (entry && entry.result !== 'pending-approval') continue; // stale queue row
+    out.push(summarizePendingApproval(row, entry?.sourceMeetingId || null, entry));
   }
   return out;
+}
+
+/** Changelog for the few issues "Their Jira" could show as moved; cached per issue + updated time. */
+async function loadPrepStatusChanges(ctx: ContentContext, event: CalendarEventLike): Promise<Map<string, any[] | null> | undefined> {
+  if (!ctx.jiraIssues || ctx.jiraIssues.length === 0) return undefined;
+  const others = (event.attendees || []).filter((a) => a && !ctx.isSelf(a));
+  const lastMet = findLastMet(ctx, event, others);
+  const candidates = changelogCandidates({
+    issues: ctx.jiraIssues,
+    attendees: others,
+    lastMetMs: lastMet ? toMs(lastMet.date) : null,
+    identitiesMatch,
+    accountIdFor: jiraAccountIdResolver(ctx.people),
+  });
+  if (candidates.length === 0) return undefined;
+  try { return await statusChangesForIssues(candidates); } catch { return undefined; }
+}
+
+async function loadJiraToday(now: Date, meetings: any[], allTasks: any[]): Promise<{ writesToday: any[]; pendingCount: number; linkedKeysToday: string[] } | null> {
+  if (!isJiraConnected()) return null;
+  const dayStart = startOfLocalDay(now).getTime();
+  const [writesToday, pending] = await Promise.all([
+    sorListRecent(200, dayStart).catch(() => [] as any[]),
+    loadPendingApprovals().catch(() => [] as PendingJiraApproval[]),
+  ]);
+  const todayIds = new Set(meetings.filter((m: any) => { const ms = toMs(m.date); return ms !== null && ms >= dayStart && ms < startOfLocalDay(now, 1).getTime(); }).map((m: any) => m._id));
+  const linkedKeysToday = allTasks
+    .filter((t: any) => t.meetingId && todayIds.has(t.meetingId))
+    .map((t: any) => (t.source?.type === 'jira' ? t.source.id : t.jiraKey))
+    .filter((k: any): k is string => typeof k === 'string' && !!k);
+  return { writesToday: writesToday.filter((w: any) => w.targetSystem === 'jira'), pendingCount: pending.length, linkedKeysToday };
 }
 
 function eventsForToday(events: CalendarEventLike[], now: Date): CalendarEventLike[] {
@@ -220,6 +264,7 @@ export async function getOllieMoment(now: Date = new Date()): Promise<OllieMomen
       draftAgenda: draftAgendas.get(event.id) || null,
       pendingApprovals: await loadPendingApprovals(),
       recordArmed: armedEvents.has(event.id),
+      jiraStatusChanges: await loadPrepStatusChanges(ctx, event),
     });
     return { kind: 'prep', key: selected.key, generatedAt, prep };
   }
@@ -235,6 +280,7 @@ export async function getOllieMoment(now: Date = new Date()): Promise<OllieMomen
       allTasks,
       executions,
       slackSyncedAt: getSlackConnectionInfo().connected ? getLastSlackPollAt() : null,
+      jiraToday: await loadJiraToday(now, ctx.meetings, allTasks),
     });
     return { kind: 'wrap', key: selected.key, generatedAt, wrapUp };
   }
@@ -325,6 +371,7 @@ async function firePrep(event: CalendarEventLike): Promise<void> {
       draftAgenda: draftAgendas.get(event.id) || null,
       pendingApprovals: await loadPendingApprovals(),
       recordArmed: armedEvents.has(event.id),
+      jiraStatusChanges: await loadPrepStatusChanges(ctx, event),
     });
     // Prep is by definition before the meeting, so it is never queued.
     showNotification(prepNotificationCopy(prep), { kind: 'prep', key, eventId: event.id }, ['Open prep', 'Record at start'], (index) => {
@@ -382,6 +429,9 @@ async function fireWrapUp(): Promise<void> {
  * notifications with one per meeting outcome.
  */
 export async function announceProcessed(meetingId: string): Promise<void> {
+  // Let the Jira pass for this meeting finish so the recap and the
+  // notification show what was pushed and what waits for an OK.
+  await waitForMeetingSync(meetingId).catch(() => undefined);
   emitChanged({ reason: 'processed', meetingId });
   try {
     if (getNotificationSettings().processed !== 'notify') return;

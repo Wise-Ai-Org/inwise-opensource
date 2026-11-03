@@ -1,9 +1,51 @@
 import { getConfig } from './config';
 import { assessTranscriptQuality, inferMeetingType, sanitizeDueDate, computeExtractionCoverage } from './transcription-quality';
+import { normalizeCertainty } from './jira-confidence';
+
+export interface ExtractedActionItem {
+  text: string;
+  owner?: string;
+  dueDate?: string;
+  priority?: string;
+  isCommitment?: boolean;
+  /** 0..1: how sure the extractor is that this is a real, agreed task. Defaults to 0.5 when the model omits it. */
+  certainty: number;
+  /** True only when a date was actually said (not inferred). */
+  dueDateExplicit: boolean;
+  /** Short quote behind the item, or null. */
+  evidence: string | null;
+  /** Issue key said in the meeting (PILOT-42), or null. */
+  issueKey: string | null;
+}
+
+export type TicketIntentKind = 'done' | 'started' | 'due_moved' | 'decision' | 'new' | 'reassign' | 'blocked_by' | 'sprint';
+
+/** A spoken change to a Jira ticket ("the survey is done", "slipped to Tuesday"). */
+export interface TicketIntent {
+  kind: TicketIntentKind;
+  /** Issue key if one was said. */
+  issueKey: string | null;
+  /** Words that identify the ticket when no key was said ("the onboarding survey"). */
+  ticketHint: string;
+  /** done/due_moved/decision: what was said, in one plain sentence. */
+  text: string;
+  /** due_moved: the new date (YYYY-MM-DD), else null. */
+  dueDate: string | null;
+  evidence: string | null;
+  certainty: number;
+  /** reassign: the person who will take it, as said ("Jordan"). */
+  assigneeName: string | null;
+  /** blocked_by: the blocking ticket's key if said, else words naming it. */
+  blockerKey: string | null;
+  blockerHint: string | null;
+  /** sprint: 'active' ("this sprint") or 'next' ("next sprint"). */
+  sprint: 'active' | 'next' | null;
+}
 
 export interface Insights {
   summary: string;
-  actionItems: { text: string; owner?: string; dueDate?: string; priority?: string; isCommitment?: boolean }[];
+  actionItems: ExtractedActionItem[];
+  ticketIntents: TicketIntent[];
   decisions: { text: string; rationale?: string }[];
   blockers: { text: string; severity?: string }[];
   contradictions: { text: string; previousDecision: string; previousMeetingTitle?: string; previousMeetingDate?: string }[];
@@ -53,13 +95,16 @@ Return a JSON object with this exact shape:
 {
   "meetingType": "customer|internal|sales|hiring|one_on_one|planning|support|project|general",
   "summary": "2-3 sentence summary of the meeting",
-  "actionItems": [{ "text": "...", "owner": "name or null", "dueDate": "YYYY-MM-DD or null", "priority": "high|medium|low", "isCommitment": false, "confidence": 0.0 }],
+  "actionItems": [{ "text": "...", "owner": "name or null", "dueDate": "YYYY-MM-DD or null", "dueDateExplicit": false, "priority": "high|medium|low", "isCommitment": false, "certainty": 0.0, "evidence": "short exact quote or null", "issueKey": "PROJ-123 if a ticket key was said, else null" }],
+  "ticketIntents": [{ "kind": "done|started|due_moved|decision|new|reassign|blocked_by|sprint", "issueKey": "PROJ-123 or null", "ticketHint": "words naming the ticket", "text": "one plain sentence", "dueDate": "YYYY-MM-DD or null", "assigneeName": "person taking it, or null", "blockerKey": "PROJ-9 or null", "blockerHint": "words naming the blocking work, or null", "sprint": "active|next|null", "evidence": "short exact quote", "certainty": 0.0 }],
   "decisions": [{ "text": "...", "rationale": "... or null", "confidence": 0.0 }],
   "blockers": [{ "text": "...", "severity": "high|medium|low", "confidence": 0.0 }],
   "signals": [{ "type": "pain|need|objection|opportunity|timeline|stakeholder|context|risk", "text": "...", "speaker": "name or null", "confidence": 0.0, "evidence": { "quote": "short exact quote or null", "timestamp": "timestamp or null" } }],
   "openQuestions": ["question that remains unresolved"],
   "coverage": { "score": 0.0, "missing": ["important area not supported by evidence"] }
 }
+Ticket intents: only when someone talks about an existing ticket or tracked piece of work. "done" = they said it is finished. "started" = work on it has begun or it should move to in progress. "due_moved" = its date changed (give the new date). "decision" = a decision that belongs on that ticket. "new" = new work that clearly needs a ticket. "reassign" = someone else will now own it (give assigneeName exactly as said). "blocked_by" = it cannot move until other work is done (give blockerKey if said, else blockerHint). "sprint" = pull it into this sprint ("active") or the next one ("next"). Never invent a ticket key; use issueKey only when it was said. Leave the list empty when nothing applies.
+certainty is 0..1: how sure you are the item or intent was really agreed in this conversation (1 = explicit and confirmed, 0.5 = implied, below 0.3 = speculative). dueDateExplicit is true only when the date was actually said.
 Rules:
 - Use the meeting date supplied by the caller as the reference date. Never invent a past due date. If no date is stated, use null.
 - Do not create action items, decisions, blockers, or signals from generic small talk.
@@ -80,15 +125,73 @@ Return a JSON array of contradictions (empty array if none):
 
 Return only valid JSON, no markdown fences.`;
 
+const KEY_RE = /^[A-Z][A-Z0-9]{1,9}-\d{1,6}$/;
+const cleanKey = (v: unknown): string | null => (typeof v === 'string' && KEY_RE.test(v.trim()) ? v.trim() : null);
+const cleanText = (v: unknown, max = 300): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
+
+/**
+ * Normalize model action items. Certainty falls back to the older
+ * `confidence` field, then to 0.5. A due date counts as explicit only when the
+ * model says so and the sanitized date survived.
+ */
+export function normalizeActionItems(raw: unknown, meetingDate?: string): ExtractedActionItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item: any) => item && typeof item.text === 'string' && item.text.trim())
+    .map((item: any) => {
+      const dueDate = sanitizeDueDate(item.dueDate, meetingDate);
+      return {
+        ...item,
+        text: item.text.trim(),
+        dueDate,
+        certainty: normalizeCertainty(item.certainty ?? item.confidence),
+        dueDateExplicit: item.dueDateExplicit === true && !!dueDate,
+        evidence: cleanText(item.evidence),
+        issueKey: cleanKey(item.issueKey),
+      };
+    });
+}
+
+export function normalizeTicketIntents(raw: unknown, meetingDate?: string): TicketIntent[] {
+  if (!Array.isArray(raw)) return [];
+  const kinds: TicketIntentKind[] = ['done', 'started', 'due_moved', 'decision', 'new', 'reassign', 'blocked_by', 'sprint'];
+  const out: TicketIntent[] = [];
+  for (const it of raw as any[]) {
+    if (!it || !kinds.includes(it.kind)) continue;
+    const text = cleanText(it.text) || '';
+    const ticketHint = cleanText(it.ticketHint, 160) || '';
+    if (!text && !ticketHint) continue;
+    const dueDate = it.kind === 'due_moved' ? (sanitizeDueDate(it.dueDate, meetingDate) || null) : null;
+    if (it.kind === 'due_moved' && !dueDate) continue;
+    const assigneeName = it.kind === 'reassign' ? cleanText(it.assigneeName, 80) : null;
+    if (it.kind === 'reassign' && !assigneeName) continue;
+    const blockerKey = it.kind === 'blocked_by' ? cleanKey(it.blockerKey) : null;
+    const blockerHint = it.kind === 'blocked_by' ? cleanText(it.blockerHint, 160) : null;
+    if (it.kind === 'blocked_by' && !blockerKey && !blockerHint) continue;
+    out.push({
+      kind: it.kind,
+      issueKey: cleanKey(it.issueKey),
+      ticketHint,
+      text,
+      dueDate,
+      evidence: cleanText(it.evidence),
+      certainty: normalizeCertainty(it.certainty ?? it.confidence),
+      assigneeName,
+      blockerKey,
+      blockerHint,
+      sprint: it.kind === 'sprint' ? (it.sprint === 'next' ? 'next' : 'active') : null,
+    });
+  }
+  return out.slice(0, 12);
+}
+
 function parseInsights(text: string, transcript = '', context: ExtractionContext = {}): Insights {
   // Strip markdown fences if present (```json ... ```)
   const stripped = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   const parsed = JSON.parse(stripped);
   const quality = assessTranscriptQuality(transcript);
-  const actionItems = Array.isArray(parsed.actionItems) ? parsed.actionItems.map((item: any) => ({
-    ...item,
-    dueDate: sanitizeDueDate(item?.dueDate, context.meetingDate),
-  })) : [];
+  const actionItems = normalizeActionItems(parsed.actionItems, context.meetingDate);
+  const ticketIntents = normalizeTicketIntents(parsed.ticketIntents, context.meetingDate);
   const decisions = Array.isArray(parsed.decisions) ? parsed.decisions : [];
   const blockers = Array.isArray(parsed.blockers) ? parsed.blockers : [];
   const signals = Array.isArray(parsed.signals) ? parsed.signals.slice(0, 30) : [];
@@ -112,6 +215,7 @@ function parseInsights(text: string, transcript = '', context: ExtractionContext
   return {
     summary: parsed.summary || '',
     actionItems,
+    ticketIntents,
     decisions,
     blockers,
     contradictions: parsed.contradictions || [],
@@ -153,7 +257,7 @@ async function extractWithClaude(transcript: string, apiKey: string, context: Ex
     },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 2048,
+      max_tokens: 3072,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: `${extractionContext(context)}\n\nTranscript:\n\n${transcript}` }],
     }),

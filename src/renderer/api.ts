@@ -98,10 +98,20 @@ export const api = {
   jiraGetProjects: () => inwiseAPI.jiraGetProjects(),
   jiraGetStories: (projectKey?: string) => inwiseAPI.jiraGetStories(projectKey),
   jiraCreateIssue: (task: any) => inwiseAPI.jiraCreateIssue(task),
-  jiraUpdateIssue: (issueKey: string, updates: any) => inwiseAPI.jiraUpdateIssue(issueKey, updates),
-  jiraTransition: (issueKey: string, status: string) => inwiseAPI.jiraTransition(issueKey, status),
-  jiraAddComment: (issueKey: string, comment: string, meetingTitle?: string) =>
-    inwiseAPI.jiraAddComment(issueKey, comment, meetingTitle),
+  jiraUpdateIssue: (issueKey: string, updates: any, taskId?: string) => inwiseAPI.jiraUpdateIssue(issueKey, updates, taskId),
+  jiraTransition: (issueKey: string, status: string, taskId?: string) => inwiseAPI.jiraTransition(issueKey, status, taskId),
+  jiraAddComment: (issueKey: string, comment: string, meetingTitle?: string, taskId?: string) =>
+    inwiseAPI.jiraAddComment(issueKey, comment, meetingTitle, taskId),
+  jiraGetWriteMode: (): Promise<{ mode: 'ask' | 'auto'; threshold: number }> => inwiseAPI.jiraGetWriteMode(),
+  jiraSetWriteMode: (mode: 'ask' | 'auto'): Promise<{ mode: 'ask' | 'auto'; threshold: number }> => inwiseAPI.jiraSetWriteMode(mode),
+  jiraCreateInstead: (pendingId: string): Promise<{ ok: boolean; error?: string; key?: string }> => inwiseAPI.jiraCreateInstead(pendingId),
+  jiraPullNow: () => inwiseAPI.jiraPullNow(),
+  jiraSearchUsers: (query: string): Promise<{ ok: boolean; error?: string; users?: { accountId: string; displayName: string; email: string | null }[] }> =>
+    inwiseAPI.jiraSearchUsers(query),
+  jiraResolveAssignee: (pendingId: string, user: { accountId: string; displayName?: string }): Promise<{ ok: boolean; error?: string }> =>
+    inwiseAPI.jiraResolveAssignee(pendingId, user),
+  peopleSetJiraAccount: (personId: string, user: { accountId: string; displayName?: string }) => inwiseAPI.peopleSetJiraAccount(personId, user),
+  peopleUnlinkJira: (personId: string) => inwiseAPI.peopleUnlinkJira(personId),
   jiraLinkTask: (taskId: string, jiraKey: string, jiraUrl: string) =>
     inwiseAPI.jiraLinkTask(taskId, jiraKey, jiraUrl),
   jiraMatchTasks: (items: any[], projectKey?: string) => inwiseAPI.jiraMatchTasks(items, projectKey),

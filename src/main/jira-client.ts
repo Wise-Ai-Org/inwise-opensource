@@ -9,11 +9,11 @@ import * as crypto from 'crypto';
 import { shell } from 'electron';
 import { getConfig, setConfig } from './config';
 import { log } from './logger';
-import {
-  recordWrite, markCompleted, incrementRetry, getWriteEntry,
-  computeCreateDiffs, computeUpdateDiffs,
-  WriteProvenance, PushParams, FieldDiff,
-} from './sor-write-log';
+import { markCompleted, PushParams } from './sor-write-log';
+import { noTransitionMessage, pickTransition } from './jira-transitions';
+
+// Writes: this module only performs the HTTP call (executeJiraPush). Every
+// Jira write is gated, logged and made idempotent in jira-writes.ts.
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -200,7 +200,13 @@ export async function connectJira(): Promise<{ ok: boolean; error?: string }> {
     });
 
     server.listen(17291, () => {
-      const scopes = 'read:jira-work write:jira-work offline_access';
+      // read:jira-user: user search (attendee lookup, "Find in Jira").
+      // Sprints use the issue search and edit APIs, so no Jira Software scopes.
+      const scopes = [
+        'read:jira-work', 'write:jira-work', 'read:jira-user', 'offline_access',
+        // Weekly personal data check-in (jira-personal-data.ts).
+        'report:personal-data',
+      ].join(' ');
       const authUrl = `https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent('http://localhost:17291/callback')}&state=${state}&response_type=code&prompt=consent&code_challenge=${codeChallenge}&code_challenge_method=S256`;
       shell.openExternal(authUrl);
       log('info', 'jira:oauth-started', 'opened browser for authorization');
@@ -261,13 +267,19 @@ async function getValidToken(): Promise<string> {
   return updated.accessToken;
 }
 
-async function jiraFetch(path: string, options: RequestInit = {}): Promise<any> {
+/** Thrown for Jira HTTP errors so callers can tell "not allowed" from "not found". */
+export class JiraHttpError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+async function jiraFetch(path: string, options: RequestInit = {}, api: 'core' | 'agile' = 'core'): Promise<any> {
   const config = getConfig();
   const tokens = (config as any).jiraTokens as JiraTokens;
   if (!tokens) throw new Error('Jira not connected');
 
   const token = await getValidToken();
-  const url = `https://api.atlassian.com/ex/jira/${tokens.cloudId}/rest/api/3${path}`;
+  const base = api === 'agile' ? 'rest/agile/1.0' : 'rest/api/3';
+  const url = `https://api.atlassian.com/ex/jira/${tokens.cloudId}/${base}${path}`;
 
   const res = await fetch(url, {
     ...options,
@@ -289,18 +301,20 @@ async function jiraFetch(path: string, options: RequestInit = {}): Promise<any> 
         ...(options.headers || {}),
       },
     });
-    if (!retry.ok) throw new Error(`Jira API error: ${retry.status}`);
-    return retry.json();
+    if (!retry.ok) throw new JiraHttpError(retry.status, `Jira API error: ${retry.status}`);
+    const retryText = retry.status === 204 ? '' : await retry.text();
+    return retryText ? JSON.parse(retryText) : null;
   }
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Jira API error ${res.status}: ${body.slice(0, 300)}`);
+    throw new JiraHttpError(res.status, `Jira API error ${res.status}: ${body.slice(0, 300)}`);
   }
 
-  // Handle 204 No Content
+  // 204, or a 201 with an empty body (POST /issueLink): nothing to parse.
   if (res.status === 204) return null;
-  return res.json();
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
 
 // ── API methods ──────────────────────────────────────────────────────────────
@@ -345,241 +359,208 @@ export async function getJiraStories(projectKey?: string, maxDays = 60, maxResul
   }));
 }
 
-export async function createJiraIssue(
-  task: {
-    title: string;
-    description?: string;
-    priority?: string;
-    dueDate?: string;
-    projectKey: string;
-  },
-  provenance?: WriteProvenance,
-): Promise<{ key: string; url: string }> {
-  const config = getConfig();
-  const tokens = (config as any).jiraTokens as JiraTokens;
 
-  const fields: any = {
-    project: { key: task.projectKey },
-    summary: task.title,
-    issuetype: { name: 'Task' },
-  };
-
-  if (task.description) {
-    fields.description = textToAdf(task.description);
-  }
-  if (task.priority) {
-    fields.priority = { name: PRIORITY_TO_JIRA[task.priority] || 'Medium' };
-  }
-  if (task.dueDate) {
-    fields.duedate = task.dueDate.slice(0, 10); // YYYY-MM-DD
-  }
-
-  const logId = await recordWrite({
-    targetSystem: 'jira',
-    targetRecordId: '(pending-create)',
-    targetRecordUrl: null,
-    operation: 'create',
-    fieldDiffs: computeCreateDiffs({
-      title: task.title,
-      description: task.description,
-      priority: task.priority,
-      dueDate: task.dueDate,
-      projectKey: task.projectKey,
-    }),
-    provenance,
-    pushParams: { operation: 'create', args: { ...task } },
-  });
-
-  try {
-    const data = await jiraFetch('/issue', {
-      method: 'POST',
-      body: JSON.stringify({ fields }),
-    });
-    const key = data.key;
-    const url = `${tokens.cloudUrl}/browse/${key}`;
-    await markCompleted(logId, 'success', undefined, { targetRecordId: key, targetRecordUrl: url });
-    log('info', 'jira:issue-created', `${key} — ${task.title}`);
-    return { key, url };
-  } catch (err: any) {
-    await markCompleted(logId, 'failed', err.message);
-    throw err;
-  }
+/**
+ * One page of POST /search/jql. Jira Cloud's enhanced search pages with
+ * `nextPageToken` (no startAt/total); the last page has no token.
+ */
+export async function searchJiraIssuesPage(
+  jql: string,
+  fields: string[],
+  nextPageToken?: string | null,
+  maxResults = 100,
+): Promise<{ issues: any[]; nextPageToken: string | null }> {
+  const body: any = { jql, maxResults: Math.min(maxResults, 100), fields };
+  if (nextPageToken) body.nextPageToken = nextPageToken;
+  const data = await jiraFetch('/search/jql', { method: 'POST', body: JSON.stringify(body) });
+  return { issues: data?.issues || [], nextPageToken: data?.isLast ? null : (data?.nextPageToken || null) };
 }
 
-export async function updateJiraIssue(
-  issueKey: string,
-  updates: {
-    title?: string;
-    description?: string;
-    priority?: string;
-    dueDate?: string;
-  },
-  provenance?: WriteProvenance,
-): Promise<void> {
-  // GET-before-write so fieldDiffs.before reflects current Jira state. Acceptable
-  // extra HTTP per PRD — accurate diffs are worth the round trip.
-  let fieldDiffs: FieldDiff[] = [];
+/** Jira accountId for an email, or null. Email visibility depends on the site's privacy settings. */
+export async function findJiraAccountIdByEmail(email: string): Promise<string | null> {
+  if (!email || !email.includes('@')) return null;
   try {
-    const fieldsParam = ['summary', 'description', 'priority', 'duedate'].join(',');
-    const current = await jiraFetch(`/issue/${issueKey}?fields=${fieldsParam}`);
-    const before = {
-      title: current?.fields?.summary ?? null,
-      description: current?.fields?.description ? adfToText(current.fields.description) : null,
-      priority: current?.fields?.priority?.name ?? null,
-      dueDate: current?.fields?.duedate ?? null,
-    };
-    fieldDiffs = computeUpdateDiffs(before, {
-      title: updates.title,
-      description: updates.description,
-      priority: updates.priority,
-      dueDate: updates.dueDate,
-    });
+    const rows = await jiraFetch(`/user/search?query=${encodeURIComponent(email)}&maxResults=2`);
+    const exact = (rows || []).find((u: any) => (u.emailAddress || '').toLowerCase() === email.toLowerCase());
+    const pick = exact || (Array.isArray(rows) && rows.length === 1 ? rows[0] : null);
+    return pick?.accountId || null;
   } catch {
-    // If the pre-fetch fails, proceed without before-values. The audit entry still
-    // records what was attempted (after-values); before-values render as null.
-    fieldDiffs = Object.entries(updates)
-      .filter(([, v]) => v !== undefined)
-      .map(([field, after]) => ({ field, before: null, after }));
-  }
-
-  const logId = await recordWrite({
-    targetSystem: 'jira',
-    targetRecordId: issueKey,
-    targetRecordUrl: buildJiraIssueUrl(issueKey),
-    operation: 'update',
-    fieldDiffs,
-    provenance,
-    pushParams: { operation: 'update', args: { issueKey, updates: { ...updates } } },
-  });
-
-  const fields: any = {};
-  if (updates.title) fields.summary = updates.title;
-  if (updates.description) fields.description = textToAdf(updates.description);
-  if (updates.priority) fields.priority = { name: PRIORITY_TO_JIRA[updates.priority] || 'Medium' };
-  if (updates.dueDate) fields.duedate = updates.dueDate.slice(0, 10);
-
-  try {
-    await jiraFetch(`/issue/${issueKey}`, {
-      method: 'PUT',
-      body: JSON.stringify({ fields }),
-    });
-    await markCompleted(logId, 'success');
-    log('info', 'jira:issue-updated', issueKey);
-  } catch (err: any) {
-    await markCompleted(logId, 'failed', err.message);
-    throw err;
+    return null;
   }
 }
 
-export async function transitionJiraIssue(
-  issueKey: string,
-  targetStatus: string,
-  provenance?: WriteProvenance,
-): Promise<void> {
-  // GET current status for the before-value, AND the transitions list (one GET
-  // for status, one for transitions — Jira's transitions endpoint doesn't
-  // include the issue's current status).
-  let currentStatusName: string | null = null;
+/** Custom field id of the Sprint field (differs per site), or null. */
+export async function findSprintFieldId(): Promise<string | null> {
   try {
-    const current = await jiraFetch(`/issue/${issueKey}?fields=status`);
-    currentStatusName = current?.fields?.status?.name ?? null;
+    const fields = await jiraFetch('/field');
+    const sprint = (fields || []).find((f: any) => f?.schema?.custom === 'com.pyxis.greenhopper.jira:gh-sprint');
+    return sprint?.id || null;
   } catch {
-    currentStatusName = null;
+    return null;
   }
+}
 
-  const logId = await recordWrite({
-    targetSystem: 'jira',
-    targetRecordId: issueKey,
-    targetRecordUrl: buildJiraIssueUrl(issueKey),
-    operation: 'transition',
-    fieldDiffs: [{ field: 'status', before: currentStatusName, after: targetStatus }],
-    provenance,
-    pushParams: { operation: 'transition', args: { issueKey, targetStatus } },
+/**
+ * Atlassian personal data reporting (jira-personal-data.ts): one batch of up
+ * to 90 accounts. Returns the accounts that need action, or null for 204.
+ */
+export async function reportPersonalDataAccounts(
+  accounts: { accountId: string; updatedAt: string }[],
+): Promise<{ accountId: string; status: 'closed' | 'updated' }[] | null> {
+  const send = async (token: string) => fetch('https://api.atlassian.com/app/report-accounts/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ accounts }),
   });
+  let res = await send(await getValidToken());
+  if (res.status === 401) res = await send(await getValidToken());
+  if (res.status === 204) return null;
+  if (!res.ok) {
+    const err: any = new JiraHttpError(res.status, `Personal data report failed: ${res.status}`);
+    const retry = Number(res.headers.get('retry-after'));
+    if (Number.isFinite(retry)) err.retryAfterSec = retry;
+    throw err;
+  }
+  const data = await res.json() as any;
+  return Array.isArray(data?.accounts) ? data.accounts : [];
+}
 
+export function getJiraAccountId(): string | null {
+  const tokens = (getConfig() as any).jiraTokens as JiraTokens | null;
+  return tokens?.accountId || null;
+}
+
+export interface JiraIssueBrief {
+  key: string;
+  title: string;
+  status: string | null;
+  statusCategory: string | null;
+  dueDate: string | null;
+  description: string | null;
+  priority: string | null;
+}
+
+/** Summary + status of one issue, for diffs and for showing the target ticket. */
+export async function fetchIssueBrief(issueKey: string): Promise<JiraIssueBrief | null> {
   try {
-    const data = await jiraFetch(`/issue/${issueKey}/transitions`);
-    const transitions = data.transitions || [];
-
-    const statusMap: Record<string, string[]> = {
-      completed: ['Done', 'Complete', 'Closed', 'Resolved'],
-      inProgress: ['In Progress', 'Start Progress', 'In Development'],
-      todo: ['To Do', 'Open', 'Backlog', 'Reopen'],
+    const current = await jiraFetch(`/issue/${issueKey}?fields=summary,status,duedate,description,priority`);
+    if (!current) return null;
+    return {
+      key: issueKey,
+      title: current.fields?.summary || '',
+      status: current.fields?.status?.name ?? null,
+      statusCategory: current.fields?.status?.statusCategory?.key ?? null,
+      dueDate: current.fields?.duedate ?? null,
+      description: current.fields?.description ? adfToText(current.fields.description) : null,
+      priority: current.fields?.priority?.name ?? null,
     };
-
-    const targetNames = statusMap[targetStatus] || [];
-    const match = transitions.find((t: any) =>
-      targetNames.some((n) => t.name.toLowerCase().includes(n.toLowerCase())),
-    );
-
-    if (match) {
-      await jiraFetch(`/issue/${issueKey}/transitions`, {
-        method: 'POST',
-        body: JSON.stringify({ transition: { id: match.id } }),
-      });
-      log('info', 'jira:issue-transitioned', `${issueKey} → ${match.name}`);
-      await markCompleted(logId, 'success');
-    } else {
-      const msg = `No matching Jira transition for status '${targetStatus}'`;
-      log('warn', 'jira:issue-transition-no-match', `${issueKey}: ${msg}`);
-      await markCompleted(logId, 'failed', msg);
-    }
-  } catch (err: any) {
-    await markCompleted(logId, 'failed', err.message);
-    throw err;
+  } catch {
+    return null;
   }
 }
 
-export async function addJiraComment(
-  issueKey: string,
-  comment: string,
-  meetingTitle?: string,
-  provenance?: WriteProvenance,
-): Promise<void> {
-  const prefix = meetingTitle ? `[Inwise] From "${meetingTitle}":\n\n` : '[Inwise]\n\n';
-  const body = prefix + comment;
-
-  const logId = await recordWrite({
-    targetSystem: 'jira',
-    targetRecordId: issueKey,
-    targetRecordUrl: buildJiraIssueUrl(issueKey),
-    operation: 'comment',
-    fieldDiffs: [],
-    commentBody: body,
-    provenance,
-    pushParams: { operation: 'comment', args: { issueKey, comment, meetingTitle } },
-  });
-
-  try {
-    await jiraFetch(`/issue/${issueKey}/comment`, {
-      method: 'POST',
-      body: JSON.stringify({ body: textToAdf(body) }),
-    });
-    await markCompleted(logId, 'success');
-    log('info', 'jira:comment-added', issueKey);
-  } catch (err: any) {
-    await markCompleted(logId, 'failed', err.message);
-    throw err;
-  }
-}
-
-function buildJiraIssueUrl(issueKey: string): string | null {
+export function buildJiraIssueUrl(issueKey: string): string | null {
   const config = getConfig();
   const tokens = (config as any).jiraTokens as JiraTokens | null;
   if (!tokens?.cloudUrl) return null;
   return `${tokens.cloudUrl}/browse/${issueKey}`;
 }
 
+export function commentPrefix(meetingTitle?: string | null): string {
+  return meetingTitle ? `[Inwise] From "${meetingTitle}":\n\n` : '[Inwise]\n\n';
+}
+
+export interface JiraUser { accountId: string; displayName: string; email: string | null; avatarUrl: string | null }
+
+/** Jira users matching a name (or email). Only real people (accountType atlassian). */
+export async function searchJiraUsers(query: string, max = 8): Promise<JiraUser[]> {
+  const q = String(query || '').trim();
+  if (q.length < 2) return [];
+  const rows = await jiraFetch(`/user/search?query=${encodeURIComponent(q)}&maxResults=${Math.min(20, max)}`);
+  return (Array.isArray(rows) ? rows : [])
+    .filter((u: any) => u?.accountId && (u.accountType === undefined || u.accountType === 'atlassian') && u.active !== false)
+    .map((u: any) => ({
+      accountId: u.accountId,
+      displayName: u.displayName || '',
+      email: u.emailAddress || null,
+      avatarUrl: u.avatarUrls?.['24x24'] || null,
+    }));
+}
+
+export interface StatusChange { at: string; from: string | null; to: string | null }
+
+/** Status changes from a changelog payload (GET /issue/{key}/changelog or expand=changelog), oldest first. */
+export function parseStatusChanges(payload: any): StatusChange[] {
+  const histories = Array.isArray(payload?.values) ? payload.values
+    : Array.isArray(payload?.histories) ? payload.histories
+      : Array.isArray(payload?.changelog?.histories) ? payload.changelog.histories : [];
+  const out: StatusChange[] = [];
+  for (const h of histories) {
+    for (const item of Array.isArray(h?.items) ? h.items : []) {
+      if (item?.field === 'status' || item?.fieldId === 'status') {
+        out.push({ at: h.created, from: item.fromString ?? null, to: item.toString ?? null });
+      }
+    }
+  }
+  return out.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
+/** Status changes for one issue (newest 100 changelog entries). */
+export async function fetchIssueStatusChanges(issueKey: string): Promise<StatusChange[]> {
+  const data = await jiraFetch(`/issue/${encodeURIComponent(issueKey)}/changelog?maxResults=100`);
+  // The endpoint pages oldest-first; on long histories jump to the last page.
+  if (data && typeof data.total === 'number' && data.total > (data.values?.length || 0) && !data.isLast) {
+    const startAt = Math.max(0, data.total - 100);
+    const last = await jiraFetch(`/issue/${encodeURIComponent(issueKey)}/changelog?startAt=${startAt}&maxResults=100`);
+    return parseStatusChanges(last);
+  }
+  return parseStatusChanges(data);
+}
+
+export type SprintLookup =
+  | { ok: true; sprintId: number; sprintName: string; state: string; boardId: number }
+  | { ok: false; reason: string };
+
 /**
- * Dispatch raw Jira push using stored pushParams, then markCompleted on the
- * existing sor-writes entry. Shared by `retryJiraWrite` (increments retryCount
- * first) and `approveJiraWrite` (does NOT — approval is a first-time push, not
- * a retry of a failed one).
- *
- * Returns `{ ok, error?, key?, url? }`. `key`/`url` are populated for `create`
- * success so callers can patch the local task's source field.
+ * The active (or next) sprint of this issue's project. Uses an ordinary issue
+ * search (read:jira-work) instead of the Jira Software board API, so no extra
+ * permissions are needed: tickets in an open (or future) sprint carry that
+ * sprint on their Sprint field. A sprint nobody has put a ticket in yet is not
+ * found. Reasons read as plain sentences for the recap row.
  */
-async function executeJiraPushParams(
+export async function findSprintForIssue(issueKey: string, prefer: 'active' | 'next' = 'active'): Promise<SprintLookup> {
+  const projectKey = issueKey.split('-')[0];
+  try {
+    const fieldId = await findSprintFieldId();
+    if (!fieldId) return { ok: false, reason: `This Jira site has no sprints, so there is no sprint to add ${issueKey} to` };
+    const collect = async (fn: 'openSprints' | 'futureSprints') => {
+      const res = await searchJiraIssuesPage(`project = "${projectKey}" AND sprint in ${fn}()`, [fieldId], null, 50);
+      const out = new Map<number, any>();
+      for (const issue of res.issues) {
+        const raw = issue?.fields?.[fieldId];
+        for (const sp of Array.isArray(raw) ? raw : raw ? [raw] : []) if (sp && typeof sp.id === 'number') out.set(sp.id, sp);
+      }
+      return [...out.values()];
+    };
+    const active = (await collect('openSprints')).find((v) => v.state === 'active');
+    const future = prefer === 'next' || !active
+      ? (await collect('futureSprints')).filter((v) => v.state === 'future')
+        .sort((a, b) => (Date.parse(a.startDate || '') || Infinity) - (Date.parse(b.startDate || '') || Infinity) || a.id - b.id)[0]
+      : undefined;
+    const pick = prefer === 'next' ? (future || active) : (active || future);
+    if (pick) return { ok: true, sprintId: pick.id, sprintName: pick.name, state: pick.state, boardId: pick.boardId ?? 0 };
+    return { ok: false, reason: `${projectKey} has no active or upcoming sprint` };
+  } catch (e: any) {
+    if (e instanceof JiraHttpError && e.status === 400) return { ok: false, reason: `${projectKey} has no active or upcoming sprint` };
+    return { ok: false, reason: `Could not read ${projectKey}'s sprints (${e?.message || 'Jira error'})` };
+  }
+}
+
+/**
+ * Perform the raw Jira call for an already-logged write and stamp the result
+ * on its sor-writes entry. Only jira-writes.ts calls this, after the gate.
+ */
+export async function executeJiraPush(
   id: string,
   pushParams: PushParams,
 ): Promise<{ ok: boolean; error?: string; key?: string; url?: string | null }> {
@@ -598,8 +579,10 @@ async function executeJiraPushParams(
       const key = data.key;
       const url = buildJiraIssueUrl(key);
       await markCompleted(id, 'success', undefined, { targetRecordId: key, targetRecordUrl: url });
+      log('info', 'jira:issue-created', `${key}: ${p.args.title}`);
       return { ok: true, key, url };
-    } else if (p.operation === 'update') {
+    }
+    if (p.operation === 'update') {
       const fields: any = {};
       if (p.args.updates.title) fields.summary = p.args.updates.title;
       if (p.args.updates.description) fields.description = textToAdf(p.args.updates.description);
@@ -607,74 +590,85 @@ async function executeJiraPushParams(
       if (p.args.updates.dueDate) fields.duedate = p.args.updates.dueDate.slice(0, 10);
       await jiraFetch(`/issue/${p.args.issueKey}`, { method: 'PUT', body: JSON.stringify({ fields }) });
       await markCompleted(id, 'success');
-      return { ok: true };
-    } else if (p.operation === 'transition') {
+      log('info', 'jira:issue-updated', p.args.issueKey);
+      return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
+    }
+    if (p.operation === 'transition') {
       const data = await jiraFetch(`/issue/${p.args.issueKey}/transitions`);
-      const transitions = data.transitions || [];
-      const statusMap: Record<string, string[]> = {
-        completed: ['Done', 'Complete', 'Closed', 'Resolved'],
-        inProgress: ['In Progress', 'Start Progress', 'In Development'],
-        todo: ['To Do', 'Open', 'Backlog', 'Reopen'],
-      };
-      const targetNames = statusMap[p.args.targetStatus] || [];
-      const match = transitions.find((t: any) =>
-        targetNames.some((n) => t.name.toLowerCase().includes(n.toLowerCase())),
-      );
+      const match = pickTransition(data?.transitions || [], p.args.targetStatus);
       if (!match) {
-        await markCompleted(id, 'failed', `No matching Jira transition for status '${p.args.targetStatus}'`);
-        return { ok: false, error: 'No matching transition' };
+        const msg = noTransitionMessage(p.args.issueKey, p.args.targetStatus);
+        log('warn', 'jira:issue-transition-no-match', msg);
+        await markCompleted(id, 'failed', msg);
+        return { ok: false, error: msg };
       }
       await jiraFetch(`/issue/${p.args.issueKey}/transitions`, {
         method: 'POST',
         body: JSON.stringify({ transition: { id: match.id } }),
       });
       await markCompleted(id, 'success');
-      return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
-    } else if (p.operation === 'comment') {
-      const prefix = p.args.meetingTitle
-        ? `[Inwise] From "${p.args.meetingTitle}":\n\n`
-        : '[Inwise]\n\n';
-      await jiraFetch(`/issue/${p.args.issueKey}/comment`, {
-        method: 'POST',
-        body: JSON.stringify({ body: textToAdf(prefix + p.args.comment) }),
-      });
-      await markCompleted(id, 'success');
+      log('info', 'jira:issue-transitioned', `${p.args.issueKey} to ${match.to?.name || match.name}`);
       return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
     }
+    if (p.operation === 'comment') {
+      await jiraFetch(`/issue/${p.args.issueKey}/comment`, {
+        method: 'POST',
+        body: JSON.stringify({ body: textToAdf(commentPrefix(p.args.meetingTitle) + p.args.comment) }),
+      });
+      await markCompleted(id, 'success');
+      log('info', 'jira:comment-added', p.args.issueKey);
+      return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
+    }
+    if (p.operation === 'assign') {
+      if (!p.args.accountId) {
+        const msg = `Find ${p.args.assigneeName} in Jira before assigning ${p.args.issueKey}`;
+        await markCompleted(id, 'failed', msg);
+        return { ok: false, error: msg };
+      }
+      await jiraFetch(`/issue/${p.args.issueKey}/assignee`, { method: 'PUT', body: JSON.stringify({ accountId: p.args.accountId }) });
+      await markCompleted(id, 'success');
+      log('info', 'jira:issue-assigned', p.args.issueKey);
+      return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
+    }
+    if (p.operation === 'link') {
+      // POST /issueLink reads "<inwardIssue> <outward verb> <outwardIssue>", so
+      // for "Blocks" the blocker goes in inwardIssue: "OPS-12 blocks PILOT-33".
+      // (Verified live on 2026-11-03: the reverse put the link backwards.)
+      await jiraFetch('/issueLink', {
+        method: 'POST',
+        body: JSON.stringify({ type: { name: 'Blocks' }, inwardIssue: { key: p.args.blockerKey }, outwardIssue: { key: p.args.blockedKey } }),
+      });
+      await markCompleted(id, 'success');
+      log('info', 'jira:issue-linked', `${p.args.blockerKey} blocks ${p.args.blockedKey}`);
+      return { ok: true, key: p.args.blockedKey, url: buildJiraIssueUrl(p.args.blockedKey) };
+    }
+    if (p.operation === 'sprint') {
+      if (!p.args.sprintId) {
+        const msg = p.args.reason || `No sprint found for ${p.args.issueKey}`;
+        await markCompleted(id, 'failed', msg);
+        return { ok: false, error: msg };
+      }
+      // Ordinary issue edit (write:jira-work): set the Sprint field to the sprint id.
+      const sprintField = await findSprintFieldId();
+      if (!sprintField) {
+        const msg = 'This Jira site has no Sprint field';
+        await markCompleted(id, 'failed', msg);
+        return { ok: false, error: msg };
+      }
+      await jiraFetch(`/issue/${encodeURIComponent(p.args.issueKey)}`, { method: 'PUT', body: JSON.stringify({ fields: { [sprintField]: p.args.sprintId } }) });
+      await markCompleted(id, 'success');
+      log('info', 'jira:issue-sprint', `${p.args.issueKey} to ${p.args.sprintName || p.args.sprintId}`);
+      return { ok: true, key: p.args.issueKey, url: buildJiraIssueUrl(p.args.issueKey) };
+    }
+    await markCompleted(id, 'failed', 'Unknown operation');
     return { ok: false, error: 'Unknown operation' };
   } catch (err: any) {
-    await markCompleted(id, 'failed', err.message);
-    return { ok: false, error: err.message };
+    const msg = err instanceof JiraHttpError && (err.status === 401 || err.status === 403)
+      ? `Jira did not allow this change (${err.status}). Reconnect Jira in Settings, or check your permissions on ${'args' in p ? (p.args as any).issueKey || (p.args as any).blockedKey || 'the issue' : 'the issue'}`
+      : err.message;
+    await markCompleted(id, 'failed', msg);
+    return { ok: false, error: msg };
   }
-}
-
-/**
- * Re-run a previously-logged Jira write using its stashed pushParams.
- * Updates the existing log entry — does NOT create a new one.
- * Increments retryCount.
- */
-export async function retryJiraWrite(id: string): Promise<{ ok: boolean; error?: string }> {
-  const entry = await getWriteEntry(id);
-  if (!entry) return { ok: false, error: 'Entry not found' };
-  if (entry.targetSystem !== 'jira') return { ok: false, error: `Cannot retry ${entry.targetSystem} writes from jira-client` };
-  if (!entry.pushParams) return { ok: false, error: 'No stored push params' };
-
-  await incrementRetry(id);
-  const { ok, error } = await executeJiraPushParams(id, entry.pushParams);
-  return ok ? { ok } : { ok, error };
-}
-
-/**
- * Run a pending-approval Jira write. Dispatches the stashed pushParams (exactly
- * what would have auto-pushed), does NOT increment retryCount (this is a
- * first-time push, not a retry), and returns key/url so the caller can patch
- * the linked local task's source field.
- */
-export async function approveJiraWrite(
-  id: string,
-  pushParams: PushParams,
-): Promise<{ ok: boolean; error?: string; key?: string; url?: string | null }> {
-  return executeJiraPushParams(id, pushParams);
 }
 
 export function isJiraConnected(): boolean {
@@ -688,3 +682,5 @@ export function getJiraInfo(): { cloudName: string; email: string; cloudUrl: str
   if (!tokens) return null;
   return { cloudName: tokens.cloudName, email: tokens.email, cloudUrl: tokens.cloudUrl };
 }
+
+export { adfToText, JIRA_TO_PRIORITY };

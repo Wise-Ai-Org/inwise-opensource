@@ -562,7 +562,7 @@ function MetaRow({ label, children }: { label: string; children: React.ReactNode
 
 // ── SoR sync history (US-004) ─────────────────────────────────────────────
 
-type SorOp = 'create' | 'update' | 'transition' | 'comment';
+type SorOp = 'create' | 'update' | 'transition' | 'comment' | 'assign' | 'link' | 'sprint';
 type SorResult = 'pending' | 'success' | 'failed' | 'pending-approval' | 'retrying';
 type SorSystem = 'jira';
 
@@ -594,6 +594,9 @@ const SOR_OP_META: Record<SorOp, { label: string; color: string }> = {
   update:     { label: 'Updated',      color: 'blue'   },
   transition: { label: 'Transitioned', color: 'purple' },
   comment:    { label: 'Commented',    color: 'gray'   },
+  assign:     { label: 'Assigned',     color: 'blue'   },
+  link:       { label: 'Linked',       color: 'purple' },
+  sprint:     { label: 'Added to sprint', color: 'green' },
 };
 
 function sorOneLineSummary(entry: SorWriteEntry): string {

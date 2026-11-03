@@ -152,9 +152,37 @@ export async function appendMeetingTranscript(id: string, transcript: string, ad
   );
 }
 
+/** Normalized action-item text; with the meeting id it is the item's stable key. */
+export function normalizeActionItemText(text: string): string {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+}
+
+export function actionItemKey(meetingId: string, text: string): string {
+  return `meeting:${meetingId}:${normalizeActionItemText(text)}`;
+}
+
+export interface SaveInsightsResult {
+  /** Local task id for each action item, in order (created, reused, merged-into, or waiting on dedup). */
+  itemTaskIds: (string | null)[];
+  /** Pending tasks from an earlier run of this meeting that are no longer extracted. */
+  removedTaskIds: string[];
+}
+
+type InsightsSavedListener = (meetingId: string, result: SaveInsightsResult) => void;
+let insightsSavedListener: InsightsSavedListener | null = null;
+/** main.ts wires the Jira proposal pass here so every processing path runs it. */
+export function onInsightsSaved(listener: InsightsSavedListener | null): void {
+  insightsSavedListener = listener;
+}
+
 export async function saveInsights(meetingId: string, insights: {
   summary: string;
-  actionItems: { text: string; owner?: string; dueDate?: string; priority?: string; isCommitment?: boolean }[];
+  actionItems: { text: string; owner?: string; dueDate?: string; priority?: string; isCommitment?: boolean; [key: string]: any }[];
   decisions: { text: string; rationale?: string }[];
   blockers: { text: string; severity?: string }[];
   commitments?: { text: string; who: string; deadline?: string; context?: string }[];
@@ -166,7 +194,8 @@ export async function saveInsights(meetingId: string, insights: {
   coverage?: any;
   quality?: any;
   analysisStatus?: string;
-}): Promise<void> {
+  ticketIntents?: any[];
+}): Promise<SaveInsightsResult> {
   await meetingsDb.updateAsync(
     { _id: meetingId },
     {
@@ -185,21 +214,67 @@ export async function saveInsights(meetingId: string, insights: {
           coverage: insights.coverage || null,
           quality: insights.quality || null,
           analysisStatus: insights.analysisStatus || 'ready',
+          ticketIntents: insights.ticketIntents || [],
         },
       },
     },
     {}
   );
 
-  // Auto-create tasks from action items. Re-processing a meeting (e.g. merged
-  // segments) replaces its still-pending auto-extracted tasks instead of duplicating.
-  await (tasksDb as any).removeAsync(
-    { 'source.id': meetingId, aiExtracted: true, 'approval.status': 'pending' },
-    { multi: true }
-  );
+  // Auto-create tasks from action items. Re-processing a meeting (merged
+  // segments, retry) keeps one task per item: an item seen before reuses its
+  // task (matched by the stable item key, whatever the task's source became,
+  // e.g. after a Jira link rewrote source to jira). Earlier still-pending
+  // tasks whose item is gone are removed and reported so their held Jira
+  // writes can be dropped too.
+  const previous: any[] = await tasksDb.findAsync({
+    aiExtracted: true,
+    $or: [{ meetingId }, { 'source.id': meetingId }, { 'provenance.meetingId': meetingId }],
+  });
+  const byKey = new Map<string, any>();
+  for (const t of previous) {
+    const key = t.extractionKey || actionItemKey(meetingId, t.title || '');
+    if (!byKey.has(key)) byKey.set(key, t);
+  }
 
+  // Drop stale pending tasks first so new items never dedup against them.
+  const newKeys = new Set(insights.actionItems.map((item) => actionItemKey(meetingId, item.text)));
+  const removedTaskIds: string[] = [];
+  for (const [key, t] of Array.from(byKey.entries())) {
+    if (newKeys.has(key) || t.approval?.status !== 'pending') continue;
+    if (t.source?.type === 'jira' || t.jiraKey) continue; // linked to Jira: keep, never orphan the link
+    await tasksDb.removeAsync({ _id: t._id }, {});
+    removedTaskIds.push(t._id);
+    byKey.delete(key);
+  }
+  for (const t of previous) {
+    if (byKey.get(t.extractionKey || actionItemKey(meetingId, t.title || ''))?._id === t._id || removedTaskIds.includes(t._id)) continue;
+    // A second pending copy of a kept item (older duplicate runs): remove it as well.
+    if (t.approval?.status === 'pending' && !(t.source?.type === 'jira' || t.jiraKey)) {
+      await tasksDb.removeAsync({ _id: t._id }, {});
+      removedTaskIds.push(t._id);
+    }
+  }
+
+  const itemTaskIds: (string | null)[] = [];
   for (const item of insights.actionItems) {
     const now = new Date().toISOString();
+    const key = actionItemKey(meetingId, item.text);
+    const prior = byKey.get(key);
+    if (prior) {
+      itemTaskIds.push(prior._id);
+      if (prior.approval?.status === 'pending') {
+        await tasksDb.updateAsync({ _id: prior._id }, { $set: {
+          owner: item.owner || prior.owner || null,
+          assignee: item.owner || prior.assignee || null,
+          dueDate: item.dueDate || prior.dueDate || null,
+          priority: item.priority || prior.priority || 'medium',
+          extractionKey: key,
+          updatedAt: now,
+        } }, {});
+      }
+      continue;
+    }
     const taskId = uuidv4();
     const task: TaskCreateInput = {
       title: item.text,
@@ -212,6 +287,7 @@ export async function saveInsights(meetingId: string, insights: {
       meetingId,
       aiExtracted: true,
       approval: { status: 'pending' },
+      extractionKey: key,
       provenance: {
         meetingId,
         extractionMethod: 'transcript_analysis',
@@ -219,11 +295,40 @@ export async function saveInsights(meetingId: string, insights: {
       },
     };
     const route = await routeTaskCreation(task, taskId, now);
-    if (route.kind === 'merged') continue;
+    if (route.kind === 'merged') {
+      itemTaskIds.push(route.task?._id || null);
+      continue;
+    }
     if (route.kind === 'ask') task.dedupSuggestion = route.suggestion;
     await insertTaskDocument(task, taskId, now);
+    itemTaskIds.push(taskId);
   }
 
+  // Remember which task each item landed in, for the Jira pass and the recap.
+  await meetingsDb.updateAsync(
+    { _id: meetingId },
+    { $set: { 'insights.actionItems': insights.actionItems.map((item, i) => ({ ...item, taskId: itemTaskIds[i] })) } },
+    {},
+  );
+
+  const result = { itemTaskIds, removedTaskIds };
+  if (insightsSavedListener) {
+    try { insightsSavedListener(meetingId, result); } catch (e: any) { log('error', 'insights:listener', e?.message || String(e)); }
+  }
+  return result;
+}
+
+/** Point a meeting's action item at a different task (after a dedup merge). */
+export async function remapMeetingItemTask(meetingId: string | null | undefined, fromTaskId: string, toTaskId: string): Promise<void> {
+  if (!meetingId || !fromTaskId || !toTaskId) return;
+  const m: any = await meetingsDb.findOneAsync({ _id: meetingId });
+  const items = m?.insights?.actionItems;
+  if (!Array.isArray(items) || !items.some((i: any) => i?.taskId === fromTaskId)) return;
+  await meetingsDb.updateAsync(
+    { _id: meetingId },
+    { $set: { 'insights.actionItems': items.map((i: any) => (i?.taskId === fromTaskId ? { ...i, taskId: toTaskId } : i)) } },
+    {},
+  );
 }
 
 /** All non-archived tasks (open + done) — dedup retrieval scope input. */
@@ -643,15 +748,21 @@ type TaskCreationRoute =
   | { kind: 'ask'; suggestion: TaskCreateDedupSuggestion };
 
 /** Single task-creation dedup route used by extraction, review, and manual entry. */
-async function routeTaskCreation(data: TaskCreateInput, proposedTaskId: string, now: string): Promise<TaskCreationRoute> {
+async function routeTaskCreation(
+  data: TaskCreateInput,
+  proposedTaskId: string,
+  now: string,
+  candidateFilter?: (task: any) => boolean,
+): Promise<TaskCreationRoute> {
   try {
     const source = normalizeTaskSource(data.source, data.meetingId);
     const sourceMeeting: any = source.type === 'meeting' && source.id
       ? await meetingsDb.findOneAsync({ _id: source.id })
       : null;
+    const pool = await getAllTasksForDedup();
     const decision = await decideMention(
       { title: data.title, description: data.description || '' },
-      await getAllTasksForDedup(),
+      candidateFilter ? pool.filter(candidateFilter) : pool,
       sourceMeeting ? { sourceMeeting, meetingsById: await getMeetingsById() } : {},
     );
 
@@ -712,6 +823,82 @@ export async function createTask(data: TaskCreateInput): Promise<any> {
     return { dedupPending: true, dedupSuggestion: route.suggestion, pendingTask: data };
   }
   return insertTaskDocument(data, taskId, now);
+}
+
+function jiraKeyOfTask(t: any): string | null {
+  if (t?.source?.type === 'jira' && t.source.id) return t.source.id;
+  return t?.jiraKey || null;
+}
+
+export async function hasTaskLinkedToJiraKey(key: string): Promise<boolean> {
+  if (!key) return false;
+  return !!(await tasksDb.findOneAsync({ $or: [{ 'source.type': 'jira', 'source.id': key }, { jiraKey: key }] }));
+}
+
+export interface PulledIssueInput {
+  key: string;
+  url: string | null;
+  title: string;
+  description?: string;
+  priority?: string;
+  /** Local status (todo / inProgress / completed) or null when unknown. */
+  status: string | null;
+  dueDate: string | null;
+  updatedAt: string;
+}
+
+/**
+ * Bring one pulled Jira issue into local tasks.
+ * - Already linked: refresh title/status/due date when Jira is newer.
+ * - Otherwise dedup against local tasks, never against a task linked to a
+ *   different Jira key (two keys must not take turns owning one task).
+ *   auto-merge links the merged task; 'ask' lands in the dedup queue as a
+ *   task with a dedupSuggestion; nothing is dropped.
+ */
+export async function upsertPulledJiraTask(issue: PulledIssueInput): Promise<{ kind: 'updated' | 'unchanged' | 'created' | 'merged' | 'ask'; taskId: string }> {
+  const now = new Date().toISOString();
+  const linked: any = await tasksDb.findOneAsync({ $or: [{ 'source.type': 'jira', 'source.id': issue.key }, { jiraKey: issue.key }] });
+  if (linked) {
+    const jiraMs = Date.parse(issue.updatedAt);
+    const localMs = Date.parse(linked.updatedAt || linked.createdAt || '');
+    if (Number.isFinite(jiraMs) && Number.isFinite(localMs) && jiraMs <= localMs) return { kind: 'unchanged', taskId: linked._id };
+    const updates: Record<string, any> = {};
+    if (issue.title && issue.title !== linked.title) updates.title = issue.title;
+    if (issue.status && issue.status !== linked.status) updates.status = issue.status;
+    if (issue.dueDate && issue.dueDate !== linked.dueDate) updates.dueDate = issue.dueDate;
+    if (Object.keys(updates).length === 0) return { kind: 'unchanged', taskId: linked._id };
+    updates.updatedAt = now;
+    await tasksDb.updateAsync({ _id: linked._id }, { $set: updates }, {});
+    return { kind: 'updated', taskId: linked._id };
+  }
+
+  const data: TaskCreateInput = {
+    title: issue.title,
+    description: issue.description || '',
+    priority: issue.priority || 'medium',
+    status: issue.status || 'todo',
+    dueDate: issue.dueDate,
+    source: { type: 'jira', id: issue.key },
+    jiraKey: issue.key,
+    jiraUrl: issue.url,
+    approval: { status: 'auto_approved' },
+  };
+  const taskId = uuidv4();
+  const route = await routeTaskCreation(data, taskId, now, (t) => {
+    const k = jiraKeyOfTask(t);
+    return !k || k === issue.key;
+  });
+  if (route.kind === 'merged') {
+    const merged = route.task;
+    if (!jiraKeyOfTask(merged)) {
+      await tasksDb.updateAsync({ _id: merged._id }, { $set: { source: { type: 'jira', id: issue.key, url: issue.url || undefined }, jiraKey: issue.key, updatedAt: now } }, {});
+    }
+    return { kind: 'merged', taskId: merged._id };
+  }
+  if (route.kind === 'ask') data.dedupSuggestion = route.suggestion;
+  const doc: any = await insertTaskDocument({ ...data, source: { type: 'jira', id: issue.key } }, taskId, now);
+  if (issue.url) await tasksDb.updateAsync({ _id: doc._id }, { $set: { 'source.url': issue.url } }, {});
+  return { kind: route.kind === 'ask' ? 'ask' : 'created', taskId: doc._id };
 }
 
 export async function resolveTaskCreationDedup(
@@ -780,7 +967,18 @@ export async function rejectLikelyDone(taskId: string): Promise<void> {
   );
 }
 
+export async function getTaskById(id: string | null | undefined): Promise<any | null> {
+  if (!id || typeof id !== 'string') return null;
+  return tasksDb.findOneAsync({ _id: id });
+}
+
 export async function updateTask(id: string, updates: Record<string, any>): Promise<any> {
+  // Guard: a missing id (for example a dedup 'ask' result with no task yet)
+  // must never turn into a silent no-op that looks like success.
+  if (!id || typeof id !== 'string') {
+    log('warn', 'db:updateTask-missing-id', `refused update without a task id (${Object.keys(updates || {}).join(',')})`);
+    return null;
+  }
   await tasksDb.updateAsync({ _id: id }, { $set: updates }, {});
   return tasksDb.findOneAsync({ _id: id });
 }
@@ -1015,6 +1213,16 @@ export async function resolvePendingDedup(taskId: string, action: 'same' | 'new'
   if (!task || !task.dedupSuggestion) return { ok: false };
   const sug = task.dedupSuggestion;
 
+  // A pulled Jira task can only merge into a task that is not linked to a
+  // different Jira key; otherwise keep both (two keys never share one task).
+  const ownKey = jiraKeyOfTask(task);
+  let candidateKey: string | null = null;
+  if (action !== 'new' && ownKey) {
+    const candidate: any = await tasksDb.findOneAsync({ _id: sug.candidateTaskId });
+    candidateKey = jiraKeyOfTask(candidate);
+    if (candidateKey && candidateKey !== ownKey) action = 'new';
+  }
+
   if (action === 'new') {
     await tasksDb.updateAsync({ _id: taskId }, { $unset: { dedupSuggestion: true }, $set: { updatedAt: new Date().toISOString() } }, {});
     await logMatchDecision({
@@ -1049,6 +1257,13 @@ export async function resolvePendingDedup(taskId: string, action: 'same' | 'new'
   const merged = await appendTaskMention(sug.candidateTaskId, mention, { reopen: action === 'reopen' });
   if (!merged) return { ok: false };
   await tasksDb.removeAsync({ _id: taskId }, {});
+  if (ownKey && !candidateKey) {
+    await tasksDb.updateAsync(
+      { _id: sug.candidateTaskId },
+      { $set: { source: { type: 'jira', id: ownKey, url: task.source?.url || task.jiraUrl || undefined }, jiraKey: ownKey } },
+      {},
+    );
+  }
 
   await logMatchDecision({
     decisionType: action === 'reopen' ? 'reopen_merge' : 'confirm_same',
@@ -1959,6 +2174,14 @@ export async function getRecurringMeetingAgendaContext(event: DailyPlanEvent): P
 
 export async function updatePersonProfile(id: string, updates: { bio?: string; relationshipInsights?: string[] }): Promise<void> {
   await peopleDb.updateAsync({ _id: id }, { $set: updates }, {});
+}
+
+/** Store (or clear with null) the person's Jira account link (jira-people.ts). */
+export async function setPersonJiraLink(id: string, link: Record<string, any> | null): Promise<any> {
+  if (!id) return null;
+  if (link) await peopleDb.updateAsync({ _id: id }, { $set: { jiraLink: link } }, {});
+  else await peopleDb.updateAsync({ _id: id }, { $unset: { jiraLink: true } }, {});
+  return peopleDb.findOneAsync({ _id: id });
 }
 
 export async function renamePerson(id: string, name: string): Promise<any> {

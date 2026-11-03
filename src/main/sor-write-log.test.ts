@@ -14,7 +14,9 @@ import {
   listStuckEntries,
   computeCreateDiffs,
   computeUpdateDiffs,
-  shouldGateWrite,
+  listByIdempotencyKey,
+  isUserRejected,
+  USER_REJECTED,
   applyApprovalEdit,
   onWriteCompleted,
   SorWriteEntry,
@@ -280,22 +282,21 @@ async function run(): Promise<void> {
     onWriteCompleted(null);
   }
 
-  // ── shouldGateWrite predicate (US-006) ───────────────────────────────────
+  // ── idempotency key + rejection marker ───────────────────────────────────
   {
-    // Disabled gate: never gates, regardless of confidence.
-    assert.equal(shouldGateWrite(0.1, false, 0.6), false, 'disabled gate never fires');
-    assert.equal(shouldGateWrite(undefined, false, 0.6), false, 'disabled gate with undefined confidence');
-
-    // Enabled gate but confidence absent: per PRD, never gate.
-    assert.equal(shouldGateWrite(undefined, true, 0.6), false, 'undefined confidence never gates');
-    assert.equal(shouldGateWrite(null, true, 0.6), false, 'null confidence never gates');
-    assert.equal(shouldGateWrite(Number.NaN, true, 0.6), false, 'NaN confidence never gates');
-
-    // Enabled gate with confidence: strict < threshold.
-    assert.equal(shouldGateWrite(0.59, true, 0.6), true, 'below threshold gates');
-    assert.equal(shouldGateWrite(0.6, true, 0.6), false, 'equal to threshold does not gate');
-    assert.equal(shouldGateWrite(0.7, true, 0.6), false, 'above threshold does not gate');
-    assert.equal(shouldGateWrite(0, true, 0.6), true, 'zero confidence gates');
+    await freshDb();
+    const a = await recordWrite({
+      targetSystem: 'jira', targetRecordId: '(pending-create)', operation: 'create',
+      provenance: { idempotencyKey: 'meeting:m1:send survey', confidence: 0.7, initiator: 'system' },
+    });
+    await recordWrite({ targetSystem: 'jira', targetRecordId: 'P-1', operation: 'comment', provenance: { confidence: 0.4 } });
+    const rows = await listByIdempotencyKey('meeting:m1:send survey');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]._id, a);
+    assert.equal(rows[0].initiator, 'system');
+    assert.equal((await listByIdempotencyKey('nope')).length, 0);
+    await markCompleted(a, 'failed', USER_REJECTED);
+    assert.equal(isUserRejected((await getWriteEntry(a))!), true);
   }
 
   // ── applyApprovalEdit patches the entry (US-006) ─────────────────────────
