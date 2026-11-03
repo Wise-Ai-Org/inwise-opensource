@@ -13,8 +13,7 @@ import PersonDetailPage from './PersonDetailPage';
 import { VoiceCapturePage, VoiceMemoDetailPage, MicGlyph } from './VoiceMemo';
 import './popup.css';
 import './owl-desktop.css';
-// @ts-ignore webpack image asset
-import wordmark from '../assets/inwise-wordmark.png';
+import InwiseBrand from '../components/InwiseBrand';
 
 const ReviewContext = createContext<ReviewItems | null>(null);
 export function useReview(): ReviewItems {
@@ -285,7 +284,7 @@ function ShellInner() {
       <div className="pp-root">
         <div className="pp-titlebar">
           <div className="pp-titlebar-left">
-            <button className="pp-dots pp-brand-menu" aria-label="Menu" onClick={() => setMenuOpen(o => !o)}><img src={wordmark} alt="Inwise" /></button>
+            <button className="pp-dots pp-brand-menu" aria-label="Menu" onClick={() => setMenuOpen(o => !o)}><InwiseBrand size={28} fontSize={18} /></button>
             {review.count > 0 && !onReviewPage && (
               <button className="pp-review-pill" onClick={() => openPage({ kind: 'review' })}>
                 {review.count} to review

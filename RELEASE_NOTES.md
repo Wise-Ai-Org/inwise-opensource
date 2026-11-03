@@ -1,3 +1,11 @@
+# Inwise 1.7.7 — Owl branding
+
+- Uses the approved owl artwork with lowercase `inwise` beside it in the desktop title bar, sidebar and onboarding.
+- Documents the shared logo treatment for future screens.
+- Retains the 1.7.6 recording, recovery and Owl interface functionality.
+- Organisation connectivity is not enabled in this release; it will be developed separately with privacy controls.
+- Windows x64 installer. This build is unsigned.
+
 # Release Notes
 
 ## 1.7.6 — One Owl design across Inwise Desktop
