@@ -17,10 +17,12 @@ Disconnect revokes future device requests. Already approved contributions remain
 - Backend: appwise-functions branch dev, function desktop-work-brain.
 - Web: wiseai-web branch dev; /desktop/connect handles approval and /org-work-brain shows approved contributions.
 - Desktop development environment: INWISE_WORK_BRAIN_API_BASE=https://appwise-dev-final-a0dxcqcad3dyhpaa.westus-01.azurewebsites.net/api and INWISE_WORK_BRAIN_WEB_BASE=https://yellow-river-03906531e.7.azurestaticapps.net.
-- Without overrides the desktop targets the normal product host, where this feature must not be claimed live until that backend/web deployment is separately approved and verified.
+- The 1.8.0-dev.1 preview targets the dev backend and web app by default. Production versions target the normal product host; production connectivity must not be claimed live until separately deployed and verified.
 
 ## Checks
 
 Backend tests cover forbidden fields, review, pairing expiration/one-time consumption, secret hashing, org isolation, project approval/visibility changes, duplicate retries, conflicting retries, token expiry/revocation and strict real-account authentication. Web tests cover sign-in return-path safety, explicit approval, failure states and recipient rendering. Electron UI tests use an isolated synthetic profile and stubbed connection IPC; they check footer placement, pairing, review gating, failure/retry, private-data exclusion and disconnect without external writes.
 
 Real-account approval, provider sign-in configuration and a live desktop-to-dev account session require a human sign-in/approval check. Passing synthetic tests does not certify those steps. Existing cloud meeting/transcript permissions are not changed by this new connection, which stores no raw transcripts in the cloud.
+
+A local development installer is built for human inspection. It is the same Inwise app and is not marked as the latest public release. No existing installation or real account is automatically connected.

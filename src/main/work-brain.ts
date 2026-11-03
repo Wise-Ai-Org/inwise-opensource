@@ -4,8 +4,9 @@ import * as path from 'path';
 import { getMeeting } from './database';
 import { draftOrgContext } from './work-brain-ai';
 
-const apiBase = () => (process.env.INWISE_WORK_BRAIN_API_BASE || 'https://appwise-functions.azurewebsites.net/api').replace(/\/$/, '');
-const webBase = () => (process.env.INWISE_WORK_BRAIN_WEB_BASE || 'https://projects.inwise.ai').replace(/\/$/, '');
+const devBuild = () => app.getVersion().includes('-dev.');
+const apiBase = () => (process.env.INWISE_WORK_BRAIN_API_BASE || (devBuild() ? 'https://appwise-dev-final-a0dxcqcad3dyhpaa.westus-01.azurewebsites.net/api' : 'https://appwise-functions.azurewebsites.net/api')).replace(/\/$/, '');
+const webBase = () => (process.env.INWISE_WORK_BRAIN_WEB_BASE || (devBuild() ? 'https://yellow-river-03906531e.7.azurestaticapps.net' : 'https://projects.inwise.ai')).replace(/\/$/, '');
 type Binding = { token: string; organisationId: string; expiresAt: number };
 let pending: { pairId: string; pollSecret: string; expiresAt: number } | null = null;
 const bindingPath = () => path.join(app.getPath('userData'), 'org-work-brain.enc');
