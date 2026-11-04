@@ -96,7 +96,8 @@ export function agentCommand(input: ScriptInput): string {
   const exe = AGENT_COMMAND[client];
   if (client === 'claude-code') {
     if (!input.mcpConfigPath) throw new Error('missing MCP config path');
-    return `${exe} --mcp-config ${q(input.mcpConfigPath)} ${q(prompt)}`;
+    // Prompt first: --mcp-config takes several files and would swallow it.
+    return `${exe} ${q(prompt)} --mcp-config ${q(input.mcpConfigPath)}`;
   }
   // Codex: a -c value that is not valid TOML is taken as a literal string.
   return `${exe} -c mcp_servers.${MCP_SERVER_NAME}.url=${mcpUrl(port)} ${q(prompt)}`;

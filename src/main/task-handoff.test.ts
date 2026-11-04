@@ -31,7 +31,7 @@ async function run(): Promise<void> {
   const prompt = buildAgentPrompt('T1', 'claude-code', true);
   assert.equal(
     agentCommand({ platform: 'win32', client: 'claude-code', folder: 'C:\\w', prompt, port: 43117, mcpConfigPath: 'C:\\u\\c.json' }),
-    `claude --mcp-config "C:\\u\\c.json" "${prompt}"`,
+    `claude "${prompt}" --mcp-config "C:\\u\\c.json"`,
   );
   assert.equal(
     agentCommand({ platform: 'darwin', client: 'codex', folder: '/w', prompt, port: 5000 }),
