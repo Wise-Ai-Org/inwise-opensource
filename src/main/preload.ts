@@ -128,6 +128,12 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   mcpSetEnabled: (enabled: boolean) => ipcRenderer.invoke('mcp:setEnabled', enabled),
   mcpSetPort: (port: number) => ipcRenderer.invoke('mcp:setPort', port),
   mcpSetWritebackEnabled: (enabled: boolean) => ipcRenderer.invoke('mcp:setWritebackEnabled', enabled),
+  // Hand a task to an AI agent or chat
+  handoffStatus: (refresh?: boolean) => ipcRenderer.invoke('handoff:status', refresh),
+  handoffPickFolder: () => ipcRenderer.invoke('handoff:pickFolder'),
+  handoffSetup: (opts: { writeback: boolean }) => ipcRenderer.invoke('handoff:setup', opts),
+  handoffLaunchAgent: (taskId: string, client: 'claude-code' | 'codex') => ipcRenderer.invoke('handoff:launchAgent', taskId, client),
+  handoffOpenChat: (taskId: string, target: 'claude-chat' | 'chatgpt') => ipcRenderer.invoke('handoff:openChat', taskId, target),
 
   // Slack
   slackConnect: (token: string) => ipcRenderer.invoke('slack:connect', token),

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
 import { OwnerPicker } from './TasksTab';
 import { MentionThread, RepetitionNudge } from './DedupBits';
+import HandoffCard from './HandoffCard';
 
 type Status = 'todo' | 'inProgress' | 'completed';
 const STATUS_LABEL: Record<Status, string> = { todo: 'To Do', inProgress: 'In Progress', completed: 'Done' };
@@ -282,6 +283,10 @@ export default function TaskDetailPage({ taskId }: { taskId: string }) {
                 <div className="pp-seclabel">AI execution</div>
                 <ExecutionCard summary={task.executionSummary} />
               </>
+            )}
+
+            {task.status !== 'completed' && (
+              <HandoffCard task={task} onHandedOff={() => setReloadKey(k => k + 1)} />
             )}
 
             {task.likelyDone && (

@@ -1,7 +1,12 @@
 import { recordingFailure, RecordingStage } from './recording-failure';
-import { app, BrowserWindow, dialog, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage, powerMonitor, screen } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, globalShortcut, Menu, shell, Notification, desktopCapturer, protocol, nativeImage, powerMonitor, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import { execFile, spawn } from 'child_process';
+import {
+  AgentClient, HandoffReadiness, agentBlockers, buildAgentPrompt, buildChatContext, buildLaunchScript,
+  claudeMcpConfig, CHAT_URL, isAgent, isChat, isSafeTaskId, terminalCommand,
+} from './task-handoff';
 import * as os from 'os';
 import { session } from 'electron';
 import { installDisplayMediaHandler, installSessionPermissionHandlers } from './session-permissions';
@@ -3806,6 +3811,100 @@ ipcMain.handle('mcp:setPort', async (_e, port: number) => {
 ipcMain.handle('mcp:setWritebackEnabled', (_e, enabled: boolean) => {
   setConfig({ mcpWritebackEnabled: !!enabled });
   return { ok: true, enabled: getMcpPrefs().writebackEnabled };
+});
+
+// ── Hand a task to an AI agent (docs/TASK_HANDOFF.md) ───────────────────────
+const handoffInstalled: Partial<Record<AgentClient, boolean>> = {};
+function detectCli(cmd: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const [file, args] = process.platform === 'win32'
+      ? ['where.exe', [cmd]]
+      : ['/bin/sh', ['-lc', `command -v ${cmd}`]];
+    execFile(file, args as string[], { timeout: 8000, windowsHide: true }, (err) => resolve(!err));
+  });
+}
+async function handoffReadiness(refresh = false): Promise<HandoffReadiness> {
+  for (const c of ['claude-code', 'codex'] as AgentClient[]) {
+    if (refresh || handoffInstalled[c] === undefined) handoffInstalled[c] = await detectCli(c === 'claude-code' ? 'claude' : 'codex');
+  }
+  const cfg = getConfig() as any;
+  const prefs = getMcpPrefs();
+  const folder = typeof cfg.handoffFolder === 'string' && cfg.handoffFolder && fs.existsSync(cfg.handoffFolder) ? cfg.handoffFolder : null;
+  return {
+    serverEnabled: prefs.enabled,
+    serverRunning: getMcpStatus().running,
+    writeback: prefs.writebackEnabled,
+    folder,
+    installed: { 'claude-code': !!handoffInstalled['claude-code'], codex: !!handoffInstalled.codex },
+    introSeen: cfg.handoffIntroSeen === true,
+  };
+}
+ipcMain.handle('handoff:status', (_e, refresh?: boolean) => handoffReadiness(!!refresh));
+ipcMain.handle('handoff:pickFolder', async () => {
+  const cfg = getConfig() as any;
+  const r = await dialog.showOpenDialog({
+    title: 'Where should the AI agent work?',
+    buttonLabel: 'Use this folder',
+    properties: ['openDirectory', 'createDirectory'],
+    defaultPath: cfg.handoffFolder || app.getPath('home'),
+  });
+  if (r.canceled || !r.filePaths[0]) return { ok: false };
+  const folder = r.filePaths[0];
+  if (/["\r\n]/.test(folder)) return { ok: false, error: 'Inwise cannot use a folder whose name contains a double quote.' };
+  setConfig({ handoffFolder: folder } as any);
+  return { ok: true, folder };
+});
+ipcMain.handle('handoff:setup', async (_e, opts: { writeback: boolean }) => {
+  const prefs = getMcpPrefs();
+  if (!prefs.enabled) setConfig({ mcpEnabled: true });
+  if (!getMcpStatus().running) {
+    const r = await startMcpServer(getMcpPrefs().port);
+    if (!r.ok) return { ok: false, error: r.error || 'Could not start the local connection for AI tools.' };
+  }
+  setConfig({ mcpWritebackEnabled: !!opts?.writeback, handoffIntroSeen: true } as any);
+  return { ok: true, readiness: await handoffReadiness() };
+});
+ipcMain.handle('handoff:launchAgent', async (_e, taskId: string, client: string) => {
+  if (!isSafeTaskId(taskId) || !isAgent(client)) return { ok: false, error: 'That task cannot be handed off.' };
+  const task = await getTaskById(taskId);
+  if (!task) return { ok: false, error: 'Task not found.' };
+  const ready = await handoffReadiness(true);
+  const blockers = agentBlockers(ready, client);
+  if (blockers.length) return { ok: false, error: blockers.join(' '), readiness: ready };
+  try {
+    const port = getMcpStatus().port || getMcpPrefs().port;
+    const dir = path.join(app.getPath('userData'), 'handoff');
+    fs.mkdirSync(dir, { recursive: true });
+    const mcpConfigPath = path.join(dir, 'claude-mcp.json');
+    fs.writeFileSync(mcpConfigPath, claudeMcpConfig(port));
+    const prompt = buildAgentPrompt(taskId, client, ready.writeback);
+    const ext = process.platform === 'win32' ? 'cmd' : process.platform === 'darwin' ? 'command' : 'sh';
+    const scriptPath = path.join(dir, `${client}-${taskId}.${ext}`);
+    fs.writeFileSync(scriptPath, buildLaunchScript({ platform: process.platform, client, folder: ready.folder!, prompt, port, mcpConfigPath }), { mode: 0o755 });
+    const hasWt = process.platform === 'win32' ? await detectCli('wt') : false;
+    const t = terminalCommand(process.platform, scriptPath, hasWt);
+    const child = spawn(t.file, t.args, { detached: true, stdio: 'ignore', windowsHide: false, windowsVerbatimArguments: process.platform === 'win32' && !hasWt });
+    child.on('error', (err) => log('error', 'handoff:launch', err.message));
+    child.unref();
+    const handoff = { client, at: new Date().toISOString(), folder: ready.folder };
+    await updateTask(taskId, { handoff });
+    log('info', 'handoff:launch', `${client} for task ${taskId}`);
+    return { ok: true, handoff };
+  } catch (e: any) {
+    log('error', 'handoff:launch', e?.message || String(e));
+    return { ok: false, error: `Could not open a terminal: ${e?.message || e}` };
+  }
+});
+ipcMain.handle('handoff:openChat', async (_e, taskId: string, target: string) => {
+  if (!isSafeTaskId(taskId) || !isChat(target)) return { ok: false, error: 'That task cannot be handed off.' };
+  const task = await getTaskById(taskId);
+  if (!task) return { ok: false, error: 'Task not found.' };
+  const meetingId = task.source?.type === 'meeting' ? task.source.id : task.meetingId || task.provenance?.meetingId;
+  const meeting = meetingId ? await getMeeting(meetingId).catch(() => null) : null;
+  clipboard.writeText(buildChatContext(task, meeting));
+  await shell.openExternal(CHAT_URL[target]);
+  setConfig({ handoffChatNoticeSeen: true } as any);
+  return { ok: true };
 });
 
 app.on('before-quit', () => {

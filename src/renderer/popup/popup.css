@@ -909,3 +909,22 @@ button.pp-chip { cursor: pointer; }
 }
 .pp-toggle.pp-on { background: var(--teal); }
 .pp-toggle.pp-on::after { transform: translateX(16px); }
+
+/* ── Hand a task to AI ─────────────────────────────────────────────────── */
+.pp-handoff { padding: 12px; }
+.pp-handoff-wait { display: flex; gap: 10px; align-items: flex-start; }
+.pp-handoff-pulse {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--teal); flex: none; margin-top: 5px;
+  animation: pp-handoff-pulse 1.6s ease-in-out infinite;
+}
+@keyframes pp-handoff-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .pp-handoff-pulse { animation: none; } }
+.pp-handoff-chat { gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.pp-handoff-folder { display: flex; gap: 8px; align-items: center; margin-top: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pp-handoff-toast {
+  margin-top: 8px; padding: 7px 10px; border-radius: 8px; font-size: 12px; line-height: 1.45;
+  background: var(--pp-teal-tint); color: var(--pp-teal-deep); border: 1px solid var(--pp-teal-line);
+}
+.pp-handoff-steps { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.5; color: var(--slate-700); display: flex; flex-direction: column; gap: 6px; }
+.pp-handoff-note { font-size: 12px; line-height: 1.5; color: var(--slate-500); background: var(--slate-50, #f8fafc); border-radius: 8px; padding: 8px 10px; }
+.pp-handoff-tip { display: flex; gap: 10px; border-color: var(--pp-teal-line); background: var(--pp-teal-tint); }

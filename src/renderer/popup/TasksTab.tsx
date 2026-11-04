@@ -17,11 +17,24 @@ interface TaskRow {
   approval?: { status: string };
   jiraKey?: string;
   jiraUrl?: string;
+  handoff?: { client: string; at: string };
+  executionSummary?: { status?: string; client?: string };
   /** Computed server-side by getTasks (task-dedup US-014). */
   repetitionNudge?: { show: boolean; count: number };
 }
 
 const STATUS_LABEL: Record<Status, string> = { todo: 'To Do', inProgress: 'In Progress', completed: 'Done' };
+
+const AI_CLIENT_LABEL: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex' };
+/** "With Claude Code" while an agent has the task; "Draft ready" when it reported back. */
+function aiChip(t: TaskRow): string | null {
+  const ex = t.executionSummary;
+  if (ex?.status === 'running') return `With ${AI_CLIENT_LABEL[ex.client || ''] || 'AI'}`;
+  if (!ex && t.handoff && Date.now() - new Date(t.handoff.at).getTime() < 24 * 3600_000) {
+    return `Sent to ${AI_CLIENT_LABEL[t.handoff.client] || 'AI'}`;
+  }
+  return null;
+}
 
 // ── Owner picker: me + tracked people + "Someone else…" free entry ──────────
 // A typed name goes through addTrackedPeople, whose fuzzy matcher attaches it
@@ -297,6 +310,15 @@ export default function TasksTab() {
     try { await api().updateTask?.(t._id, { status: next }); } catch { reload(); }
   };
 
+  const [showHandoffTip, setShowHandoffTip] = useState(false);
+  useEffect(() => {
+    api().getConfig?.().then((c: any) => setShowHandoffTip(!c?.handoffTipDismissed && !c?.handoffIntroSeen)).catch(() => {});
+  }, []);
+  const dismissHandoffTip = () => {
+    setShowHandoffTip(false);
+    api().setConfig?.({ handoffTipDismissed: true });
+  };
+
   const bringBack = async (id: string) => {
     await api().bringBackTask?.(id);
     reload();
@@ -320,6 +342,21 @@ export default function TasksTab() {
               </button>
             ))}
           </div>
+
+          {showHandoffTip && seg !== 'completed' && visible.length > 0 && (
+            <div className="pp-card pp-handoff-tip">
+              <div className="pp-grow">
+                <div className="pp-title-sm">New: hand a task to Claude Code or Codex</div>
+                <div className="pp-meta" style={{ marginTop: 2, lineHeight: 1.45 }}>
+                  Open any task and choose Hand this to AI. The agent reads the task and its meeting, shows you a plan, and saves the result back here.
+                </div>
+                <div className="pp-row" style={{ gap: 12, marginTop: 6 }}>
+                  <button className="pp-link" onClick={() => push({ kind: 'task', id: visible[0]._id })}>Try it on “{visible[0].title.length > 34 ? visible[0].title.slice(0, 34) + '…' : visible[0].title}”</button>
+                  <button className="pp-quiet-action" onClick={dismissHandoffTip}>Got it</button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="pp-row" style={{ justifyContent: 'space-between', padding: '0 2px' }}>
             <AiButton size="sm" tone="light" onClick={() => push({ kind: 'review', focus: 'priorities' })}>
@@ -354,6 +391,7 @@ export default function TasksTab() {
                   {t.owner && <span className="pp-chip">{t.owner}</span>}
                   {t.source?.type === 'meeting' && <span className="pp-chip">From meeting</span>}
                   {t.jiraKey && <span className="pp-chip">Jira · {t.jiraKey}</span>}
+                  {aiChip(t) && <span className="pp-chip pp-teal">{aiChip(t)}</span>}
                   {t.aiExtracted && t.approval?.status === 'pending' && <span className="pp-chip pp-amber">Awaiting approval</span>}
                   <span className="pp-grow" />
                   <button
