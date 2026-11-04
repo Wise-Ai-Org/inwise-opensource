@@ -1,3 +1,18 @@
+# Inwise 1.7.9: Hand a task to AI
+
+- Every open task has a "Hand this to AI" card. Choose Claude Code or Codex and Inwise opens a terminal in a folder you pick, with a session that reads the task and the meeting it came from, shows you a plan, and waits for your OK.
+- With your permission, the agent saves its plan, result and status back to the task. The task list shows "With Claude Code" while it works.
+- Prefer a chat? "Talk it through" copies the task and a short quote from its meeting and opens a new Claude or ChatGPT chat to paste into. Chats cannot save results back to Inwise.
+- The first hand-off explains the three steps and sets up the folder and write-back. A one-time tip on the Tasks tab points to it.
+- Action items are stricter: only concrete work someone committed to.
+- On a meeting, each action item can be checked off, edited, deleted with undo, and given an owner from the invitees or a typed name.
+- Fixing a misheard name offers to fix it everywhere in that meeting and remembers it for future meetings.
+- Meetings show invitees and attendance, and Meet, Teams and Zoom transcripts can be imported directly.
+
+Validation: all regression test files; live hand-off on Windows against a test copy of user data (Claude Code and Codex read the task and meeting and stopped at a plan; an approved run saved its result and status to the task). Hand-off is not yet tested on macOS.
+
+Windows x64 installer. This build is unsigned. No new macOS installer is included.
+
 # Inwise 1.7.8: Ollie gets ahead of your day, and Jira stays in step
 
 - Ollie shows up at four moments: when your day begins, before each meeting, after a meeting is processed, and at the end of the day. The "processed" notice waits until your meeting is over.
