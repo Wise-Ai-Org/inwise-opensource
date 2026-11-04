@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   attachTranscriptToMeeting: (meetingId: string, content: string) =>
     ipcRenderer.invoke('db:attachTranscriptToMeeting', meetingId, content),
   reviewMeeting: (id: string, reviewedInsights?: any) => ipcRenderer.invoke('db:reviewMeeting', id, reviewedInsights),
+  updateMeetingActionItems: (meetingId: string, items: any[]) => ipcRenderer.invoke('db:updateMeetingActionItems', meetingId, items),
+  renameInMeeting: (meetingId: string, from: string, to: string, remember: boolean) => ipcRenderer.invoke('db:renameInMeeting', meetingId, from, to, remember),
 
   // Tasks
   getTasks: () => ipcRenderer.invoke('db:getTasks'),
@@ -93,6 +95,12 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   deleteVoicePrint: (id: string) => ipcRenderer.invoke('voiceprint:delete', id),
   getUserVoicePrint: () => ipcRenderer.invoke('voiceprint:get-user'),
 
+  refreshMeetingAttendance: (meetingId: string) => ipcRenderer.invoke('meeting:refreshAttendance', meetingId),
+  zoomFetchAttendance: (meeting: any) => ipcRenderer.invoke('zoom:fetchAttendance', meeting),
+  teamsFetchAttendance: (meeting: any) => ipcRenderer.invoke('teams:fetchAttendance', meeting),
+  meetFetchAttendance: (meeting: any) => ipcRenderer.invoke('meet:fetchAttendance', meeting),
+  syncNativeTranscripts: (provider: 'meet' | 'teams' | 'zoom') => ipcRenderer.invoke(`${provider}:syncTranscripts`),
+
   // Zoom
   zoomSaveCredentials: (clientId: string, clientSecret: string) => ipcRenderer.invoke('zoom:saveCredentials', clientId, clientSecret),
   zoomConnect: () => ipcRenderer.invoke('zoom:connect'),
@@ -120,6 +128,7 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   meetStatus: () => ipcRenderer.invoke('meet:status'),
   meetTest: () => ipcRenderer.invoke('meet:test'),
   meetRedirectUri: () => ipcRenderer.invoke('meet:redirectUri'),
+  meetResolveConference: (reference: string) => ipcRenderer.invoke('meet:resolveConference', reference),
   meetListMeetings: () => ipcRenderer.invoke('meet:listMeetings'),
   meetFetchTranscript: (meeting: any) => ipcRenderer.invoke('meet:fetchTranscript', meeting),
 

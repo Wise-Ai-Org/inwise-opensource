@@ -100,6 +100,18 @@ async function run(): Promise<void> {
   assert.ok(typeof meetingId2 === 'string', 'meeting created even when insights throws');
   const meeting2 = await meetingsDb.findOneAsync({ _id: meetingId2 });
   assert.ok(meeting2, 'meeting persists when insights pipeline fails');
+  assert.equal(meeting2.status, 'transcribed', 'saved native text remains available for insights retry');
+
+  let concurrentCalls = 0;
+  const concurrentFixture = { ...FIXTURE, externalId: 'concurrent-import' };
+  const concurrentDeps = { runInsights: async () => { concurrentCalls++; } };
+  const ids = await Promise.all([
+    ingestNormalizedTranscript(concurrentFixture, concurrentDeps),
+    ingestNormalizedTranscript(concurrentFixture, concurrentDeps),
+  ]);
+  assert.equal(ids[0], ids[1], 'manual and background imports share one meeting');
+  assert.equal(concurrentCalls, 1, 'concurrent imports run insights once');
+  await assert.rejects(ingestNormalizedTranscript({ ...FIXTURE, segments: [] }), /no text/);
 
   console.log('zoom-transcript-ingestion: all tests passed');
 }

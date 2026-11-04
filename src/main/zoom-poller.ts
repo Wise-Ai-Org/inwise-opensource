@@ -13,6 +13,7 @@ import { listZoomRecordings, getTranscriptDownloadUrl, ZoomRecordingItem } from 
 import { downloadAndParseVtt } from './zoom-vtt-parser';
 import { ingestNormalizedTranscript } from './zoom-transcript-ingestion';
 import { log } from './logger';
+import { fetchZoomAttendance } from './zoom-attendance';
 
 const DEFAULT_POLL_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -61,6 +62,8 @@ async function defaultImportRecording(recording: ZoomRecordingItem): Promise<str
     zoomUuid: recording.uuid,
     importedAutomatically: true,
   };
+  try { normalized.sourceMetadata.attendance = await fetchZoomAttendance(recording.uuid); }
+  catch (error: any) { normalized.sourceMetadata.attendanceError = error.message; }
   return ingestNormalizedTranscript(normalized);
 }
 

@@ -17,8 +17,8 @@ async function run(): Promise<void> {
   assert.equal(url.searchParams.get('scope'), MEET_READ_SCOPE);
   assert.equal(url.searchParams.get('access_type'), 'offline');
   assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
-  assert.match(formatMeetOAuthError('invalid_client'), /Desktop app/i);
-  assert.match(formatMeetOAuthError('access_denied'), /test user|Internal/i);
+  assert.match(formatMeetOAuthError('invalid_client'), /update the app/i);
+  assert.match(formatMeetOAuthError('access_denied'), /administrator/i);
 
   console.log('meet-oauth-config: all tests passed');
 }

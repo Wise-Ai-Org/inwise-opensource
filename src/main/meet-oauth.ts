@@ -1,12 +1,13 @@
 import * as crypto from 'crypto';
 import { shell } from 'electron';
 import {
-  clearOAuthCredentials,
+  clearOAuthTokens,
   getOAuthCredentials,
   setOAuthClientCredentials,
   setOAuthTokens,
 } from './database';
 import { log } from './logger';
+import { readMeetDesktopClient } from './meet-desktop-client';
 import { createPkcePair, waitForOAuthCode } from './oauth-loopback';
 import {
   buildMeetAuthorizationUrl,
@@ -54,10 +55,10 @@ async function readTokenResponse(response: Response): Promise<GoogleTokenRespons
 }
 
 export async function connectMeet(): Promise<{ ok: boolean; error?: string }> {
-  const credentials = await getOAuthCredentials('meet');
-  if (!credentials?.clientId || !credentials.clientSecret) {
-    return { ok: false, error: 'Enter and save your Google Desktop client ID and secret first.' };
-  }
+  // Persist the exact client used for this grant so refreshes survive client changes.
+  const client = readMeetDesktopClient();
+  if (!client) return { ok: false, error: 'Google sign-in is unavailable in this build. Please update Inwise or contact support.' };
+  const credentials = client;
 
   const state = crypto.randomBytes(16).toString('hex');
   const pkce = createPkcePair();
@@ -91,6 +92,7 @@ export async function connectMeet(): Promise<{ ok: boolean; error?: string }> {
       body,
     });
     const token = await readTokenResponse(response);
+    await setOAuthClientCredentials('meet', credentials);
     await setOAuthTokens('meet', {
       accessToken: token.access_token,
       refreshToken: token.refresh_token || '',
@@ -139,7 +141,7 @@ export async function getMeetStatus(): Promise<{ connected: boolean; configured:
   const credentials = await getOAuthCredentials('meet');
   return {
     connected: !!credentials?.accessToken,
-    configured: !!(credentials?.clientId && credentials.clientSecret),
+    configured: !!readMeetDesktopClient(),
   };
 }
 
@@ -169,8 +171,8 @@ export async function disconnectMeet(): Promise<void> {
       // Local disconnect still proceeds when Google is offline.
     }
   }
-  await clearOAuthCredentials('meet');
-  log('info', 'meet:disconnected', 'credentials cleared');
+  await clearOAuthTokens('meet');
+  log('info', 'meet:disconnected', 'tokens cleared; desktop client configuration retained');
 }
 
 export const MEET_REDIRECT_URI_DISPLAY = MEET_REDIRECT_URI;

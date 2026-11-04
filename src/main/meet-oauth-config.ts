@@ -23,10 +23,10 @@ export function buildMeetAuthorizationUrl(options: {
 }
 export function formatMeetOAuthError(detail: string): string {
   if (/access_denied|not been completed|not configured for access|Error 403/i.test(detail)) {
-    return 'Google blocked access to this OAuth app. Add your account as a test user, or use an Internal consent screen in your Google Workspace organization.';
+    return 'Google did not authorize Inwise. Try again with the account you use for meetings. If your organization blocks Inwise, ask your Google Workspace administrator to approve it.';
   }
   if (/invalid_client/i.test(detail)) {
-    return 'Google rejected the client ID or secret. Use credentials whose application type is Desktop app.';
+    return 'Google sign-in is unavailable in this version of Inwise. Please update the app or contact support.';
   }
   if (/invalid_grant/i.test(detail)) {
     return 'Google authorization expired or was revoked. Reconnect Google Meet in Settings.';

@@ -72,6 +72,15 @@ async function run(): Promise<void> {
   assert.equal(artifact.speakerAttributed, false, 'falls back when speaker attribution is disabled');
   assert.ok(calls.some((call) => call.accept === 'application/vnd.microsoft.graph.transcript+text'));
 
+  await assert.rejects(fetchTeamsTranscriptArtifact(meeting, {
+    getToken: async () => 'token',
+    fetchFn: (async (url: any) => {
+      if (String(url).includes('/me/onlineMeetings?')) return response(200, { value: [{ id: 'online-1' }] });
+      if (String(url).includes('/transcripts?')) return response(200, { value: [{ id: 'other-day', createdDateTime: '2026-08-02T10:00:00Z', endDateTime: '2026-08-02T10:30:00Z' }] });
+      throw new Error('must not download another occurrence');
+    }) as typeof fetch,
+  }), /No native transcript is available/);
+
   console.log('teams-api: all tests passed');
 }
 

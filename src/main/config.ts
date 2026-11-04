@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { storeLocationOptions } from './store-location';
 import { normalizeNotificationSettings } from './ollie-moments';
 import type { NotificationSettings } from './ollie-moments-types';
+import { addCorrection, type NameCorrections } from './name-corrections';
 import { JIRA_AUTO_THRESHOLD, resolveJiraWriteMode, type JiraWriteMode } from './jira-gate';
 
 export type CalendarProvider = 'google' | 'outlook' | 'ics';
@@ -84,6 +85,8 @@ interface Config {
   notifications?: NotificationSettings;
   /** Ollie moment bookkeeping: dismissed card keys, already-notified keys, events cancelled today. */
   ollieMomentState: OllieMomentState;
+  /** Misheard name -> correct name, applied to transcripts and insights (e.g. Satya -> Sacha). */
+  nameCorrections: NameCorrections;
 }
 
 export interface OllieMomentState {
@@ -136,6 +139,7 @@ const store = new Store<Config>({
     // `notifications` deliberately has no default: an absent block lets
     // getNotificationSettings() carry over a legacy dailyPlanEnabled=false.
     ollieMomentState: { dismissedKeys: [], notifiedKeys: [], cancelledEvents: [] },
+    nameCorrections: {},
     sor: {
       dismissedReceiptIds: [],
       jira: { approvalGateEnabled: false, approvalThreshold: 0.6 },
@@ -321,6 +325,17 @@ export function getOllieMomentState(): OllieMomentState {
 
 export function setOllieMomentState(state: OllieMomentState): void {
   store.set('ollieMomentState', state);
+}
+
+export function getNameCorrections(): NameCorrections {
+  const raw = store.get('nameCorrections');
+  return raw && typeof raw === 'object' ? { ...raw } : {};
+}
+
+export function rememberNameCorrection(from: string, to: string): NameCorrections {
+  const next = addCorrection(getNameCorrections(), from, to);
+  store.set('nameCorrections', next);
+  return next;
 }
 
 export function wasAutostartConfigured(): boolean {

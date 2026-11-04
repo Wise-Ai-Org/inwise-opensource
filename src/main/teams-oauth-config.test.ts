@@ -1,3 +1,4 @@
+import { TEAMS_DESKTOP_CLIENT } from './teams-desktop-client';
 import * as assert from 'node:assert/strict';
 import {
   buildTeamsAuthorizationUrl,
@@ -8,6 +9,9 @@ import {
 } from './teams-oauth-config';
 
 async function run(): Promise<void> {
+  assert.match(TEAMS_DESKTOP_CLIENT.clientId, /^[a-f0-9-]{36}$/);
+  assert.equal(TEAMS_DESKTOP_CLIENT.tenant, 'organizations');
+  assert.equal('clientSecret' in TEAMS_DESKTOP_CLIENT, false);
   assert.equal(TEAMS_REDIRECT_URI, 'http://localhost:17293/callback');
   assert.equal(normalizeTeamsTenant(''), 'organizations');
   assert.equal(normalizeTeamsTenant('contoso.onmicrosoft.com'), 'contoso.onmicrosoft.com');

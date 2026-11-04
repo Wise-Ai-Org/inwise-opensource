@@ -16,6 +16,16 @@ function mockFetch(status: number, body: unknown): typeof fetch {
 const stubToken = async () => 'test-access-token';
 
 async function run(): Promise<void> {
+  {
+    let pageCalls = 0;
+    const pages = await listZoomRecordings({ getToken: stubToken, fetchFn: (async (raw: any) => {
+      pageCalls++;
+      const url = new URL(String(raw));
+      if (pageCalls === 2) assert.equal(url.searchParams.get('next_page_token'), 'second');
+      return { ok: true, json: async () => ({ meetings: [{ id: pageCalls, uuid: `uuid-${pageCalls}`, topic: 'Call', start_time: '2026-11-02T10:00:00Z' }], next_page_token: pageCalls === 1 ? 'second' : '' }) } as Response;
+    }) as typeof fetch });
+    assert.equal(pages.length, 2, 'all recording pages are imported');
+  }
   // ── listZoomRecordings maps API response correctly ─────────────────────────
   {
     const apiResponse = {

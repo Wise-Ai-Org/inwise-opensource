@@ -1,5 +1,6 @@
 import { getValidZoomToken } from './zoom-oauth';
 import { log } from './logger';
+import { zoomMeetingPathId } from './meeting-attendance';
 
 const ZOOM_API = 'https://api.zoom.us/v2';
 
@@ -26,23 +27,21 @@ export async function listZoomRecordings(
   const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   const to = new Date().toISOString().split('T')[0];
 
-  const url = `${ZOOM_API}/users/me/recordings?from=${from}&to=${to}&page_size=50`;
-  const res = await fetchFn(url, { headers: { Authorization: `Bearer ${token}` } });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Zoom list recordings failed: HTTP ${res.status}: ${body}`);
-  }
-
-  const data = await res.json() as any;
-  const meetings: any[] = data.meetings ?? [];
-
-  return meetings.map((m) => ({
-    meetingId: String(m.id),
-    uuid: m.uuid,
-    title: m.topic,
-    startedAt: m.start_time,
-  }));
+  const meetings: any[] = [];
+  const seen = new Set<string>();
+  let pageToken = '';
+  do {
+    if (pageToken && seen.has(pageToken)) throw new Error('Zoom returned a repeated recording pagination token');
+    if (pageToken) seen.add(pageToken);
+    const url = new URL(`${ZOOM_API}/users/me/recordings`);
+    url.search = new URLSearchParams({ from, to, page_size: '50', ...(pageToken ? { next_page_token: pageToken } : {}) }).toString();
+    const res = await fetchFn(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Zoom list recordings failed: HTTP ${res.status}: ${await res.text()}`);
+    const data = await res.json() as any;
+    meetings.push(...(data.meetings || []));
+    pageToken = data.next_page_token || '';
+  } while (pageToken);
+  return meetings.map(m => ({ meetingId: String(m.id), uuid: m.uuid, title: m.topic, startedAt: m.start_time }));
 }
 
 export async function getTranscriptDownloadUrl(
@@ -53,8 +52,7 @@ export async function getTranscriptDownloadUrl(
   const fetchFn = deps.fetchFn ?? fetch;
   const token = await getToken();
 
-  // Zoom requires double-encoding UUIDs that contain // or start with //
-  const encodedUuid = encodeURIComponent(encodeURIComponent(meetingUuid));
+  const encodedUuid = zoomMeetingPathId(meetingUuid);
   const url = `${ZOOM_API}/meetings/${encodedUuid}/recordings`;
 
   const res = await fetchFn(url, { headers: { Authorization: `Bearer ${token}` } });
