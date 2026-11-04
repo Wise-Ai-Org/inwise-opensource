@@ -1988,6 +1988,12 @@ function ConnectToAISection() {
         send the content it reads to its configured AI provider.
       </p>
 
+      <div style={{ fontSize: 13, lineHeight: 1.6, marginBottom: 16, padding: '10px 12px', borderRadius: 8, background: 'var(--pp-teal-tint, #f0fdfa)', color: 'var(--pp-teal-deep, #115e59)' }}>
+        <strong>Hand a task to AI.</strong> Open any task and choose Claude Code or Codex under
+        Hand this to AI. Inwise opens a terminal in your chosen folder and the agent picks up the task
+        and its meeting through this connection. Nothing here needs to be copied by hand for that.
+      </div>
+
       <div className="form-group">
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
           <input

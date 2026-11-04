@@ -73,6 +73,14 @@ interface Config {
   mcpPort: number;
   /** Opt-in: let approved MCP executions write outcomes/statuses back to local action items. */
   mcpWritebackEnabled: boolean;
+  /** Hand a task to an AI agent: the folder Claude Code or Codex starts in. */
+  handoffFolder: string | null;
+  /** The hand-off explainer was read and set up once. */
+  handoffIntroSeen: boolean;
+  /** The user was told once that chat hand-offs copy task text to another service. */
+  handoffChatNoticeSeen: boolean;
+  /** The "New: hand a task to AI" tip on the Tasks tab was dismissed. */
+  handoffTipDismissed: boolean;
   /** Last dragged position of the recorder pill; null = default top-left. */
   pillX: number | null;
   pillY: number | null;
@@ -131,6 +139,10 @@ const store = new Store<Config>({
     mcpEnabled: true,
     mcpPort: 43117,
     mcpWritebackEnabled: false,
+    handoffFolder: null,
+    handoffIntroSeen: false,
+    handoffChatNoticeSeen: false,
+    handoffTipDismissed: false,
     pillX: null,
     pillY: null,
     dailyPlanEnabled: true,
