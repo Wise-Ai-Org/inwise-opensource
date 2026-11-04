@@ -255,6 +255,24 @@ export async function getMeeting(id: string): Promise<any> {
   return meetingsDb.findOneAsync({ _id: id });
 }
 
+export async function getMeetingBySourceExternalId(source: string, externalId: string): Promise<any> {
+  return meetingsDb.findOneAsync({ source, externalId });
+}
+
+export async function saveMeetingAttendance(id: string, attendance: unknown): Promise<void> {
+  await meetingsDb.updateAsync({ _id: id }, { $set: { 'sourceMetadata.attendance': attendance } }, {});
+}
+
+export async function linkMeetConferenceToCalendarEvent(calendarEventId: string, conference: { name: string; space: string }): Promise<void> {
+  const meetings: any[] = await meetingsDb.findAsync({ calendarEventId });
+  for (const meeting of meetings) {
+    if (meeting.sourceMetadata?.meetConferenceRecord === conference.name) continue;
+    await meetingsDb.updateAsync({ _id: meeting._id }, { $set: { sourceMetadata: {
+      ...meeting.sourceMetadata, meetConferenceRecord: conference.name, meetSpace: conference.space,
+    } } }, {});
+  }
+}
+
 export async function getOverdueCommitments(): Promise<any[]> {
   const now = new Date();
   const meetings = await meetingsDb.findAsync({});
@@ -2200,6 +2218,12 @@ export async function setOAuthTokens(
 
 export async function clearOAuthCredentials(provider: NativeOAuthProvider): Promise<void> {
   await credentialsDb.removeAsync({ _id: oauthDocId(provider) }, {});
+}
+
+export async function clearOAuthTokens(provider: NativeOAuthProvider): Promise<void> {
+  await credentialsDb.updateAsync({ _id: oauthDocId(provider) }, {
+    $set: { accessToken: null, refreshToken: null, tokenExpiresAt: null },
+  }, {});
 }
 
 export function __setCredentialsDbForTests(db: Datastore): void {

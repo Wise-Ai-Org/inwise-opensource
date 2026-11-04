@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-// @ts-ignore - webpack asset/resource import
-import inwiseLogo from '../../assets/inwise_logo.png';
+import InwiseBrand from './components/InwiseBrand';
 
 interface Props {
   onComplete: () => void;
@@ -410,7 +409,7 @@ export default function Onboarding({ onComplete }: Props) {
     <div className="onboarding-wrap">
       <div className="onboarding-card onboarding-card-three-step">
         <div className="onboarding-header">
-          <img src={inwiseLogo} alt="Inwise" className="onboarding-logo" />
+          <InwiseBrand size={40} fontSize={24} />
           <span className="onboarding-step-count">Step {step + 1} of 3</span>
         </div>
 

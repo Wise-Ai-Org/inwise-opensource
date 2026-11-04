@@ -16,3 +16,9 @@ Preserve all existing recording, review, task, people, integration, consent, and
 - `npx electron scripts/test-recorder-design.cjs`: isolated simulated-audio recorder, borderless white surface, live glow, silence prompt.
 
 Screenshots and machine-readable results go to ignored local QA artifacts. Keep credentials and actual user recordings out of fixtures. These checks do not certify every device, operating-system dialog, provider account, or external service.
+
+## Brand lockup
+
+<img src="../src/renderer/assets/inwise-owl.jpg" alt="Approved Inwise owl" width="64" height="64" /> **inwise**
+
+Use the supplied owl artwork with the lowercase word `inwise` immediately beside it. Keep the image unchanged, preserve its aspect ratio, and use deep teal DM Sans for the wordmark. The shared renderer component is `src/renderer/components/InwiseBrand.tsx`; use the same lockup for the title bar, sidebar and onboarding.

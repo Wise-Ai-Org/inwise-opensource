@@ -1,4 +1,5 @@
 import { getConfig } from './config';
+import { readClaudeInsights } from './insights-response';
 import { assessTranscriptQuality, inferMeetingType, sanitizeDueDate, computeExtractionCoverage } from './transcription-quality';
 
 export interface Insights {
@@ -144,29 +145,30 @@ function extractionContext(context: ExtractionContext): string {
 }
 
 async function extractWithClaude(transcript: string, apiKey: string, context: ExtractionContext): Promise<Insights> {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 2048,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: `${extractionContext(context)}\n\nTranscript:\n\n${transcript}` }],
-    }),
-  });
+  return readClaudeInsights(async (maxTokens) => {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: maxTokens,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: `${extractionContext(context)}\n\nTranscript:\n\n${transcript}` }],
+      }),
+    });
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Claude API error: ${err}`);
-  }
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Claude API error: ${err}`);
+    }
 
-  const data = await res.json() as any;
-  const text = data.content?.[0]?.text || '';
-  return parseInsights(text, transcript, context);
+    const data = await res.json() as any;
+    return data;
+  }, text => parseInsights(text, transcript, context));
 }
 
 // ── Contradiction detection ──────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import AttendanceDetails from '../components/AttendanceDetails';
 import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
 import JiraMappingModal from '../views/communications/JiraMappingModal';
@@ -17,9 +18,13 @@ interface Insights {
 export default function MeetingDetailPage({ meetingId }: { meetingId: string }) {
   const { pop, popAll } = useNav();
   const [meeting, setMeeting] = useState<any>(null);
+  const [people, setPeople] = useState<any[]>([]);
+  useEffect(() => { api().getPeople?.().then((rows: any[]) => setPeople(rows || [])).catch(() => {}); }, []);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState('');
+  const [attendanceBusy, setAttendanceBusy] = useState(false);
+  const [attendanceError, setAttendanceError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [jiraConnected, setJiraConnected] = useState(false);
   const [mappingOpen, setMappingOpen] = useState(false);
@@ -70,6 +75,20 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
     } finally { setRetrying(false); }
   };
 
+  // Resolve only known contact aliases; invite addresses do not prove attendance.
+  const invitees = new Map<string, { name: string; addresses: string[] }>();
+  for (const raw of meeting?.attendees || []) {
+    const address = String(raw).trim();
+    if (!address) continue;
+    const key = address.toLowerCase();
+    const matches = people.filter(person => [person.name, person.email, ...(person.altNames || []), ...(person.altEmails || [])]
+      .some(alias => typeof alias === 'string' && alias.trim().toLowerCase() === key));
+    const person = matches.length === 1 ? matches[0] : null;
+    const identity = person?._id ? `person:${person._id}` : `address:${key}`;
+    const entry: { name: string; addresses: string[] } = invitees.get(identity) || { name: person?.name || address, addresses: [] };
+    if (!entry.addresses.some(value => value.toLowerCase() === key)) entry.addresses.push(address);
+    invitees.set(identity, entry);
+  }
   const insights: Insights = meeting?.insights || {};
   const when = meeting?.date ? new Date(meeting.date) : null;
 
@@ -115,8 +134,35 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
                   ? when.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) +
                     ' · ' + when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
                   : null}
-                {meeting.attendees?.length ? ` · ${meeting.attendees.length} attendee${meeting.attendees.length === 1 ? '' : 's'}` : ''}
+                {invitees.size ? ` · ${invitees.size} invited` : ''}
               </div>
+              {invitees.size > 0 && (
+                <details className="pp-meta" style={{ marginTop: 8 }}>
+                  <summary>Invitees and attendance</summary>
+                  {Array.from(invitees.entries()).map(([key, person]) => (
+                    <div key={key} style={{ marginTop: 6 }}>
+                      {person.name}{person.addresses.length > 1 ? ` (invited with ${person.addresses.length} emails: ${person.addresses.join(', ')})` : ''}
+                    </div>
+                  ))}
+                  <div style={{ marginTop: 8 }}>Calendar invitations do not confirm who joined. Attendance has not been verified.</div>
+                </details>
+              )}
+              {(meeting.sourceMetadata?.attendance || meeting.sourceMetadata?.meetConferenceRecord || meeting.sourceMetadata?.teamsMeeting || meeting.sourceMetadata?.zoomUuid) && (
+                <details className="pp-meta" style={{ marginTop: 10 }}>
+                  <summary>Participants and join sessions</summary>
+                  {meeting.sourceMetadata?.attendance && <AttendanceDetails attendance={meeting.sourceMetadata.attendance} />}
+                  <button className="pp-btn pp-ghost" disabled={attendanceBusy} onClick={async () => {
+                    setAttendanceBusy(true); setAttendanceError('');
+                    try {
+                      const result = await api().refreshMeetingAttendance(meetingId);
+                      if (result?.ok) setMeeting((current: any) => ({ ...current, sourceMetadata: { ...current.sourceMetadata, attendance: result.attendance } }));
+                      else setAttendanceError(result?.error || 'Attendance is unavailable.');
+                    } catch { setAttendanceError('Could not refresh attendance.'); }
+                    finally { setAttendanceBusy(false); }
+                  }}>{attendanceBusy ? 'Fetching attendance…' : 'Refresh attendance'}</button>
+                  {attendanceError && <div role="status">{attendanceError}</div>}
+                </details>
+              )}
               {(meeting.status === 'needs_review' || insights.analysisStatus === 'needs_review') && (
                 <div className="pp-meta" style={{ color: 'var(--amber)', marginTop: 5 }}>Some audio or transcript segments need review.</div>
               )}

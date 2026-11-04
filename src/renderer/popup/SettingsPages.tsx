@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, useNav, SettingsSectionKey } from './nav';
 import Settings from '../Settings';
+import GoogleMeetIntegrationRow from './GoogleMeetIntegrationRow';
+import TeamsIntegrationRow from './TeamsIntegrationRow';
 import type { NotificationSettings } from '../api';
 import './ollie.css';
 
@@ -142,7 +144,11 @@ export function IntegrationsHubPage() {
       </div>
       <div className="pp-body" style={{ paddingTop: 4 }}>
         <div className="pp-listcard">
-          {INTEGRATION_ROWS.map(s => (
+          {INTEGRATION_ROWS.map(s => s.key === 'meet' ? (
+            <GoogleMeetIntegrationRow key={s.key} />
+          ) : s.key === 'teams' ? (
+            <TeamsIntegrationRow key={s.key} />
+          ) : (
             <button
               key={s.key}
               className="pp-setrow"

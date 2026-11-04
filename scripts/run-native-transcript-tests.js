@@ -11,6 +11,11 @@ const testFiles = [
   'src/main/teams-api.test.ts',
   'src/main/meet-oauth-config.test.ts',
   'src/main/meet-api.test.ts',
+  'src/main/meet-conference-tracker.test.ts',
+  'src/main/meeting-attendance.test.ts',
+  'src/main/native-transcript-poller.test.ts',
+  'src/main/zoom-recordings.test.ts',
+  'src/main/zoom-poller.test.ts',
   'src/main/zoom-vtt-parser.test.ts',
   'src/main/zoom-transcript-ingestion.test.ts',
 ];

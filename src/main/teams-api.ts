@@ -1,4 +1,5 @@
 import { getValidTeamsToken } from './teams-oauth';
+import { MeetingAttendance, validAttendanceTime } from './meeting-attendance';
 
 const GRAPH_API = 'https://graph.microsoft.com/v1.0';
 type FetchFn = typeof fetch;
@@ -43,7 +44,9 @@ function graphErrorDetail(status: number, body: string, requestUrl?: string): st
     return 'Your Microsoft 365 administrator has disabled Graph transcript access for this tenant.';
   }
   if (status === 403 || /Authorization_RequestDenied|ErrorAccessDenied/i.test(code)) {
-    return 'Microsoft denied transcript access. A tenant administrator must grant OnlineMeetingTranscript.Read.All and allow Graph transcript access.';
+    return requestUrl?.includes('/attendanceReports')
+      ? 'Microsoft denied attendance access. The organizer must enable attendance reports and an administrator must grant OnlineMeetingArtifact.Read.All. Reconnect Teams after permission changes.'
+      : 'Microsoft denied transcript access. A tenant administrator must grant OnlineMeetingTranscript.Read.All and allow Graph transcript access.';
   }
   const requestPath = requestUrl ? new URL(requestUrl).pathname : '';
   if (status === 404 && /\/me\/calendarView$/i.test(requestPath)) {
@@ -98,7 +101,8 @@ export async function listTeamsMeetings(
     const data = await graphJson(nextUrl, token, fetchFn);
     for (const event of data.value ?? []) {
       const joinWebUrl = event?.onlineMeeting?.joinUrl;
-      if (!event?.isOnlineMeeting || !joinWebUrl || !/teams\.microsoft\.com/i.test(joinWebUrl)) continue;
+      if (!event?.isOnlineMeeting || !joinWebUrl || !/^https:\/\/teams\.(?:microsoft|live)\.com\//i.test(joinWebUrl)) continue;
+      if (Date.parse(graphDateTime(event.end)) > now.getTime()) continue;
       meetings.push({
         eventId: String(event.id),
         title: event.subject || 'Microsoft Teams meeting',
@@ -188,7 +192,16 @@ export async function fetchTeamsTranscriptArtifact(
   const token = await (deps.getToken ?? getValidTeamsToken)();
   const fetchFn = deps.fetchFn ?? fetch;
   const onlineMeeting = await resolveOnlineMeeting(meeting, token, fetchFn);
-  const transcripts = await listAllTranscripts(onlineMeeting.id, token, fetchFn);
+  const allTranscripts = await listAllTranscripts(onlineMeeting.id, token, fetchFn);
+  // Recurring calls reuse their onlineMeeting ID. Prefer the transcript's end
+  // timestamp; older Graph responses expose only creation time. A small margin
+  // allows early joins and delayed artifact creation without using another day.
+  const start = Date.parse(meeting.startedAt) - 15 * 60_000;
+  const end = Date.parse(meeting.endedAt) + 15 * 60_000;
+  const transcripts = allTranscripts.filter(item => {
+    const time = Date.parse(item.endDateTime || item.createdDateTime || '');
+    return time >= start && time <= end;
+  });
   if (transcripts.length === 0) {
     throw new Error('No native transcript is available for this Teams meeting. Transcription must have been enabled during the meeting.');
   }
@@ -203,4 +216,49 @@ export async function fetchTeamsTranscriptArtifact(
     createdAt: transcript.createdDateTime || meeting.startedAt,
     ...downloaded,
   };
+}
+
+export async function fetchTeamsAttendance(
+  meeting: TeamsMeetingItem,
+  deps: { getToken?: () => Promise<string>; fetchFn?: FetchFn } = {},
+): Promise<MeetingAttendance> {
+  const token = await (deps.getToken ?? getValidTeamsToken)();
+  const fetchFn = deps.fetchFn ?? fetch;
+  const onlineMeeting = await resolveOnlineMeeting(meeting, token, fetchFn);
+  const base = `${GRAPH_API}/me/onlineMeetings/${encodeURIComponent(onlineMeeting.id)}/attendanceReports`;
+  const reports: any[] = [];
+  let next: string | null = base;
+  const seen = new Set<string>();
+  while (next) {
+    if (seen.has(next)) throw new Error('Microsoft returned a repeated attendance pagination URL');
+    seen.add(next);
+    const data = await graphJson(next, token, fetchFn);
+    reports.push(...(data.value || []));
+    next = data['@odata.nextLink'] ? assertGraphNextLink(data['@odata.nextLink']) : null;
+  }
+  // Recurring meetings share an onlineMeeting ID. Never substitute a different occurrence's report.
+  const start = Date.parse(meeting.startedAt);
+  const end = Date.parse(meeting.endedAt);
+  const report = reports.filter(item => Date.parse(item.meetingStartDateTime) < end && Date.parse(item.meetingEndDateTime) > start)
+    .sort((a, b) => Math.abs(Date.parse(a.meetingStartDateTime) - start) - Math.abs(Date.parse(b.meetingStartDateTime) - start))[0];
+  if (!report) throw new Error('No attendance report is available for this Teams meeting occurrence. The organizer must enable attendance reports and grant OnlineMeetingArtifact.Read.All.');
+  const result: MeetingAttendance = { provider: 'teams', meetingId: onlineMeeting.id, fetchedAt: new Date().toISOString(), participants: [] };
+  next = `${base}/${encodeURIComponent(report.id)}/attendanceRecords`;
+  seen.clear();
+  while (next) {
+    if (seen.has(next)) throw new Error('Microsoft returned a repeated attendance pagination URL');
+    seen.add(next);
+    const data = await graphJson(next, token, fetchFn);
+    for (const record of data.value || []) {
+      result.participants.push({
+        id: record.identity?.id || record.id,
+        name: record.identity?.displayName || record.emailAddress || 'Unknown participant',
+        email: record.emailAddress || undefined,
+        identityKind: record.emailAddress || record.identity?.id ? 'signed_in' : 'unknown',
+        sessions: (record.attendanceIntervals || []).map((interval: any) => ({ joinedAt: validAttendanceTime(interval.joinDateTime), leftAt: validAttendanceTime(interval.leaveDateTime) })),
+      });
+    }
+    next = data['@odata.nextLink'] ? assertGraphNextLink(data['@odata.nextLink']) : null;
+  }
+  return result;
 }

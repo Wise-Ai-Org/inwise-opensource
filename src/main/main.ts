@@ -95,13 +95,18 @@ import {
   connectTeams, disconnectTeams, getTeamsStatus, saveTeamsCredentials,
   testTeamsConnection, TEAMS_REDIRECT_URI_DISPLAY,
 } from './teams-oauth';
-import { fetchTeamsTranscriptArtifact, listTeamsMeetings } from './teams-api';
-import { parseTeamsVtt } from './teams-vtt-parser';
+import { listTeamsMeetings } from './teams-api';
 import {
   connectMeet, disconnectMeet, getMeetStatus, saveMeetCredentials,
   testMeetConnection, MEET_REDIRECT_URI_DISPLAY,
 } from './meet-oauth';
-import { fetchMeetTranscript, listMeetConferenceRecords } from './meet-api';
+import { fetchMeetAttendance, resolveMeetConference } from './meet-api';
+import { listAvailableMeetConferences, rememberMeetConference, setMeetCalendarProvider, startMeetConferenceTracker, stopMeetConferenceTracker, runMeetConferenceCapture } from './meet-conference-tracker';
+import { fetchTeamsAttendance } from './teams-api';
+import { fetchZoomAttendance } from './zoom-attendance';
+import { prepareMeetImport, prepareTeamsImport } from './native-transcript-import';
+import { saveMeetingAttendance } from './database';
+import { runNativeTranscriptSync, startNativeTranscriptPoller, stopNativeTranscriptPoller, onNativeTranscriptImported } from './native-transcript-poller';
 import {
   validateToken,
   getSlackConnectionInfo,
@@ -2611,6 +2616,8 @@ ipcMain.handle('zoom:fetchTranscript', async (_e, recording: { meetingId: string
       zoomMeetingId: recording.meetingId,
       zoomUuid: recording.uuid,
     };
+    try { nt.sourceMetadata.attendance = await fetchZoomAttendance(recording.uuid); }
+    catch (error: any) { nt.sourceMetadata.attendanceError = error.message; }
     const meetingId = await ingestNormalizedTranscript(nt);
     void announceProcessed(meetingId);
     return { ok: true, meetingId };
@@ -2623,7 +2630,7 @@ ipcMain.handle('teams:saveCredentials', async (_e, clientId: string, tenant?: st
   catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('teams:connect', async () => {
-  try { return await connectTeams(); }
+  try { const result = await connectTeams(); if (result.ok) void runNativeTranscriptSync('teams').catch(e => log('error', 'teams:sync', e.message)); return result; }
   catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('teams:disconnect', async () => {
@@ -2649,14 +2656,11 @@ ipcMain.handle('teams:listMeetings', async () => {
 });
 ipcMain.handle('teams:fetchTranscript', async (_e, meeting) => {
   try {
-    const artifact = await fetchTeamsTranscriptArtifact(meeting);
-    const normalized = parseTeamsVtt(artifact);
-    if (normalized.segments.length === 0) {
-      return { ok: false, error: 'Microsoft returned an empty or unsupported Teams transcript.' };
-    }
+    const normalized = await prepareTeamsImport(meeting);
     const meetingId = await ingestNormalizedTranscript(normalized, { source: 'teams_transcript' });
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
     void announceProcessed(meetingId);
-    return { ok: true, meetingId, speakerAttributed: artifact.speakerAttributed };
+    return { ok: true, meetingId, speakerAttributed: normalized.sourceMetadata?.speakerAttributed };
   } catch (e: any) { return { ok: false, error: e.message }; }
 });
 
@@ -2666,7 +2670,7 @@ ipcMain.handle('meet:saveCredentials', async (_e, clientId: string, clientSecret
   catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('meet:connect', async () => {
-  try { return await connectMeet(); }
+  try { const result = await connectMeet(); if (result.ok) void runMeetConferenceCapture().then(() => runNativeTranscriptSync('meet')).catch(e => log('error', 'meet:sync', e.message)); return result; }
   catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('meet:disconnect', async () => {
@@ -2687,16 +2691,56 @@ ipcMain.handle('meet:listMeetings', async () => {
     if (!(await getMeetStatus()).connected) {
       return { ok: false, error: 'Not connected to Google Meet. Connect in Settings first.' };
     }
-    return { ok: true, meetings: await listMeetConferenceRecords() };
+    return { ok: true, meetings: await listAvailableMeetConferences() };
   } catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('meet:resolveConference', async (_e, reference: string) => {
+  try {
+    const meeting = await resolveMeetConference(reference);
+    rememberMeetConference(meeting);
+    return { ok: true, meeting };
+  } catch (error: any) { return { ok: false, error: error.message }; }
 });
 ipcMain.handle('meet:fetchTranscript', async (_e, conference) => {
   try {
-    const normalized = await fetchMeetTranscript(conference);
+    const normalized = await prepareMeetImport(conference);
     const meetingId = await ingestNormalizedTranscript(normalized, { source: 'meet_transcript' });
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
     void announceProcessed(meetingId);
     return { ok: true, meetingId };
   } catch (e: any) { return { ok: false, error: e.message }; }
+});
+
+// Native attendance is independent of transcript availability.
+for (const provider of ['meet', 'teams', 'zoom'] as const) {
+  ipcMain.handle(`${provider}:fetchAttendance`, async (_e, meeting) => {
+    try {
+      const attendance = provider === 'meet' ? await fetchMeetAttendance(meeting)
+        : provider === 'teams' ? await fetchTeamsAttendance(meeting)
+        : await fetchZoomAttendance(meeting.uuid);
+      return { ok: true, attendance };
+    } catch (error: any) { return { ok: false, error: error.message }; }
+  });
+  ipcMain.handle(`${provider}:syncTranscripts`, async () => {
+    try {
+      const result = provider === 'zoom' ? await runZoomPollNow() : await runNativeTranscriptSync(provider);
+      return { ok: true, ...result };
+    } catch (error: any) { return { ok: false, error: error.message }; }
+  });
+}
+ipcMain.handle('meeting:refreshAttendance', async (_e, meetingId: string) => {
+  try {
+    const meeting = await getMeeting(meetingId);
+    const meta = meeting?.sourceMetadata || {};
+    const attendance = meta.meetConferenceRecord
+      ? await fetchMeetAttendance({ name: meta.meetConferenceRecord } as any)
+      : meta.teamsMeeting ? await fetchTeamsAttendance(meta.teamsMeeting)
+      : meta.zoomUuid ? await fetchZoomAttendance(meta.zoomUuid) : null;
+    if (!attendance) return { ok: false, error: 'No meeting-service record is linked to this meeting. Fetch attendance from Settings for the matching call.' };
+    await saveMeetingAttendance(meetingId, attendance);
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    return { ok: true, attendance };
+  } catch (error: any) { return { ok: false, error: error.message }; }
 });
 
 // SoR audit log (US-001)
@@ -3436,6 +3480,7 @@ async function flushPendingAudio(key: string, destination?: string): Promise<voi
 // â”€â”€ Calendar watcher â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 calendarWatcher.on('events-updated', async (events: any[]) => {
+  void runMeetConferenceCapture();
   onCalendarEventsUpdated(events, calendarWatcher.getHealth().status === 'ok');
   mainWindow?.webContents.send('calendar:events', events.map(e => ({
     ...e,
@@ -3840,7 +3885,12 @@ app.whenReady().then(() => {
     log('info', 'zoom:imported', `"${recording.title}" -> ${meetingId}`);
     void announceProcessed(meetingId);
   });
-  setTimeout(() => startZoomPoller(), 15_000);
+  onNativeTranscriptImported(async meetingId => {
+    mainWindow?.webContents.send('meeting:new', await getMeeting(meetingId));
+    void announceProcessed(meetingId);
+  });
+  setMeetCalendarProvider(() => calendarWatcher.getUpcomingEvents());
+  setTimeout(() => { startZoomPoller(); startNativeTranscriptPoller(); startMeetConferenceTracker(); }, 15_000);
 
   // One-time scan for SoR writes stuck in 'pending' / 'pending-approval' / 'retrying'
   // for more than 24 hours â€” these indicate an interrupted/crashed prior session.
@@ -3987,6 +4037,8 @@ app.on('before-quit', () => {
   stopSlackPoller();
   void stopMcpServer();
   stopZoomPoller();
+  stopNativeTranscriptPoller();
+  stopMeetConferenceTracker();
   destroyTray();
   globalShortcut.unregisterAll();
   mainWindow?.removeAllListeners('close');

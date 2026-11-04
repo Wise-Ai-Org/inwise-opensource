@@ -1,3 +1,5 @@
+import AttendanceDetails from './components/AttendanceDetails';
+import NativeTranscriptSync from './components/NativeTranscriptSync';
 import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { captureSystemAudio } from './system-audio';
 import type { MediaPermissionSnapshot } from './audio-probe';
@@ -1457,6 +1459,9 @@ function ZoomSettings() {
   const [recordings, setRecordings] = useState<ZoomRecordingItem[]>([]);
   const [fetchError, setFetchError] = useState('');
   const [fetchSuccess, setFetchSuccess] = useState('');
+  const [attendance, setAttendance] = useState<any>(null);
+  const [attendanceBusy, setAttendanceBusy] = useState(false);
+  const [attendanceError, setAttendanceError] = useState('');
 
   useEffect(() => {
     (window as any).inwiseAPI.zoomStatus?.().then((s: any) => setConnected(!!s?.connected));
@@ -1600,6 +1605,7 @@ function ZoomSettings() {
             </div>
           </div>
 
+          <NativeTranscriptSync provider="zoom" />
           {/* Fetch from Zoom */}
           {fetchState === 'idle' && (
             <button className="btn btn-primary btn-sm" onClick={handleListRecordings}>
@@ -1618,7 +1624,7 @@ function ZoomSettings() {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflowY: 'auto' }}>
                 {recordings.map(r => (
-                  <button key={r.uuid}
+                  <div key={r.uuid}><button
                     className="btn btn-secondary btn-sm"
                     style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 12px' }}
                     onClick={() => handleFetchTranscript(r)}>
@@ -1627,8 +1633,17 @@ function ZoomSettings() {
                       {new Date(r.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                     </span>
                   </button>
+                  <button className="btn btn-secondary btn-sm" disabled={attendanceBusy} onClick={async () => {
+                    setAttendanceBusy(true); setAttendance(null); setAttendanceError('');
+                    try { const result = await (window as any).inwiseAPI.zoomFetchAttendance(r);
+                      if (result?.ok) setAttendance(result.attendance); else setAttendanceError(result?.error || 'Attendance is unavailable.');
+                    } catch { setAttendanceError('Could not fetch Zoom attendance.'); }
+                    finally { setAttendanceBusy(false); }
+                  }}>{attendanceBusy ? 'Fetching attendance…' : 'Get attendance'}</button></div>
                 ))}
               </div>
+              {attendanceError && <div role="status">{attendanceError}</div>}
+              {attendance && <AttendanceDetails attendance={attendance} />}
               <button className="btn btn-secondary btn-sm" style={{ marginTop: 10, fontSize: 12 }} onClick={resetFetch}>
                 Cancel
               </button>
@@ -1668,13 +1683,19 @@ interface NativeMeetingItem {
   [key: string]: any;
 }
 
-function NativeTranscriptPicker({
+export function NativeTranscriptPicker({
   platform,
+  autoLoad = false,
+  onClose,
   listMeetings,
   fetchTranscript,
   itemKey,
+  fetchAttendance,
 }: {
   platform: string;
+  autoLoad?: boolean;
+  onClose?: () => void;
+  fetchAttendance?: (meeting: NativeMeetingItem) => Promise<any>;
   listMeetings: () => Promise<any>;
   fetchTranscript: (meeting: NativeMeetingItem) => Promise<any>;
   itemKey: (meeting: NativeMeetingItem) => string;
@@ -1682,8 +1703,12 @@ function NativeTranscriptPicker({
   const [state, setState] = useState<FetchFlowState>('idle');
   const [meetings, setMeetings] = useState<NativeMeetingItem[]>([]);
   const [message, setMessage] = useState('');
+  const [attendance, setAttendance] = useState<any>(null);
+  const [attendanceBusy, setAttendanceBusy] = useState(false);
 
   const reset = () => {
+    if (onClose) { onClose(); return; }
+    setAttendance(null);
     setState('idle');
     setMeetings([]);
     setMessage('');
@@ -1707,11 +1732,27 @@ function NativeTranscriptPicker({
     }
     if (!result.meetings?.length) {
       setState('error');
-      setMessage(`No completed ${platform} meetings were found in the last 30 days.`);
+      setMessage(platform === 'Google Meet'
+        ? 'No available completed calls were found. Inwise can fetch meetings you organize and calendar calls whose record it saved while they were active. Use a shared conference record for an earlier call.'
+        : `No completed ${platform} meetings were found in the last 30 days.`);
       return;
     }
     setMeetings(result.meetings);
     setState('ready');
+  };
+
+  useEffect(() => { if (autoLoad) void list(); }, []);
+
+  const getAttendance = async (meeting: NativeMeetingItem) => {
+    setAttendanceBusy(true);
+    setAttendance(null);
+    setMessage('');
+    try {
+      const result = await fetchAttendance?.(meeting);
+      if (result?.ok) setAttendance(result.attendance);
+      else setMessage(result?.error || 'Attendance is unavailable.');
+    } catch { setMessage('Could not fetch attendance.'); }
+    finally { setAttendanceBusy(false); }
   };
 
   const fetchOne = async (meeting: NativeMeetingItem) => {
@@ -1754,8 +1795,7 @@ function NativeTranscriptPicker({
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflowY: 'auto' }}>
           {meetings.map(meeting => (
-            <button
-              key={itemKey(meeting)}
+            <div key={itemKey(meeting)}><button
               className="btn btn-secondary btn-sm"
               style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 12px' }}
               onClick={() => fetchOne(meeting)}
@@ -1767,8 +1807,13 @@ function NativeTranscriptPicker({
                 })}
               </span>
             </button>
+            {fetchAttendance && <button className="btn btn-secondary btn-sm" disabled={attendanceBusy} onClick={() => getAttendance(meeting)}>
+              {attendanceBusy ? 'Fetching attendance…' : 'Get attendance'}
+            </button>}</div>
           ))}
         </div>
+        {message && <div role="status">{message}</div>}
+        {attendance && <AttendanceDetails attendance={attendance} />}
         <button className="btn btn-secondary btn-sm" style={{ marginTop: 10, fontSize: 12 }} onClick={reset}>Cancel</button>
       </div>
     );
@@ -1783,220 +1828,72 @@ function NativeTranscriptPicker({
         style={{ width: 'fit-content' }}
         onClick={reset}
       >
-        {state === 'done' ? 'Fetch Another' : 'Try Again'}
+        {onClose ? 'Close' : state === 'done' ? 'Fetch Another' : 'Try Again'}
       </button>
     </div>
   );
 }
 
-function TeamsSettings() {
-  const [clientId, setClientId] = useState('');
-  const [tenant, setTenant] = useState('');
+function TeamsSettings({ onConnected }: { onConnected?: () => void } = {}) {
   const [connected, setConnected] = useState(false);
-  const [configured, setConfigured] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const [redirectUri, setRedirectUri] = useState('http://127.0.0.1:17293/callback');
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    (window as any).inwiseAPI.teamsStatus?.().then((status: any) => {
-      setConnected(!!status?.connected);
-      setConfigured(!!status?.configured);
-    });
-    (window as any).inwiseAPI.teamsRedirectUri?.().then((uri: string) => { if (uri) setRedirectUri(uri); });
-  }, []);
-
-  const connect = async () => {
-    setConnecting(true);
-    setError('');
-    if (clientId.trim()) {
-      const saved = await (window as any).inwiseAPI.teamsSaveCredentials(clientId, tenant);
-      if (!saved?.ok) {
-        setError(saved?.error || 'Failed to save Microsoft credentials');
-        setConnecting(false);
-        return;
-      }
-      setConfigured(true);
-    } else if (!configured) {
-      setError('Microsoft application (client) ID is required');
-      setConnecting(false);
-      return;
-    }
-    const result = await (window as any).inwiseAPI.teamsConnect();
-    setConnecting(false);
-    if (result?.ok) {
-      setConnected(true);
-      setClientId('');
-      setTenant('');
-    } else {
-      setError(result?.error || 'Microsoft Teams connection failed');
-    }
-  };
-
-  const disconnect = async () => {
-    await (window as any).inwiseAPI.teamsDisconnect();
-    setConnected(false);
-    setConfigured(false);
-  };
-
-  if (connected) {
-    return (
-      <div>
-        <div style={{ padding: '12px 16px', background: 'var(--slate-50)', borderRadius: 8, border: '1px solid var(--slate-200)', marginBottom: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--navy)' }}>Microsoft Teams Connected</div>
-            <button className="btn btn-secondary btn-sm" style={{ fontSize: 12, color: 'var(--red)' }} onClick={disconnect}>Disconnect</button>
-          </div>
-        </div>
-        <NativeTranscriptPicker
-          platform="Teams"
-          listMeetings={() => (window as any).inwiseAPI.teamsListMeetings()}
-          fetchTranscript={(meeting) => (window as any).inwiseAPI.teamsFetchTranscript(meeting)}
-          itemKey={(meeting) => meeting.eventId}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 14, lineHeight: 1.6 }}>
-        Import transcripts Microsoft Teams produced after meetings. Create a public desktop app in Microsoft Entra,
-        add the loopback redirect below, and enable delegated Calendars.Read, OnlineMeetings.Read, and
-        OnlineMeetingTranscript.Read.All permissions. The transcript permission requires tenant-admin consent.
-      </p>
-      <button className="btn btn-secondary btn-sm" style={{ marginBottom: 14 }}
-        onClick={() => (window as any).inwiseAPI.openExternal('https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade')}>
-        Open Microsoft Entra
-      </button>
-      <div className="form-group" style={{ marginBottom: 12 }}>
-        <label className="form-label">Redirect URI (Mobile and desktop application)</label>
-        <code style={{ fontSize: 12, display: 'block', background: 'var(--slate-100)', padding: '8px 10px', borderRadius: 6, userSelect: 'all' }}>{redirectUri}</code>
-      </div>
-      <div className="form-group" style={{ marginBottom: 12 }}>
-        <label className="form-label">Application (client) ID</label>
-        <input className="form-input" value={clientId} onChange={event => setClientId(event.target.value)}
-          placeholder={configured ? 'Saved locally — enter only to replace' : 'Microsoft Entra application ID'} />
-      </div>
-      <div className="form-group" style={{ marginBottom: 14 }}>
-        <label className="form-label">Tenant ID or domain (optional)</label>
-        <input className="form-input" value={tenant} onChange={event => setTenant(event.target.value)}
-          placeholder="Leave blank for any work or school tenant" />
-      </div>
-      {error && <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 12 }}>✕ {error}</div>}
-      <button className="btn btn-primary btn-sm" onClick={connect} disabled={connecting}>
-        {connecting ? 'Waiting for Microsoft…' : configured && !clientId ? 'Reconnect Teams' : 'Connect Teams'}
-      </button>
+  useEffect(() => { (window as any).inwiseAPI.teamsStatus().then((status: any) => setConnected(!!status?.connected)); }, []);
+  return <div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <span role="status">{connected ? 'Connected' : 'Disconnected'}</span>
+      <button role="switch" aria-label="Microsoft Teams connection" aria-checked={connected} disabled={busy}
+        className="btn btn-secondary btn-sm" onClick={async () => {
+          setBusy(true); setError('');
+          try {
+            const result = await (connected ? (window as any).inwiseAPI.teamsDisconnect() : (window as any).inwiseAPI.teamsConnect());
+            if (!result?.ok) throw new Error(result?.error || 'Could not change the connection.');
+            setConnected(!connected); if (!connected) onConnected?.();
+          } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+        }}>{busy ? 'Please wait…' : connected ? 'Disconnect' : 'Connect'}</button>
     </div>
-  );
+    {error && <div role="alert">{error}</div>}
+    {connected && <NativeTranscriptPicker platform="Microsoft Teams"
+      listMeetings={() => (window as any).inwiseAPI.teamsListMeetings()}
+      fetchAttendance={meeting => (window as any).inwiseAPI.teamsFetchAttendance(meeting)}
+      fetchTranscript={meeting => (window as any).inwiseAPI.teamsFetchTranscript(meeting)} itemKey={meeting => meeting.eventId} />}
+  </div>;
 }
 
-function MeetSettings() {
-  const [clientId, setClientId] = useState('');
-  const [clientSecret, setClientSecret] = useState('');
+// Section keys used by the tray-popup drill-down pages. When `only` is set,
+// Settings renders just that section (no page header) so it can live inside a
+// narrow drill-down page; with no prop it renders the full legacy scroll.
+
+
+export function MeetSettings({ onConnected }: { onConnected?: () => void } = {}) {
   const [connected, setConnected] = useState(false);
-  const [configured, setConfigured] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const [redirectUri, setRedirectUri] = useState('http://127.0.0.1:17294/callback');
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    (window as any).inwiseAPI.meetStatus?.().then((status: any) => {
-      setConnected(!!status?.connected);
-      setConfigured(!!status?.configured);
-    });
-    (window as any).inwiseAPI.meetRedirectUri?.().then((uri: string) => { if (uri) setRedirectUri(uri); });
-  }, []);
-
-  const connect = async () => {
-    setConnecting(true);
-    setError('');
-    if (clientId.trim() || clientSecret.trim()) {
-      if (!clientId.trim() || !clientSecret.trim()) {
-        setError('Enter both the Google Desktop client ID and client secret');
-        setConnecting(false);
-        return;
-      }
-      const saved = await (window as any).inwiseAPI.meetSaveCredentials(clientId, clientSecret);
-      if (!saved?.ok) {
-        setError(saved?.error || 'Failed to save Google credentials');
-        setConnecting(false);
-        return;
-      }
-      setConfigured(true);
-    } else if (!configured) {
-      setError('Google Desktop client ID and client secret are required');
-      setConnecting(false);
-      return;
-    }
-    const result = await (window as any).inwiseAPI.meetConnect();
-    setConnecting(false);
-    if (result?.ok) {
-      setConnected(true);
-      setClientId('');
-      setClientSecret('');
-    } else {
-      setError(result?.error || 'Google Meet connection failed');
-    }
-  };
-
-  const disconnect = async () => {
-    await (window as any).inwiseAPI.meetDisconnect();
-    setConnected(false);
-    setConfigured(false);
-  };
-
-  if (connected) {
-    return (
-      <div>
-        <div style={{ padding: '12px 16px', background: 'var(--slate-50)', borderRadius: 8, border: '1px solid var(--slate-200)', marginBottom: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--navy)' }}>Google Meet Connected</div>
-            <button className="btn btn-secondary btn-sm" style={{ fontSize: 12, color: 'var(--red)' }} onClick={disconnect}>Disconnect</button>
-          </div>
-        </div>
-        <NativeTranscriptPicker
-          platform="Google Meet"
-          listMeetings={() => (window as any).inwiseAPI.meetListMeetings()}
-          fetchTranscript={(meeting) => (window as any).inwiseAPI.meetFetchTranscript(meeting)}
-          itemKey={(meeting) => meeting.name}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 14, lineHeight: 1.6 }}>
-        Enable the Google Meet REST API, create OAuth credentials with application type Desktop app, and add
-        the meetings.space.readonly scope to the consent screen. For a Workspace organization, an Internal
-        consent screen avoids the seven-day refresh-token expiry applied to External apps in Testing mode.
-      </p>
-      <button className="btn btn-secondary btn-sm" style={{ marginBottom: 14 }}
-        onClick={() => (window as any).inwiseAPI.openExternal('https://console.cloud.google.com/apis/credentials')}>
-        Open Google Cloud credentials
-      </button>
-      <div className="form-group" style={{ marginBottom: 12 }}>
-        <label className="form-label">Loopback callback used during sign-in</label>
-        <code style={{ fontSize: 12, display: 'block', background: 'var(--slate-100)', padding: '8px 10px', borderRadius: 6, userSelect: 'all' }}>{redirectUri}</code>
-      </div>
-      <div className="form-group" style={{ marginBottom: 12 }}>
-        <label className="form-label">Desktop client ID</label>
-        <input className="form-input" value={clientId} onChange={event => setClientId(event.target.value)}
-          placeholder={configured ? 'Saved locally — enter only to replace' : 'Client ID ending in apps.googleusercontent.com'} />
-      </div>
-      <div className="form-group" style={{ marginBottom: 14 }}>
-        <label className="form-label">Desktop client secret</label>
-        <input type="password" className="form-input" value={clientSecret} onChange={event => setClientSecret(event.target.value)}
-          placeholder={configured ? 'Saved locally — enter only to replace' : 'Client secret from the downloaded JSON'} />
-      </div>
-      {error && <div style={{ fontSize: 12, color: 'var(--red)', marginBottom: 12 }}>✕ {error}</div>}
-      <button className="btn btn-primary btn-sm" onClick={connect} disabled={connecting}>
-        {connecting ? 'Waiting for Google…' : configured && !clientId && !clientSecret ? 'Reconnect Google Meet' : 'Connect Google Meet'}
-      </button>
+  useEffect(() => { (window as any).inwiseAPI.meetStatus().then((status: any) => setConnected(!!status?.connected)); }, []);
+  return <div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <span role="status">{connected ? 'Connected' : 'Disconnected'}</span>
+      <button role="switch" aria-label="Google Meet connection" aria-checked={connected} disabled={busy}
+        className="btn btn-secondary btn-sm" onClick={async () => {
+          setBusy(true); setError('');
+          try {
+            const result = await (connected ? (window as any).inwiseAPI.meetDisconnect() : (window as any).inwiseAPI.meetConnect());
+            if (!result?.ok) throw new Error(result?.error || 'Could not change the connection.');
+            setConnected(!connected); if (!connected) onConnected?.();
+          } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+        }}>{busy ? 'Please wait…' : connected ? 'Disconnect' : 'Connect'}</button>
     </div>
-  );
+    {error && <div role="alert">{error}</div>}
+    {connected && <NativeTranscriptPicker platform="Google Meet"
+      listMeetings={() => (window as any).inwiseAPI.meetListMeetings()}
+      fetchAttendance={meeting => (window as any).inwiseAPI.meetFetchAttendance(meeting)}
+      fetchTranscript={meeting => (window as any).inwiseAPI.meetFetchTranscript(meeting)} itemKey={meeting => meeting.name} />}
+  </div>;
 }
+
+// Section keys used by the tray-popup drill-down pages. When `only` is set,
+// Settings renders just that section (no page header) so it can live inside a
+// narrow drill-down page; with no prop it renders the full legacy scroll.
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 

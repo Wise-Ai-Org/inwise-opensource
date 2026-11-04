@@ -10,6 +10,7 @@ export const TEAMS_GRAPH_SCOPES = [
   'Calendars.Read',
   'OnlineMeetings.Read',
   'OnlineMeetingTranscript.Read.All',
+  'OnlineMeetingArtifact.Read.All',
 ] as const;
 
 export function normalizeTeamsTenant(tenant?: string | null): string {

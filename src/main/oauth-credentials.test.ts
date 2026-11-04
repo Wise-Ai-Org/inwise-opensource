@@ -3,6 +3,7 @@ import Datastore from '@seald-io/nedb';
 import {
   __setCredentialsDbForTests,
   clearOAuthCredentials,
+  clearOAuthTokens,
   getOAuthCredentials,
   setOAuthClientCredentials,
   setOAuthTokens,
@@ -43,6 +44,15 @@ async function run(): Promise<void> {
   await clearOAuthCredentials('teams');
   assert.equal(await getOAuthCredentials('teams'), null);
   assert.ok(await getOAuthCredentials('meet'), 'clearing one provider preserves the other');
+
+  await setOAuthTokens('meet', { accessToken: 'meet-access', refreshToken: 'meet-refresh', tokenExpiresAt: '2026-11-02T23:00:00Z' });
+  await clearOAuthTokens('meet');
+  const disconnected = await getOAuthCredentials('meet');
+  assert.equal(disconnected?.clientId, 'google-client', 'toggle off retains app configuration for reconnect');
+  assert.equal(disconnected?.clientSecret, 'google-secret');
+  assert.equal(disconnected?.accessToken, null);
+  assert.equal(disconnected?.refreshToken, null);
+  assert.equal(disconnected?.tokenExpiresAt, null);
 
   console.log('oauth-credentials: all tests passed');
 }

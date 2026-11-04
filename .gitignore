@@ -16,3 +16,6 @@ tmp/runtime-action-test/
 # local-only helper checkouts
 tools/
 src/shared/scripts/ralph/
+
+# Desktop OAuth release configuration (never user tokens)
+assets/google-oauth-client.json

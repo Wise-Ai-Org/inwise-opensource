@@ -1,12 +1,13 @@
 import * as crypto from 'crypto';
 import { shell } from 'electron';
 import {
-  clearOAuthCredentials,
+  clearOAuthTokens,
   getOAuthCredentials,
   setOAuthClientCredentials,
   setOAuthTokens,
 } from './database';
 import { log } from './logger';
+import { TEAMS_DESKTOP_CLIENT } from './teams-desktop-client';
 import { createPkcePair, waitForOAuthCode } from './oauth-loopback';
 import {
   buildTeamsAuthorizationUrl,
@@ -56,10 +57,7 @@ async function readTokenResponse(response: Response): Promise<MicrosoftTokenResp
 }
 
 export async function connectTeams(): Promise<{ ok: boolean; error?: string }> {
-  const credentials = await getOAuthCredentials('teams');
-  if (!credentials?.clientId) {
-    return { ok: false, error: 'Enter and save your Microsoft application ID first.' };
-  }
+  const credentials = TEAMS_DESKTOP_CLIENT;
 
   const state = crypto.randomBytes(16).toString('hex');
   const pkce = createPkcePair();
@@ -94,6 +92,7 @@ export async function connectTeams(): Promise<{ ok: boolean; error?: string }> {
       body,
     });
     const token = await readTokenResponse(response);
+    await setOAuthClientCredentials('teams', credentials);
     await setOAuthTokens('teams', {
       accessToken: token.access_token,
       refreshToken: token.refresh_token || '',
@@ -137,7 +136,7 @@ export async function getValidTeamsToken(): Promise<string> {
 
 export async function getTeamsStatus(): Promise<{ connected: boolean; configured: boolean }> {
   const credentials = await getOAuthCredentials('teams');
-  return { connected: !!credentials?.accessToken, configured: !!credentials?.clientId };
+  return { connected: !!credentials?.accessToken, configured: true };
 }
 
 export async function testTeamsConnection(): Promise<{ ok: boolean; error?: string }> {
@@ -154,8 +153,8 @@ export async function testTeamsConnection(): Promise<{ ok: boolean; error?: stri
 }
 
 export async function disconnectTeams(): Promise<void> {
-  await clearOAuthCredentials('teams');
-  log('info', 'teams:disconnected', 'credentials cleared');
+  await clearOAuthTokens('teams');
+  log('info', 'teams:disconnected', 'tokens cleared');
 }
 
 export const TEAMS_REDIRECT_URI_DISPLAY = TEAMS_REDIRECT_URI;
