@@ -1,4 +1,5 @@
-import { getConfig } from './config';
+import { getConfig, getNameCorrections } from './config';
+import { applyNameCorrections, mapStrings } from './name-corrections';
 import { readClaudeInsights } from './insights-response';
 import { assessTranscriptQuality, inferMeetingType, sanitizeDueDate, computeExtractionCoverage } from './transcription-quality';
 import { normalizeCertainty } from './jira-confidence';
@@ -71,7 +72,7 @@ Route concrete outcomes into exactly one of four categories: Summary, Action Ite
 
 ## ROUTING RULES (apply in this order)
 1. Is it a committed, final choice the group agreed to? → Decision
-2. Is it a task someone needs to do? → Action Item (even if no owner is named)
+2. Is it concrete work someone committed to doing after the meeting? → Action Item (see definition below)
 3. Is it an unresolved impediment still open when the meeting ends? → Blocker
 4. Everything else → Summary
 
@@ -87,6 +88,16 @@ CRITICAL: Each piece of information must appear in EXACTLY ONE category. No item
 - A recurring status update with no new outcome → Summary only.
 
 Self-check before returning: For each Decision, scan all Action Items — if any Action Item covers the same topic, DELETE the Decision. For each Blocker, check if a fix was assigned — if so, DELETE the Blocker.
+
+## ACTION ITEM DEFINITION
+An action item is a specific, tangible piece of work that still needs to be done after this meeting. Include an item ONLY if BOTH hold: (1) it is concrete work — a deliverable or task someone will actually do — not a status update, FYI, opinion, question, general discussion, requirement being described, or anything already completed during the meeting; (2) it is a genuine forward-looking commitment, not a vague "maybe we should" or an idea floated without agreement. Prefer a few high-confidence action items over listing everything; when in doubt, leave it out.
+
+Guidelines:
+- Combine closely related or sequential tasks into single, clear items.
+- Avoid repeating similar tasks with minor differences.
+- Do not include the owner's name in the task text.
+- Be concise but specific.
+- Capture owner and dueDate ONLY if explicitly stated in the transcript; otherwise null. NEVER invent, guess, or infer an owner or due date.
 
 If someone makes a personal promise or commitment (e.g., "I'll send the proposal by Friday"), include it as an action item with isCommitment: true. Commitments carry accountability weight.
 
@@ -229,16 +240,20 @@ function parseInsights(text: string, transcript = '', context: ExtractionContext
   };
 }
 
-export async function extractInsights(transcript: string, context: ExtractionContext = {}): Promise<Insights> {
+export async function extractInsights(rawTranscript: string, context: ExtractionContext = {}): Promise<Insights> {
   const config = getConfig();
 
   if (!config.apiKey) throw new Error('API key not configured');
 
-  if (config.apiProvider === 'anthropic') {
-    return extractWithClaude(transcript, config.apiKey, context);
-  } else {
-    return extractWithOpenAI(transcript, config.apiKey, context);
-  }
+  // Names the user corrected before (Satya -> Sacha) are fixed going in and coming out.
+  const corrections = getNameCorrections();
+  const fix = (text: string) => applyNameCorrections(text, corrections);
+  const transcript = fix(rawTranscript);
+
+  const insights = config.apiProvider === 'anthropic'
+    ? await extractWithClaude(transcript, config.apiKey, context)
+    : await extractWithOpenAI(transcript, config.apiKey, context);
+  return Object.keys(corrections).length ? mapStrings(insights, fix) : insights;
 }
 
 function extractionContext(context: ExtractionContext): string {

@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { api, useNav } from './nav';
 import JiraMappingModal from '../views/communications/JiraMappingModal';
 import UploadTranscriptSheet from './UploadTranscriptSheet';
+import ActionItemsEditor from './ActionItemsEditor';
 import { buildMeetingSlackRecap } from './slack-recap';
 import { retrySavedRecording } from './recording-recovery';
 
@@ -203,23 +204,12 @@ export default function MeetingDetailPage({ meetingId }: { meetingId: string }) 
             </div>
 
             {(insights.actionItems?.length || 0) > 0 && (
-              <>
-                <div className="pp-seclabel">Action items</div>
-                <div className="pp-listcard">
-                  {insights.actionItems!.map((ai, i) => (
-                    <div key={i} className="pp-setrow" style={{ cursor: 'default' }}>
-                      <div className="pp-grow">
-                        <div style={{ fontSize: 13, color: 'var(--navy)', lineHeight: 1.4 }}>{ai.text}</div>
-                        {(ai.owner || ai.assignee) && (
-                          <div className="pp-rowsub">
-                            {ai.owner || ai.assignee}{ai.isCommitment ? ' · commitment' : ''}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
+              <ActionItemsEditor
+                meetingId={meetingId}
+                items={insights.actionItems as any[]}
+                inviteeNames={Array.from(invitees.values()).map((person) => person.name)}
+                onMeetingUpdated={setMeeting}
+              />
             )}
 
             {(insights.decisions?.length || 0) > 0 && (

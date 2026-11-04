@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('inwiseAPI', {
   attachTranscriptToMeeting: (meetingId: string, content: string) =>
     ipcRenderer.invoke('db:attachTranscriptToMeeting', meetingId, content),
   reviewMeeting: (id: string, reviewedInsights?: any) => ipcRenderer.invoke('db:reviewMeeting', id, reviewedInsights),
+  updateMeetingActionItems: (meetingId: string, items: any[]) => ipcRenderer.invoke('db:updateMeetingActionItems', meetingId, items),
+  renameInMeeting: (meetingId: string, from: string, to: string, remember: boolean) => ipcRenderer.invoke('db:renameInMeeting', meetingId, from, to, remember),
 
   // Tasks
   getTasks: () => ipcRenderer.invoke('db:getTasks'),

@@ -7,7 +7,7 @@ import { session } from 'electron';
 import { installDisplayMediaHandler, installSessionPermissionHandlers } from './session-permissions';
 import { buildRecordingSilencePrompt, RECORDING_SILENCE_RESPONSE_MS } from './recording-silence-policy';
 
-import { getConfig, setConfig, getNotificationSettings, setNotificationSettings, getJiraWritePrefs, setJiraWriteMode, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, getDailyPlanPrefs, markDailyPlanShown, wasAutostartConfigured, markAutostartConfigured, CalendarSubscription } from './config';
+import { getConfig, setConfig, getNotificationSettings, setNotificationSettings, getJiraWritePrefs, setJiraWriteMode, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, rememberNameCorrection, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, getDailyPlanPrefs, markDailyPlanShown, wasAutostartConfigured, markAutostartConfigured, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
 import { fuzzyNameScore, SAME_PERSON_THRESHOLD } from './fuzzy-name';
 import { log } from './logger';
@@ -18,7 +18,7 @@ import { assessTranscriptQuality, normalizeSpeakerLabels } from './transcription
 import { extractInsights, searchMeetings, detectContradictions, generateAgenda, suggestTaskFields, classifyVoiceMemo, VoiceMemoItem } from './extractor';
 import {
   initDatabase,
-  createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus, setRecordingRecovery, setRecordingFailure, reviewMeeting,
+  createMeeting, updateMeetingTranscript, saveInsights, updateMeetingStatus, setRecordingRecovery, setRecordingFailure, reviewMeeting, updateMeetingActionItems, renameInMeeting,
   mergeMeetingAttendees,
   findRecentRecordingMeeting, appendMeetingTranscript,
   getMeetings, getMeeting, deleteMeeting, getAllPastDecisions,
@@ -1745,6 +1745,25 @@ ipcMain.handle('recording:retry', async (_event, meetingId: string) => {
   } finally {
     retryingRecordings.delete(meetingId);
   }
+});
+
+ipcMain.handle('db:updateMeetingActionItems', async (_e, meetingId: string, items: any[]) => {
+  const updated = await updateMeetingActionItems(meetingId, items);
+  if (updated) {
+    mainWindow?.webContents.send('meeting:new', updated);
+    mainWindow?.webContents.send('tasks:mentions-updated');
+  }
+  return updated;
+});
+
+ipcMain.handle('db:renameInMeeting', async (_e, meetingId: string, from: string, to: string, remember: boolean) => {
+  if (remember) rememberNameCorrection(from, to);
+  const updated = await renameInMeeting(meetingId, from, to);
+  if (updated) {
+    mainWindow?.webContents.send('meeting:new', updated);
+    mainWindow?.webContents.send('tasks:mentions-updated');
+  }
+  return updated;
 });
 
 ipcMain.handle('db:reviewMeeting', async (_e, id, reviewedInsights) => {

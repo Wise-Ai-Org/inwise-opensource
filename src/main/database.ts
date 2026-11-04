@@ -2,7 +2,8 @@ import * as path from 'path';
 import { app } from 'electron';
 import { randomUUID as uuidv4 } from 'crypto';
 import Datastore from '@seald-io/nedb';
-import { getConfig } from './config';
+import { getConfig, getNameCorrections } from './config';
+import { applyNameCorrections, mapStrings, replaceName } from './name-corrections';
 import { isSelf } from './self-identity';
 import { fuzzyNameScore, normalizeNameStr, SAME_PERSON_THRESHOLD, REVIEW_THRESHOLD } from './fuzzy-name';
 import { log } from './logger';
@@ -67,7 +68,7 @@ export async function updateMeetingTranscript(id: string, transcript: string, du
     { _id: id },
     {
       $set: {
-        transcript,
+        transcript: applyNameCorrections(transcript, getNameCorrections()),
         duration,
         status: 'transcribed',
         ...(transcriptQuality === undefined ? {} : { transcriptQuality }),
@@ -137,7 +138,8 @@ export async function findRecentRecordingMeeting(title: string, calendarEventId:
 
 export async function appendMeetingTranscript(id: string, transcript: string, addedDuration: number, transcriptQuality?: any): Promise<void> {
   const m: any = await meetingsDb.findOneAsync({ _id: id });
-  const combined = m?.transcript ? `${m.transcript}\n${transcript}` : transcript;
+  const added = applyNameCorrections(transcript, getNameCorrections());
+  const combined = m?.transcript ? `${m.transcript}\n${added}` : added;
   await meetingsDb.updateAsync(
     { _id: id },
     {
@@ -316,6 +318,91 @@ export async function saveInsights(meetingId: string, insights: {
     try { insightsSavedListener(meetingId, result); } catch (e: any) { log('error', 'insights:listener', e?.message || String(e)); }
   }
   return result;
+}
+
+/** One action item as the meeting page edits it. Unknown fields are kept. */
+export interface EditableActionItem {
+  text: string;
+  owner?: string | null;
+  done?: boolean;
+  taskId?: string | null;
+  [key: string]: any;
+}
+
+function isJiraLinked(task: any): boolean {
+  return task?.source?.type === 'jira' || !!task?.jiraKey;
+}
+
+/**
+ * Save the user's edits to a meeting's action items (text, owner, done,
+ * deleted) and keep each item's linked task in step, so the review window,
+ * Jira mapping, Tasks and the agenda all see the same thing.
+ */
+export async function updateMeetingActionItems(meetingId: string, items: EditableActionItem[]): Promise<any> {
+  const meeting: any = await meetingsDb.findOneAsync({ _id: meetingId });
+  if (!meeting) return null;
+  const before: EditableActionItem[] = meeting.insights?.actionItems || [];
+  const clean = (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      ...item,
+      text: String(item?.text || '').trim(),
+      owner: item?.owner ? String(item.owner).trim() || null : null,
+      assignee: item?.owner ? String(item.owner).trim() || null : null,
+      done: !!item?.done,
+    }))
+    .filter((item) => item.text);
+
+  await meetingsDb.updateAsync({ _id: meetingId }, { $set: { 'insights.actionItems': clean } }, {});
+
+  const now = new Date().toISOString();
+  const kept = new Set(clean.map((item) => item.taskId).filter(Boolean));
+  for (const old of before) {
+    if (!old.taskId || kept.has(old.taskId)) continue;
+    // Deleted item: drop its task unless the user already kept it or it is linked to Jira.
+    const task: any = await tasksDb.findOneAsync({ _id: old.taskId });
+    if (task && task.approval?.status === 'pending' && !isJiraLinked(task)) {
+      await tasksDb.removeAsync({ _id: task._id }, {});
+    }
+  }
+  for (const item of clean) {
+    if (!item.taskId) continue;
+    const old = before.find((b) => b.taskId === item.taskId);
+    const updates: Record<string, any> = {};
+    if (!old || old.text !== item.text) updates.title = item.text;
+    if (!old || (old.owner || null) !== item.owner) { updates.owner = item.owner; updates.assignee = item.owner; }
+    if (!old || !!old.done !== item.done) updates.status = item.done ? 'done' : 'todo';
+    if (Object.keys(updates).length) {
+      await tasksDb.updateAsync({ _id: item.taskId }, { $set: { ...updates, updatedAt: now } }, {});
+    }
+  }
+  return meetingsDb.findOneAsync({ _id: meetingId });
+}
+
+/**
+ * Replace a misheard name everywhere in one meeting: transcript, summary,
+ * action items, decisions, blockers, commitments, and the linked tasks.
+ */
+export async function renameInMeeting(meetingId: string, from: string, to: string): Promise<any> {
+  const meeting: any = await meetingsDb.findOneAsync({ _id: meetingId });
+  if (!meeting) return null;
+  const swap = (text: string) => replaceName(text, from, to);
+  const $set: Record<string, any> = {};
+  if (typeof meeting.transcript === 'string') $set.transcript = swap(meeting.transcript);
+  if (meeting.insights) $set.insights = mapStrings(meeting.insights, swap);
+  if (Object.keys($set).length) await meetingsDb.updateAsync({ _id: meetingId }, { $set }, {});
+
+  const now = new Date().toISOString();
+  for (const item of (meeting.insights?.actionItems || []) as EditableActionItem[]) {
+    if (!item.taskId) continue;
+    const task: any = await tasksDb.findOneAsync({ _id: item.taskId });
+    if (!task) continue;
+    const updates: Record<string, any> = {};
+    for (const key of ['title', 'owner', 'assignee']) {
+      if (typeof task[key] === 'string' && swap(task[key]) !== task[key]) updates[key] = swap(task[key]);
+    }
+    if (Object.keys(updates).length) await tasksDb.updateAsync({ _id: task._id }, { $set: { ...updates, updatedAt: now } }, {});
+  }
+  return meetingsDb.findOneAsync({ _id: meetingId });
 }
 
 /** Point a meeting's action item at a different task (after a dedup merge). */
