@@ -1089,10 +1089,10 @@ function JiraSettings({ config, update, savedKey }: { config: Config; update: (k
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
               <input type="checkbox" checked={config.jiraAutoPush as any === true || config.jiraAutoPush === 'true' as any}
                 onChange={e => update('jiraAutoPush' as any, e.target.checked as any)} />
-              <span className="form-label" style={{ margin: 0 }}>Auto-push tasks to your systems {savedKey === 'jiraAutoPush' && <span style={{ color: 'var(--teal)', fontWeight: 500 }}>✓ Saved</span>}</span>
+              <span className="form-label" style={{ margin: 0 }}>Propose Jira changes from meetings {savedKey === 'jiraAutoPush' && <span style={{ color: 'var(--teal)', fontWeight: 500 }}>✓ Saved</span>}</span>
             </label>
             <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block', paddingLeft: 24 }}>
-              Tasks from meetings push to the right destination automatically.
+              Inwise turns meeting tasks into Jira changes. The choice below decides when they apply.
             </span>
           </div>
 
@@ -1103,104 +1103,51 @@ function JiraSettings({ config, update, savedKey }: { config: Config; update: (k
   );
 }
 
-// ── Approval gate settings (US-006) ─────────────────────────────────────────
-// Self-managed slice: reads/writes `sor.jira` via api, independent of the
-// parent Settings form's save-button lifecycle. Saves on change (debounced
-// via React state + blur on slider) so the gate takes effect immediately
-// the next time auto-push runs — no "save to apply" footgun.
+// ── Jira changes setting (docs/JIRA_SAFETY.md) ──────────────────────────────
+// One choice for every Jira write Inwise proposes from meetings. Saves on
+// change; the next proposal uses it.
 
 function ApprovalGateSettings() {
-  const [enabled, setEnabled] = useState(false);
-  const [threshold, setThreshold] = useState(0.6);
-  const [loaded, setLoaded] = useState(false);
+  const [mode, setMode] = useState<'ask' | 'auto' | null>(null);
+  const [threshold, setThreshold] = useState(0.9);
 
   useEffect(() => {
     (async () => {
       try {
-        const cfg = await (window as any).inwiseAPI.getConfig();
-        const jira = cfg?.sor?.jira ?? {};
-        setEnabled(jira.approvalGateEnabled === true);
-        const t = typeof jira.approvalThreshold === 'number' ? jira.approvalThreshold : 0.6;
-        setThreshold(Math.max(0, Math.min(1, t)));
+        const prefs = await (window as any).inwiseAPI.jiraGetWriteMode();
+        setMode(prefs?.mode === 'auto' ? 'auto' : 'ask');
+        if (typeof prefs?.threshold === 'number') setThreshold(prefs.threshold);
       } catch {
-        /* best-effort — keep defaults */
-      } finally {
-        setLoaded(true);
+        setMode('ask');
       }
     })();
   }, []);
 
-  const persist = async (next: { approvalGateEnabled: boolean; approvalThreshold: number }) => {
-    // Merge-in rather than overwrite so we don't clobber sor.dismissedReceiptIds.
-    const cfg = await (window as any).inwiseAPI.getConfig();
-    const existingSor = cfg?.sor ?? {};
-    await (window as any).inwiseAPI.setConfig({
-      sor: {
-        ...existingSor,
-        jira: {
-          approvalGateEnabled: next.approvalGateEnabled,
-          approvalThreshold: next.approvalThreshold,
-        },
-      },
-    });
+  const choose = async (next: 'ask' | 'auto') => {
+    setMode(next);
+    try { await (window as any).inwiseAPI.jiraSetWriteMode(next); } catch { /* the next load shows the stored value */ }
   };
 
-  const toggle = async (value: boolean) => {
-    setEnabled(value);
-    await persist({ approvalGateEnabled: value, approvalThreshold: threshold });
-  };
-
-  const onThresholdChange = (value: number) => {
-    const clamped = Math.max(0, Math.min(1, value));
-    setThreshold(clamped);
-  };
-
-  const onThresholdCommit = async () => {
-    await persist({ approvalGateEnabled: enabled, approvalThreshold: threshold });
-  };
-
-  if (!loaded) return null;
-
-  const percent = Math.round(threshold * 100);
+  if (!mode) return null;
+  const options: { value: 'ask' | 'auto'; label: string; sub: string }[] = [
+    { value: 'ask', label: 'Ask me every time', sub: 'Every change waits for your OK in the meeting recap or Review.' },
+    { value: 'auto', label: 'Apply on their own when Inwise is very sure', sub: `Changes Inwise is at least ${Math.round(threshold * 100)}% sure about go straight to Jira. Everything else waits for your OK.` },
+  ];
 
   return (
-    <div className="form-group" style={{ marginTop: 12 }}>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) => toggle(e.target.checked)}
-        />
-        <span className="form-label" style={{ margin: 0 }}>Wait for my approval on weak matches</span>
-      </label>
-      <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4, display: 'block', paddingLeft: 24, lineHeight: 1.5 }}>
-        Anything below{' '}
-        <input
-          type="number"
-          min={0}
-          max={100}
-          step={5}
-          value={percent}
-          disabled={!enabled}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            if (Number.isFinite(v)) onThresholdChange(Math.max(0, Math.min(100, v)) / 100);
-          }}
-          onBlur={onThresholdCommit}
-          aria-label="Confidence threshold percent"
-          style={{
-            width: 48,
-            padding: '1px 4px',
-            margin: '0 2px',
-            fontSize: 12,
-            fontWeight: 600,
-            textAlign: 'center',
-            border: '1px solid var(--slate-300)',
-            borderRadius: 4,
-            background: enabled ? 'white' : 'var(--slate-50)',
-            color: enabled ? 'var(--slate-700)' : 'var(--slate-400)',
-          }}
-        />% match confidence waits in your Inbox for approval.
+    <div className="form-group" style={{ marginTop: 12 }} role="radiogroup" aria-label="Jira changes">
+      <span className="form-label">Jira changes</span>
+      {options.map(o => (
+        <label key={o.value} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', marginTop: 6 }}>
+          <input type="radio" name="jira-write-mode" checked={mode === o.value} onChange={() => choose(o.value)} style={{ marginTop: 3 }} />
+          <span>
+            <span style={{ fontSize: 13, fontWeight: 500, display: 'block' }}>{o.label}</span>
+            <span style={{ fontSize: 12, color: 'var(--slate-500)', display: 'block', lineHeight: 1.45 }}>{o.sub}</span>
+          </span>
+        </label>
+      ))}
+      <span style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 8, display: 'block', lineHeight: 1.45 }}>
+        Changes you make yourself, like moving a linked task to Done, count as your OK.
       </span>
     </div>
   );
@@ -1208,7 +1155,7 @@ function ApprovalGateSettings() {
 
 // ── Integrations status block (US-003) ──────────────────────────────────────
 
-type SorOp = 'create' | 'update' | 'transition' | 'comment';
+type SorOp = 'create' | 'update' | 'transition' | 'comment' | 'assign' | 'link' | 'sprint';
 type SorResult = 'pending' | 'success' | 'failed' | 'pending-approval' | 'retrying';
 type SorSystem = 'jira';
 
@@ -1248,6 +1195,9 @@ const SOR_OP_LABEL: Record<SorOp, string> = {
   update: 'Updated',
   transition: 'Transitioned',
   comment: 'Commented',
+  assign: 'Assigned',
+  link: 'Linked',
+  sprint: 'Added to sprint',
 };
 
 const SOR_OP_COLOR: Record<SorOp, string> = {
@@ -1255,6 +1205,9 @@ const SOR_OP_COLOR: Record<SorOp, string> = {
   update: '#1D4ED8',
   transition: '#7C3AED',
   comment: 'var(--owl-deep-teal)',
+  assign: '#1D4ED8',
+  link: '#7C3AED',
+  sprint: 'var(--owl-teal)',
 };
 
 function sorOneLineSummary(entry: SorWriteEntry): string {
@@ -2238,6 +2191,8 @@ function IntegrationsSection() {
       <p style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 14, lineHeight: 1.6 }}>
         Status and recent sync activity for every connected system of record. Last 30 days.
       </p>
+
+      <ApprovalGateSettings />
 
       {/* Jira card */}
       <div style={{

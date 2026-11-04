@@ -7,6 +7,10 @@
 import { buildDailyBriefing } from './daily-briefing';
 import { fuzzyNameScore } from './fuzzy-name';
 import { localDayKey, startOfLocalDay, toMs } from './ollie-moments';
+import { buildMorningJira, buildPrepJira, buildWrapJira, type StatusChangeLike, type WriteLike } from './ollie-jira';
+import { storedAccountId } from './jira-people';
+import type { JiraIssueSnapshot } from './jira-pull';
+import { describeJiraChange } from './jira-format';
 import type {
   AttendeeOwes,
   CatchUpNote,
@@ -49,6 +53,8 @@ export interface ContentContext {
   /** getPeople() rows (enriched with lastMeeting). */
   people: any[];
   scored: ScoredLike[];
+  /** Pulled Jira issue cache; null/absent when Jira is not connected. */
+  jiraIssues?: JiraIssueSnapshot[] | null;
 }
 
 export interface CalendarEventLike {
@@ -303,6 +309,7 @@ export function buildMorning(ctx: ContentContext & {
     doneSinceYesterday,
     catchUp: computeCatchUp(ctx),
     welcomeBack: ctx.welcomeBack,
+    jira: buildMorningJira({ issues: ctx.jiraIssues ?? null, now: ctx.now }),
   };
 }
 
@@ -324,11 +331,22 @@ export function findLastMet(ctx: ContentContext, event: CalendarEventLike, other
   return best ? { meetingId: best._id, title: best.title || '', date: best.date } : null;
 }
 
+/** Attendee -> stored Jira accountId of the matching person (no network). */
+export function jiraAccountIdResolver(people: any[]): (attendee: string) => string | null {
+  const memo = new Map<string, string | null>();
+  return (attendee: string) => {
+    if (!memo.has(attendee)) memo.set(attendee, storedAccountId(resolvePerson(attendee, people)));
+    return memo.get(attendee) ?? null;
+  };
+}
+
 export function buildPrep(ctx: ContentContext & {
   event: CalendarEventLike;
   draftAgenda: string[] | null;
   pendingApprovals: PendingJiraApproval[];
   recordArmed: boolean;
+  /** Changelog status changes for the candidate issues (see jira-changelog.ts). */
+  jiraStatusChanges?: Map<string, StatusChangeLike[] | null>;
 }): PrepContent {
   const { event, now } = ctx;
   const start = toMs(event.startTime) ?? now.getTime();
@@ -351,6 +369,7 @@ export function buildPrep(ctx: ContentContext & {
     return !!m && others.length > 0 && (m.attendees || []).some((a: string) => others.some((o) => identitiesMatch(a, o)));
   });
 
+  const lastMet = findLastMet(ctx, event, others);
   return {
     eventId: event.id,
     title: event.title,
@@ -358,33 +377,53 @@ export function buildPrep(ctx: ContentContext & {
     endTime: end,
     minutesUntil: Math.max(0, Math.ceil((start - now.getTime()) / 60_000)),
     attendees: others.map(displayName),
-    lastMet: findLastMet(ctx, event, others),
+    lastMet,
     draftAgenda: ctx.draftAgenda && ctx.draftAgenda.length > 0 ? ctx.draftAgenda : null,
     owes,
     pendingApprovals,
     recordArmed: ctx.recordArmed,
+    jira: buildPrepJira({
+      issues: ctx.jiraIssues ?? null,
+      attendees: others,
+      lastMetMs: lastMet ? toMs(lastMet.date) : null,
+      now,
+      identitiesMatch,
+      accountIdFor: jiraAccountIdResolver(ctx.people),
+      statusChanges: ctx.jiraStatusChanges,
+    }),
   };
 }
 
 // ── Processed ──────────────────────────────────────────────────────────────
 
-export function summarizePendingApproval(p: { _id: string; pushParams: any; meetingTitle?: string | null; createdAt: string }, meetingId: string | null): PendingJiraApproval {
+export function summarizePendingApproval(
+  p: { _id: string; pushParams: any; meetingTitle?: string | null; createdAt: string },
+  meetingId: string | null,
+  entry?: {
+    issueTitle?: string | null; evidence?: string | null; suggestion?: string | null; intent?: string | null;
+    confidence?: number | null; targetRecordUrl?: string | null; blockedReason?: string | null; needs?: 'jira-user' | null;
+  } | null,
+): PendingJiraApproval {
   const params = p.pushParams || {};
   const args = params.args || {};
   const op = params.operation || 'create';
-  const summary =
-    op === 'create' ? `Create “${args.title || 'issue'}”`
-      : op === 'update' ? `Update ${args.issueKey || 'issue'}${args.updates?.title ? `: ${args.updates.title}` : ''}`
-        : op === 'transition' ? `Move ${args.issueKey || 'issue'} to ${args.targetStatus || 'new status'}`
-          : `Comment on ${args.issueKey || 'issue'}`;
   return {
     id: p._id,
     operation: op,
-    summary,
-    issueKey: args.issueKey || null,
+    summary: describeJiraChange(params, { intent: entry?.intent, suggestion: entry?.suggestion }),
+    issueKey: args.issueKey || args.blockedKey || null,
     meetingId,
     meetingTitle: p.meetingTitle || null,
     createdAt: p.createdAt,
+    issueTitle: entry?.issueTitle ?? null,
+    evidence: entry?.evidence ?? null,
+    suggestion: entry?.suggestion ?? null,
+    intent: entry?.intent ?? null,
+    confidence: typeof entry?.confidence === 'number' ? entry.confidence : null,
+    url: entry?.targetRecordUrl ?? null,
+    blockedReason: entry?.blockedReason ?? null,
+    needs: entry?.needs ?? null,
+    assigneeName: op === 'assign' ? args.assigneeName || null : null,
   };
 }
 
@@ -425,6 +464,14 @@ export function buildProcessed(input: {
         failedCount,
         pushed: pushed.map((w) => ({ id: w._id, issueKey: w.targetRecordId, url: w.targetRecordUrl || null, operation: w.operation })),
         pending: input.pendingApprovals,
+        failed: jiraWrites
+          .filter((w) => w.result === 'failed' && w.errorMessage !== 'User rejected')
+          .map((w) => ({
+            id: w._id,
+            issueKey: w.targetRecordId && w.targetRecordId !== '(pending-create)' ? w.targetRecordId : null,
+            operation: w.operation,
+            message: w.errorMessage || 'Jira did not accept the change.',
+          })),
       }
     : null;
 
@@ -617,6 +664,8 @@ export function buildWrapUp(ctx: ContentContext & {
   allTasks: any[];
   executions: { _id: string; actionItemTitle: string; client: string; status: string; updatedAt: string; outcomes?: { summary?: string }[] }[];
   slackSyncedAt: number | null;
+  /** Today's Jira write log and queue; absent when Jira is not connected. */
+  jiraToday?: { writesToday: WriteLike[]; pendingCount: number; linkedKeysToday: string[] } | null;
 }): WrapUpContent {
   const { now } = ctx;
   const todayMeetings = ctx.meetings.filter((m) => inDay(toMs(m.date), now));
@@ -665,5 +714,14 @@ export function buildWrapUp(ctx: ContentContext & {
     receipts,
     needsRetry,
     slackSyncedAt: ctx.slackSyncedAt,
+    jira: buildWrapJira({
+      connected: !!ctx.jiraToday,
+      writesToday: ctx.jiraToday?.writesToday || [],
+      pendingCount: ctx.jiraToday?.pendingCount || 0,
+      issues: ctx.jiraIssues ?? null,
+      meetingsToday: todayMeetings,
+      linkedKeysToday: ctx.jiraToday?.linkedKeysToday || [],
+      now,
+    }),
   };
 }

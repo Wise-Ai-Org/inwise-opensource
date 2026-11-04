@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api, initials, useNav } from './nav';
 import { AiButton } from '../components/AiButton';
+import { JiraLinkNote } from './JiraUserPicker';
 
 export default function PersonDetailPage({ personId }: { personId: string }) {
   const { pop, push } = useNav();
@@ -114,6 +115,9 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   </div>
                 </div>
               </div>
+              {!person.isSelf && (
+                <JiraLinkNote person={person} allowUnlink onChanged={() => api().getPerson?.(personId).then((p: any) => p && setPerson(p)).catch(() => {})} />
+              )}
               {((person.altNames || []).length > 0 || (person.altEmails || []).length > 0) && (
                 <div style={{ marginTop: 10 }}>
                   <div className="pp-meta" style={{ marginBottom: 5 }}>Also known as</div>

@@ -7,7 +7,7 @@ import { session } from 'electron';
 import { installDisplayMediaHandler, installSessionPermissionHandlers } from './session-permissions';
 import { buildRecordingSilencePrompt, RECORDING_SILENCE_RESPONSE_MS } from './recording-silence-policy';
 
-import { getConfig, setConfig, getNotificationSettings, setNotificationSettings, getSorJiraPrefs, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, getDailyPlanPrefs, markDailyPlanShown, wasAutostartConfigured, markAutostartConfigured, CalendarSubscription } from './config';
+import { getConfig, setConfig, getNotificationSettings, setNotificationSettings, getJiraWritePrefs, setJiraWriteMode, getMcpPrefs, migrateLegacyCalendars, listCalendars, addCalendar, updateCalendar, removeCalendar, setSelfEmails, markAppOpened, markWelcomeBackSeen, getDaysSinceLastOpen, getLastOpenedAtSnapshot, getWelcomeBackLastSeenAt, getDailyPlanPrefs, markDailyPlanShown, wasAutostartConfigured, markAutostartConfigured, CalendarSubscription } from './config';
 import { isSelf } from './self-identity';
 import { fuzzyNameScore, SAME_PERSON_THRESHOLD } from './fuzzy-name';
 import { log } from './logger';
@@ -39,6 +39,7 @@ import {
   getAllTasksForDedup, getMeetingsById, appendTaskMention,
   mergeTasksManual, undoSplitMention, resolvePendingDedup, resolveTaskCreationDedup,
   bumpTaskPriority, dismissTaskNudge,
+  getTaskById, onInsightsSaved, remapMeetingItemTask, setPersonJiraLink,
 } from './database';
 import { decideMention, retrieveCandidates, classifyCandidates, buildMentionThread, providerModelLabel } from './task-dedup';
 import { ASK_THRESHOLD, AUTO_MERGE_THRESHOLD } from './dedup-constants';
@@ -47,14 +48,19 @@ import { randomUUID } from 'crypto';
 import { extractChannel, trimWav, wavBufferToSamples, stitchWavBuffers } from '@inwise/desktop-shared';
 import {
   connectJira, disconnectJira, isJiraConnected, getJiraInfo,
-  getJiraProjects, getJiraStories, createJiraIssue, updateJiraIssue,
-  transitionJiraIssue, addJiraComment, retryJiraWrite, approveJiraWrite,
+  getJiraProjects, getJiraStories, searchJiraUsers, JiraHttpError,
+  getJiraAccountId, reportPersonalDataAccounts,
 } from './jira-client';
 import {
+  submitJiraWrite, approveHeldWrite, rejectHeldWrite, retryJiraWrite, onTaskReviewed,
+  linkedIssueKey, linkTaskToIssue, resolveHeldAssignee,
+} from './jira-writes';
+import { afterInsightsSaved, replanTaskAfterDedup, runJiraPull, taskEditKey } from './jira-sync';
+import { initJiraCache, PULL_INTERVAL_MS, listCachedIssues, removeCachedIssues } from './jira-pull';
+import { runPersonalDataReport, REPORT_CHECK_MS } from './jira-personal-data';
+import { statusLabel } from './jira-transitions';
+import {
   initSorWriteLog, onWriteCompleted,
-  recordWrite as sorRecordWrite,
-  markCompleted as sorMarkCompleted,
-  applyApprovalEdit as sorApplyApprovalEdit,
   listRecent as sorListRecent,
   listByMeeting as sorListByMeeting,
   listByTaskId as sorListByTaskId,
@@ -63,13 +69,10 @@ import {
   listFailedSince as sorListFailedSince,
   listStuckEntries as sorListStuckEntries,
   getWriteEntry as sorGetWriteEntry,
-  shouldGateWrite as sorShouldGateWrite,
-  computeCreateDiffs as sorComputeCreateDiffs,
-  PushParams as SorPushParams,
+  listAccountWrites as sorListAccountWrites,
+  redactClosedAccount as sorRedactClosedAccount,
 } from './sor-write-log';
-import {
-  initPendingApprovals, stashPending, listPending, getPending, removePending,
-} from './sor-pending-approvals';
+import { initPendingApprovals, listPending } from './sor-pending-approvals';
 import { buildActionExecutionSummary, getActionExecution, initActionExecutionLog } from './action-execution-log';
 import { matchAllItems, semanticMatch } from './jira-matcher';
 import { scoreTasks } from './task-scorer';
@@ -930,164 +933,9 @@ async function runRecordingPipeline(audioPath: string, meetingTitle: string, cal
       openSavedRecording(meetingId);
       log('info', 'pipeline:insights-saved', meetingId);
 
-      // Auto-push to Jira if enabled â€” match to existing stories first
-      const jiraConfig = getConfig();
-      if ((jiraConfig as any).jiraAutoPush && (jiraConfig as any).jiraTokens && (jiraConfig as any).jiraDefaultProject) {
-        try {
-          const projectKey = (jiraConfig as any).jiraDefaultProject;
-          const stories = await getJiraStories(projectKey);
-          const matches = matchAllItems(insights.actionItems, stories);
-
-          const sorJiraPrefs = getSorJiraPrefs();
-          let created = 0;
-          let linked = 0;
-          let gated = 0;
-
-          for (let i = 0; i < matches.length; i++) {
-            const match = matches[i];
-            const item = insights.actionItems[i];
-
-            // Create the local task first so we can pass its id as `linkedTaskId`
-            // provenance to the Jira push. If the Jira call then fails, the local
-            // task survives as an unsynced record â€” strictly better than losing it.
-            const task = await createTask({
-              title: item.text,
-              description: `From meeting: ${meetingTitle}`,
-              priority: item.priority || 'medium',
-              dueDate: item.dueDate,
-              status: 'todo',
-            });
-
-            const transcriptSpan = item.text
-              ? { start: 0, end: item.text.length, snippet: item.text }
-              : undefined;
-            // Confidence signal: the jira-matcher's best-match similarity. If
-            // matching found no candidate at all, confidence is undefined and
-            // the gate never fires (per PRD US-006 "NEVER gate them").
-            const confidence = match.bestMatch ? match.bestMatch.similarity : undefined;
-            const provenance = {
-              sourceMeetingId: meetingId,
-              sourceTranscriptSpan: transcriptSpan,
-              linkedTaskId: task._id,
-              confidence,
-              approvalPath: 'auto' as const,
-            };
-
-            const gate = sorShouldGateWrite(
-              confidence,
-              sorJiraPrefs.approvalGateEnabled,
-              sorJiraPrefs.approvalThreshold,
-            );
-
-            if (gate) {
-              // Gated: record the would-be write as pending-approval and stash
-              // the push params for the user to approve / reject later from the
-              // Inbox. Do NOT push and do NOT link the task's source yet â€” both
-              // happen on approve.
-              const isLink = match.autoApproved && match.bestMatch;
-              let pushParams: SorPushParams;
-              let fieldDiffs: Array<{ field: string; before: any; after: any }>;
-              let commentBody: string | null = null;
-              let targetRecordId: string;
-              let targetRecordUrl: string | null = null;
-
-              if (isLink && match.bestMatch) {
-                const body = `Action item: ${item.text}\nOwner: ${item.owner || 'Unassigned'}`;
-                pushParams = {
-                  operation: 'comment',
-                  args: { issueKey: match.bestMatch.jiraKey, comment: body, meetingTitle },
-                };
-                fieldDiffs = [];
-                commentBody = `[Inwise] From "${meetingTitle}":\n\n${body}`;
-                targetRecordId = match.bestMatch.jiraKey;
-                targetRecordUrl = match.bestMatch.jiraUrl;
-              } else {
-                pushParams = {
-                  operation: 'create',
-                  args: {
-                    title: item.text,
-                    description: `From meeting: ${meetingTitle}\nOwner: ${item.owner || 'Unassigned'}`,
-                    priority: item.priority || 'medium',
-                    dueDate: item.dueDate,
-                    projectKey,
-                  },
-                };
-                fieldDiffs = sorComputeCreateDiffs({
-                  title: item.text,
-                  description: `From meeting: ${meetingTitle}\nOwner: ${item.owner || 'Unassigned'}`,
-                  priority: item.priority || 'medium',
-                  dueDate: item.dueDate,
-                  projectKey,
-                });
-                targetRecordId = '(pending-create)';
-                targetRecordUrl = null;
-              }
-
-              const pendingId = await sorRecordWrite({
-                targetSystem: 'jira',
-                targetRecordId,
-                targetRecordUrl,
-                operation: pushParams.operation,
-                fieldDiffs,
-                commentBody,
-                provenance: { ...provenance, approvalPath: 'opt-in-gated' as const },
-                pushParams,
-                result: 'pending-approval',
-              });
-              await stashPending({
-                _id: pendingId,
-                targetSystem: 'jira',
-                pushParams,
-                meetingTitle,
-                linkedTaskId: task._id,
-                createdAt: new Date().toISOString(),
-              });
-              gated++;
-              continue;
-            }
-
-            if (match.autoApproved && match.bestMatch) {
-              // High-confidence match â€” link to existing story via comment
-              await addJiraComment(
-                match.bestMatch.jiraKey,
-                `Action item: ${item.text}\nOwner: ${item.owner || 'Unassigned'}`,
-                meetingTitle,
-                provenance,
-              );
-              await updateTask(task._id, {
-                source: { type: 'jira', id: match.bestMatch.jiraKey, url: match.bestMatch.jiraUrl },
-              });
-              linked++;
-            } else {
-              // No confident match â€” create new Jira issue
-              const result = await createJiraIssue({
-                title: item.text,
-                description: `From meeting: ${meetingTitle}\nOwner: ${item.owner || 'Unassigned'}`,
-                priority: item.priority || 'medium',
-                dueDate: item.dueDate,
-                projectKey,
-              }, provenance);
-              await updateTask(task._id, {
-                source: { type: 'jira', id: result.key, url: result.url },
-              });
-              created++;
-            }
-          }
-
-          const total = created + linked;
-          log(
-            'info',
-            'pipeline:jira-auto-push',
-            `created ${created}, linked ${linked}${gated ? `, ${gated} awaiting approval` : ''} of ${total + gated} tasks to ${projectKey}`,
-          );
-          mainWindow?.webContents.send('jira:auto-synced', { created, linked, gated, total });
-
-          // The per-meeting Jira receipt is part of the single "Inwise processed"
-          // notification (ollie-moments-service announceProcessed), read from the audit log.
-        } catch (jiraErr: any) {
-          log('error', 'pipeline:jira-auto-push-failed', jiraErr.message);
-        }
-      }
+      // Jira proposals for this meeting run from database.onInsightsSaved
+      // (jira-sync.ts afterInsightsSaved): gated, idempotent, and based on the
+      // local tasks dedup produced. announceProcessed waits for that pass.
     } catch (insightErr: any) {
       insightsFailed = true;
       await setRecordingFailure(meetingId, recordingFailure('insights', true));
@@ -1963,37 +1811,48 @@ ipcMain.handle('dedup:resolveCreate', async (_e, data, suggestion, action: 'same
   return result;
 });
 ipcMain.handle('db:updateTask', async (_e, id, updates) => {
+  const before = await getTaskById(id);
   const result = await updateTask(id, updates);
+  if (!result) return result;
 
-  // Auto-sync to Jira if enabled and task is linked
+  // Keep / Skip on an extracted task releases or drops its held Jira writes.
+  const reviewed = updates?.approval?.status;
+  if ((reviewed === 'approved' || reviewed === 'rejected') && before?.approval?.status !== reviewed) {
+    void onTaskReviewed(id, reviewed).then((n) => { if (n > 0) mainWindow?.webContents.send('jira:auto-synced', { reviewed: n }); })
+      .catch((e: any) => log('error', 'jira:task-reviewed', e?.message || String(e)));
+  }
+
+  // Edits to a Jira-linked task: the edit is a click, so it counts as approval
+  // of the matching Jira change. Still goes through the gate for provenance,
+  // idempotency and the log.
   try {
     const cfg = getConfig();
-    if ((cfg as any).jiraAutoPush && (cfg as any).jiraTokens && result?.source?.type === 'jira' && result?.source?.id) {
-      const jiraKey = result.source.id;
-      let synced = false;
-
-      const provenance = { linkedTaskId: id, approvalPath: 'auto' as const };
-
-      // Status changed â€” transition in Jira
-      if (updates.status) {
-        await transitionJiraIssue(jiraKey, updates.status, provenance);
-        synced = true;
+    const jiraKey = linkedIssueKey(result);
+    if ((cfg as any).jiraAutoPush && isJiraConnected() && jiraKey) {
+      const base = { initiator: 'user' as const, confidence: 1, linkedTaskId: id, sourceMeetingId: result.meetingId || null };
+      let synced = 0;
+      if (updates.status && updates.status !== before?.status) {
+        const out = await submitJiraWrite({
+          ...base,
+          pushParams: { operation: 'transition', args: { issueKey: jiraKey, targetStatus: updates.status } },
+          idempotencyKey: `${taskEditKey(id, 'status', updates.status)}:${Date.now()}`,
+        });
+        if (out.status === 'pushed') synced++;
+        else if (out.status === 'failed') mainWindow?.webContents.send('jira:write-failed', { issueKey: jiraKey, error: out.error, target: statusLabel(updates.status) });
       }
-
-      // Title or description changed â€” update Jira issue fields
-      if (updates.title || updates.description || updates.priority || updates.dueDate) {
-        await updateJiraIssue(jiraKey, {
-          title: updates.title,
-          description: updates.description,
-          priority: updates.priority,
-          dueDate: updates.dueDate,
-        }, provenance);
-        synced = true;
+      const fields: Record<string, any> = { title: updates.title, description: updates.description, priority: updates.priority, dueDate: updates.dueDate };
+      const changed = Object.fromEntries(Object.entries(fields).filter(([k, v]) => v !== undefined && v !== before?.[k]));
+      if (Object.keys(changed).length > 0) {
+        const out = await submitJiraWrite({
+          ...base,
+          pushParams: { operation: 'update', args: { issueKey: jiraKey, updates: changed } },
+          idempotencyKey: `${taskEditKey(id, 'fields', JSON.stringify(changed))}:${Date.now()}`,
+        });
+        if (out.status === 'pushed') synced++;
       }
-
-      if (synced) {
+      if (synced > 0) {
         log('info', 'jira:auto-sync-task', `synced ${jiraKey} after local update`);
-        mainWindow?.webContents.send('jira:auto-synced', { updated: 1 });
+        mainWindow?.webContents.send('jira:auto-synced', { updated: synced });
       }
     }
   } catch (jiraSyncErr: any) {
@@ -2039,8 +1898,15 @@ ipcMain.handle('db:rejectLikelyDone', async (_e, id: string) => {
  */
 ipcMain.handle('dedup:resolvePending', async (_e, taskId: string, action: 'same' | 'new' | 'reopen') => {
   try {
+    const pendingTask = await getTaskById(taskId);
     const res = await resolvePendingDedup(taskId, action);
     mainWindow?.webContents.send('tasks:mentions-updated');
+    // The Jira write for this item was waiting on this answer.
+    if (res.ok && pendingTask?.meetingId) {
+      const target = res.mergedInto || taskId;
+      if (res.mergedInto) await remapMeetingItemTask(pendingTask.meetingId, taskId, res.mergedInto);
+      void replanTaskAfterDedup(pendingTask.meetingId, target);
+    }
     return res;
   } catch (e: any) {
     log('error', 'dedup:resolvePending', e?.message || String(e));
@@ -2496,36 +2362,122 @@ ipcMain.handle('jira:getStories', async (_e, projectKey?: string) => {
   try { return { ok: true, stories: await getJiraStories(projectKey) }; }
   catch (e: any) { return { ok: false, error: e.message }; }
 });
+// Renderer-initiated Jira writes are clicks: approved by that click, but they
+// still go through submitJiraWrite for provenance, idempotency and the log.
+function ipcOutcome(out: Awaited<ReturnType<typeof submitJiraWrite>>): { ok: boolean; error?: string; key?: string; url?: string | null } {
+  if (out.status === 'pushed') return { ok: true, key: out.key, url: out.url };
+  if (out.status === 'failed') return { ok: false, error: out.error };
+  if (out.status === 'duplicate') return { ok: false, error: out.key ? `Already linked to ${out.key}` : `Already handled (${out.reason})`, key: out.key || undefined };
+  if (out.status === 'held') return { ok: false, error: 'Waiting for approval' };
+  return { ok: false, error: out.reason };
+}
 ipcMain.handle('jira:createIssue', async (_e, task: any) => {
   try {
-    const result = await createJiraIssue(task);
-    // Update the task in DB with jira source info
-    if (task._id) {
-      await updateTask(task._id, {
-        'source': { type: 'jira', id: result.key, url: result.url },
-      });
-    }
-    return { ok: true, ...result };
+    const taskId = typeof task?._id === 'string' ? task._id : null;
+    const local = taskId ? await getTaskById(taskId) : null;
+    const out = await submitJiraWrite({
+      initiator: 'user',
+      confidence: 1,
+      linkedTaskId: taskId,
+      sourceMeetingId: local?.meetingId || task?.meetingId || null,
+      idempotencyKey: taskId ? `task:${taskId}:create` : null,
+      pushParams: {
+        operation: 'create',
+        args: {
+          title: task.title, description: task.description, priority: task.priority,
+          dueDate: task.dueDate || undefined, projectKey: task.projectKey,
+        },
+      },
+    });
+    return ipcOutcome(out);
   } catch (e: any) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('jira:updateIssue', async (_e, issueKey: string, updates: any) => {
-  try { await updateJiraIssue(issueKey, updates); return { ok: true }; }
-  catch (e: any) { return { ok: false, error: e.message }; }
+ipcMain.handle('jira:updateIssue', async (_e, issueKey: string, updates: any, taskId?: string) => {
+  try {
+    return ipcOutcome(await submitJiraWrite({
+      initiator: 'user', confidence: 1, linkedTaskId: taskId || null,
+      pushParams: { operation: 'update', args: { issueKey, updates: updates || {} } },
+    }));
+  } catch (e: any) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('jira:transition', async (_e, issueKey: string, status: string) => {
-  try { await transitionJiraIssue(issueKey, status); return { ok: true }; }
-  catch (e: any) { return { ok: false, error: e.message }; }
+ipcMain.handle('jira:transition', async (_e, issueKey: string, status: string, taskId?: string) => {
+  try {
+    return ipcOutcome(await submitJiraWrite({
+      initiator: 'user', confidence: 1, linkedTaskId: taskId || null,
+      pushParams: { operation: 'transition', args: { issueKey, targetStatus: status } },
+    }));
+  } catch (e: any) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('jira:addComment', async (_e, issueKey: string, comment: string, meetingTitle?: string) => {
-  try { await addJiraComment(issueKey, comment, meetingTitle); return { ok: true }; }
-  catch (e: any) { return { ok: false, error: e.message }; }
+ipcMain.handle('jira:addComment', async (_e, issueKey: string, comment: string, meetingTitle?: string, taskId?: string) => {
+  try {
+    return ipcOutcome(await submitJiraWrite({
+      initiator: 'user', confidence: 1, linkedTaskId: taskId || null, meetingTitle: meetingTitle || null,
+      pushParams: { operation: 'comment', args: { issueKey, comment, meetingTitle } },
+    }));
+  } catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('jira:linkTask', async (_e, taskId: string, jiraKey: string, jiraUrl: string) => {
   try {
-    await updateTask(taskId, {
-      source: { type: 'jira', id: jiraKey, url: jiraUrl },
-    });
-    return { ok: true };
+    const ok = await linkTaskToIssue(taskId, jiraKey, jiraUrl);
+    return ok ? { ok: true } : { ok: false, error: 'This task is already linked to another Jira issue' };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('jira:getWriteMode', () => getJiraWritePrefs());
+// "Find in Jira": people search by name (needs the read:jira-user scope).
+ipcMain.handle('jira:searchUsers', async (_e, query: string) => {
+  try { return { ok: true, users: await searchJiraUsers(query) }; }
+  catch (e: any) {
+    const denied = e instanceof JiraHttpError && (e.status === 401 || e.status === 403);
+    return { ok: false, error: denied ? 'Inwise is not allowed to search Jira people yet. Reconnect Jira in Settings.' : e.message };
+  }
+});
+// Link a person to a Jira account (picked by the user), or unlink.
+ipcMain.handle('people:setJiraAccount', async (_e, personId: string, user: { accountId: string; displayName?: string }) => {
+  if (!personId || !user?.accountId) return { ok: false, error: 'Pick a Jira user' };
+  const person = await setPersonJiraLink(personId, { status: 'linked', accountId: user.accountId, displayName: user.displayName || null, checkedAt: new Date().toISOString() });
+  return { ok: !!person, person };
+});
+ipcMain.handle('people:unlinkJira', async (_e, personId: string) => {
+  const person = await setPersonJiraLink(personId, { status: 'unlinked', accountId: null, displayName: null, checkedAt: new Date().toISOString() });
+  return { ok: !!person, person };
+});
+// "Find in Jira" on an "Assign PILOT-40 to Jordan Lee?" row: fill in the account
+// and remember it on the person. The row still waits for Approve.
+ipcMain.handle('jira:resolveAssignee', async (_e, pendingId: string, user: { accountId: string; displayName?: string }) => {
+  const entry = await sorGetWriteEntry(pendingId);
+  const args: any = entry?.pushParams?.operation === 'assign' ? entry.pushParams.args : null;
+  if (!args) return { ok: false, error: 'That row is no longer waiting' };
+  const res = await resolveHeldAssignee(pendingId, user.accountId, user.displayName || args.assigneeName);
+  if (res.ok && args.personId) {
+    await setPersonJiraLink(args.personId, { status: 'linked', accountId: user.accountId, displayName: user.displayName || null, checkedAt: new Date().toISOString() });
+  }
+  return res;
+});
+ipcMain.handle('jira:setWriteMode', (_e, mode: 'ask' | 'auto') => setJiraWriteMode(mode === 'auto' ? 'auto' : 'ask'));
+ipcMain.handle('jira:pullNow', async () => runJiraPull());
+// "Update PILOT-42 instead?" -> the user wants a new ticket after all (a click).
+ipcMain.handle('jira:createInstead', async (_e, pendingId: string) => {
+  try {
+    const entry = await sorGetWriteEntry(pendingId);
+    if (!entry || entry.result !== 'pending-approval') return { ok: false, error: 'That suggestion is no longer waiting' };
+    const cfg: any = getConfig();
+    if (!cfg.jiraDefaultProject) return { ok: false, error: 'Pick a default Jira project in Settings first' };
+    const task = await getTaskById(entry.linkedTaskId);
+    if (!task) return { ok: false, error: 'The task is gone' };
+    await rejectHeldWrite(pendingId);
+    const meeting = entry.sourceMeetingId ? await getMeeting(entry.sourceMeetingId) : null;
+    return ipcOutcome(await submitJiraWrite({
+      initiator: 'user', confidence: 1, linkedTaskId: task._id, sourceMeetingId: entry.sourceMeetingId,
+      meetingTitle: meeting?.title || null,
+      idempotencyKey: entry.idempotencyKey ? `${entry.idempotencyKey}:create` : `task:${task._id}:create`,
+      pushParams: {
+        operation: 'create',
+        args: {
+          title: task.title, description: meeting?.title ? `From meeting: ${meeting.title}` : '',
+          priority: task.priority || 'medium', dueDate: task.dueDate || undefined, projectKey: cfg.jiraDefaultProject,
+        },
+      },
+    }));
   } catch (e: any) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('jira:matchTasks', async (_e, items: any[], projectKey?: string) => {
@@ -2800,107 +2752,12 @@ ipcMain.handle('sor:listPendingApprovals', async () => {
   return rows;
 });
 
-interface ApprovalOverrides {
-  // create-op override fields â€” only applied when pending.pushParams.operation === 'create'
-  title?: string;
-  description?: string;
-  priority?: string;
-  dueDate?: string;
-  // comment-op override
-  comment?: string;
-  // update-op override (rare from the auto-push path but supported for completeness)
-  updates?: { title?: string; description?: string; priority?: string; dueDate?: string };
-}
-
-ipcMain.handle('sor:approve', async (
-  _e,
-  id: string,
-  overrides?: ApprovalOverrides,
-): Promise<{ ok: boolean; error?: string }> => {
-  const pending = await getPending(id);
-  if (!pending) return { ok: false, error: 'No pending approval for that id' };
-  const writeEntry = await sorGetWriteEntry(id);
-  if (!writeEntry) return { ok: false, error: 'Audit entry missing' };
-
-  // Apply overrides to pushParams and update the audit entry's display payload
-  // so the receipts UI reflects what was actually pushed.
-  let pushParams = pending.pushParams;
-  let fieldDiffsUpdate: Array<{ field: string; before: any; after: any }> | undefined;
-  let commentBodyUpdate: string | null | undefined;
-
-  if (overrides) {
-    if (pushParams.operation === 'create') {
-      const merged = {
-        ...pushParams.args,
-        ...(overrides.title !== undefined ? { title: overrides.title } : {}),
-        ...(overrides.description !== undefined ? { description: overrides.description } : {}),
-        ...(overrides.priority !== undefined ? { priority: overrides.priority } : {}),
-        ...(overrides.dueDate !== undefined ? { dueDate: overrides.dueDate } : {}),
-      };
-      pushParams = { operation: 'create', args: merged };
-      fieldDiffsUpdate = sorComputeCreateDiffs(merged);
-    } else if (pushParams.operation === 'comment' && overrides.comment !== undefined) {
-      pushParams = {
-        operation: 'comment',
-        args: { ...pushParams.args, comment: overrides.comment },
-      };
-      const prefix = pending.meetingTitle
-        ? `[Inwise] From "${pending.meetingTitle}":\n\n`
-        : '[Inwise]\n\n';
-      commentBodyUpdate = prefix + overrides.comment;
-    } else if (pushParams.operation === 'update' && overrides.updates) {
-      pushParams = {
-        operation: 'update',
-        args: { ...pushParams.args, updates: { ...pushParams.args.updates, ...overrides.updates } },
-      };
-    }
-  }
-
-  await sorApplyApprovalEdit(id, {
-    fieldDiffs: fieldDiffsUpdate,
-    commentBody: commentBodyUpdate,
-    pushParams,
-    approvalPath: 'user',
-    result: 'pending',
-  });
-
-  // Dispatch the push. approveJiraWrite owns markCompleted, so we don't need
-  // to re-stamp the entry on success/failure â€” the audit log stays accurate.
-  const res = await approveJiraWrite(id, pushParams);
-
-  // Remove the pending-approvals row regardless of outcome â€” the sor-writes
-  // entry is now either 'success' (receipt feed) or 'failed' (retry button
-  // via sor:retry uses the same stored pushParams). Keeping a stale pending
-  // row would hide it from the pending-approvals surface anyway (filtered by
-  // writeEntry.result), so drop it unconditionally.
-  await removePending(id);
-
-  if (res.ok) {
-    // Patch the linked local task's source field now that Jira knows about it.
-    if (pending.linkedTaskId && res.key) {
-      try {
-        await updateTask(pending.linkedTaskId, {
-          source: { type: 'jira', id: res.key, url: res.url ?? undefined },
-        });
-      } catch (err: any) {
-        // Task may have been deleted between gating and approval â€” log but
-        // don't fail the approval, the Jira write itself succeeded.
-        log('warn', 'sor:approve-task-patch-failed', err.message);
-      }
-    }
-    return { ok: true };
-  }
-
-  return { ok: false, error: res.error };
+ipcMain.handle('sor:approve', async (_e, id: string, overrides?: Record<string, any>): Promise<{ ok: boolean; error?: string }> => {
+  const res = await approveHeldWrite(id, overrides);
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
 });
 
-ipcMain.handle('sor:reject', async (_e, id: string): Promise<{ ok: boolean; error?: string }> => {
-  const pending = await getPending(id);
-  if (!pending) return { ok: false, error: 'No pending approval for that id' };
-  await sorMarkCompleted(id, 'failed', 'User rejected');
-  await removePending(id);
-  return { ok: true };
-});
+ipcMain.handle('sor:reject', async (_e, id: string): Promise<{ ok: boolean; error?: string }> => rejectHeldWrite(id));
 
 // Recording
 // People the user tagged on the pre-record sheet for an ad-hoc recording (no
@@ -3649,70 +3506,35 @@ calendarWatcher.on('meeting-reminder', (event: any) => {
 
 // â”€â”€ Daily Jira pull â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function runDailyJiraPull(): Promise<void> {
-  const cfg = getConfig();
-  if (!(cfg as any).jiraAutoPush || !(cfg as any).jiraTokens) return;
+// Jira pull (jira-sync.ts runJiraPull; docs/JIRA_SAFETY.md).
+async function runScheduledJiraPull(): Promise<void> {
+  const res = await runJiraPull();
+  if (!res.ran || res.error) return;
+  const changed = res.tasks.created + res.tasks.updated + res.tasks.merged + res.tasks.ask;
+  log('info', 'jira:pull', `fetched ${res.fetched} issue(s)${res.pages === 'capped' ? ' (page cap reached)' : ''}; tasks created ${res.tasks.created}, updated ${res.tasks.updated}, merged ${res.tasks.merged}, asking ${res.tasks.ask}`);
+  if (changed > 0) mainWindow?.webContents.send('jira:auto-synced', { pulled: changed });
+}
 
-  const lastSync = (cfg as any).lastJiraSyncAt || 0;
-  const oneDayMs = 24 * 60 * 60 * 1000;
-  if (Date.now() - lastSync < oneDayMs) return;
-
+// Atlassian personal data reporting (jira-personal-data.ts): weekly, checked daily.
+async function runScheduledPersonalDataReport(): Promise<void> {
   try {
-    const projectKey = (cfg as any).jiraDefaultProject || undefined;
-    const stories = await getJiraStories(projectKey, 7); // last 7 days
-    const localTasks = await getTasks();
-
-    let pulled = 0;
-    for (const story of stories) {
-      const existing = localTasks.find((t: any) => t.source?.type === 'jira' && t.source?.id === story.jiraKey);
-
-      if (existing) {
-        // Update local task if Jira is newer
-        const jiraUpdated = new Date(story.updatedAt).getTime();
-        const localUpdated = new Date(existing.updatedAt || existing.createdAt).getTime();
-        if (jiraUpdated > localUpdated) {
-          const statusMap: Record<string, string> = {
-            'Done': 'completed', 'Complete': 'completed', 'Closed': 'completed', 'Resolved': 'completed',
-            'In Progress': 'inProgress', 'In Development': 'inProgress',
-            'To Do': 'todo', 'Open': 'todo', 'Backlog': 'todo',
-          };
-          const mappedStatus = statusMap[story.status] || undefined;
-          const updates: Record<string, any> = {};
-          if (story.title && story.title !== existing.title) updates.title = story.title;
-          if (mappedStatus && mappedStatus !== existing.status) updates.status = mappedStatus;
-          if (Object.keys(updates).length > 0) {
-            updates.updatedAt = new Date().toISOString();
-            await updateTask(existing._id, updates);
-            pulled++;
-          }
-        }
-      } else {
-        // Create new local task from Jira issue
-        const statusMap: Record<string, string> = {
-          'Done': 'completed', 'Complete': 'completed', 'Closed': 'completed', 'Resolved': 'completed',
-          'In Progress': 'inProgress', 'In Development': 'inProgress',
-          'To Do': 'todo', 'Open': 'todo', 'Backlog': 'todo',
-        };
-        const task = await createTask({
-          title: story.title,
-          description: story.description || '',
-          priority: story.priority ? (({ Highest: 'critical', High: 'high', Medium: 'medium', Low: 'low', Lowest: 'low' } as Record<string, string>)[story.priority] || 'medium') : 'medium',
-          status: statusMap[story.status] || 'todo',
-        });
-        await updateTask(task._id, {
-          source: { type: 'jira', id: story.jiraKey, url: story.jiraUrl },
-        });
-        pulled++;
-      }
-    }
-
-    setConfig({ lastJiraSyncAt: Date.now() } as any);
-    if (pulled > 0) {
-      log('info', 'jira:daily-pull', `pulled ${pulled} updates from Jira`);
-      mainWindow?.webContents.send('jira:auto-synced', { pulled });
-    }
-  } catch (err: any) {
-    log('error', 'jira:daily-pull-failed', err.message);
+    await runPersonalDataReport({
+      isConnected: isJiraConnected,
+      selfAccountId: getJiraAccountId,
+      listIssues: listCachedIssues,
+      listPeople: async () => [...(await getPeople()), ...(await getArchivedPeople())],
+      listWrites: sorListAccountWrites,
+      post: reportPersonalDataAccounts,
+      removeIssues: removeCachedIssues,
+      clearPersonLink: async (id) => { await setPersonJiraLink(id, null); },
+      redactWrite: sorRedactClosedAccount,
+      disconnect: disconnectJira,
+      getLastReportAt: () => (getConfig() as any).jiraPersonalDataReportAt || null,
+      setLastReportAt: (iso) => setConfig({ jiraPersonalDataReportAt: iso } as any),
+      log: (level, msg) => log(level, 'jira:personal-data', msg),
+    });
+  } catch (e: any) {
+    log('error', 'jira:personal-data', String(e?.message || e));
   }
 }
 
@@ -3792,6 +3614,8 @@ app.whenReady().then(() => {
   }).catch(() => { /* repair pass is best-effort */ });
   initSorWriteLog();
   initPendingApprovals();
+  initJiraCache();
+  onInsightsSaved((meetingId, result) => { void afterInsightsSaved(meetingId, result); });
   initActionExecutionLog();
   onWriteCompleted((entry) => {
     mainWindow?.webContents.send('sor:write-completed', entry);
@@ -3896,7 +3720,8 @@ app.whenReady().then(() => {
   // for more than 24 hours â€” these indicate an interrupted/crashed prior session.
   setTimeout(async () => {
     try {
-      const stuck = await sorListStuckEntries(24 * 60 * 60 * 1000);
+      // Writes waiting for the user's OK are not interrupted; only in-flight ones are.
+      const stuck = (await sorListStuckEntries(24 * 60 * 60 * 1000)).filter((e) => e.result !== 'pending-approval');
       if (stuck.length > 0) {
         log('info', 'sor:stuck-entries', `${stuck.length} interrupted writes found`);
         if (Notification.isSupported()) {
@@ -3918,9 +3743,11 @@ app.whenReady().then(() => {
     sweepStaleTasks().catch((err) => log('error', 'staleness-sweep', String(err)));
   }, 5_000);
 
-  // Daily Jira pull â€” run on startup (after a short delay) and every 6 hours
-  setTimeout(() => runDailyJiraPull(), 10_000);
-  setInterval(() => runDailyJiraPull(), 6 * 60 * 60 * 1000);
+  // Jira pull: whenever Jira is connected, at launch and every 30 minutes.
+  setTimeout(() => { void runScheduledJiraPull(); }, 10_000);
+  setInterval(() => { void runScheduledJiraPull(); }, PULL_INTERVAL_MS);
+  setTimeout(() => { void runScheduledPersonalDataReport(); }, 60_000);
+  setInterval(() => { void runScheduledPersonalDataReport(); }, REPORT_CHECK_MS);
 
   globalShortcut.register('CommandOrControl+Shift+T', () => {
     createOverlayWindow('Test Meeting');

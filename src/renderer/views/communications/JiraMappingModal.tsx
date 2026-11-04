@@ -135,6 +135,7 @@ export default function JiraMappingModal({ isOpen, onClose, actionItems, meeting
             continue;
           }
           const result = await api.jiraCreateIssue({
+            _id: (item as any).taskId || undefined, // provenance + one create per task
             title: item.text,
             description: `From meeting: ${meetingTitle}\nOwner: ${item.owner || 'Unassigned'}`,
             priority: 'medium',
@@ -148,7 +149,8 @@ export default function JiraMappingModal({ isOpen, onClose, actionItems, meeting
           if (story) {
             await api.jiraAddComment(decision.selectedKey,
               `Action item: ${item.text}\nOwner: ${item.owner || 'Unassigned'}`,
-              meetingTitle
+              meetingTitle,
+              (item as any).taskId || undefined,
             );
             linked++;
           }
